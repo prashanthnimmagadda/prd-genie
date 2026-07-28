@@ -23,7 +23,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run licenses
       - run: npm run sbom
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
