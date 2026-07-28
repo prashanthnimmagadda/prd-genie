@@ -1,6 +1,6 @@
 # Support
 
-Use GitHub Discussions for usage questions after the repository becomes public. Use issue forms for reproducible defects and focused feature proposals.
+Use GitHub Discussions for usage questions. Use issue forms for reproducible defects and focused feature proposals.
 
 Before reporting a problem:
 

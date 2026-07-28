@@ -147,6 +147,54 @@ describe('source lifecycle and retrieval fallback', () => {
     expect(results[0]?.chunkId).toBe(row.id);
   });
 
+  it('hydrates semantic-only candidates and skips excerpts beyond the context budget', async () => {
+    const project = repository.createProject('Semantic only', '');
+    const service = new SourceService(database, unavailableEmbeddings);
+    await service.add(
+      project.id,
+      'semantic.txt',
+      Buffer.from('A distinctive zebra observation is recorded for later analysis.'),
+    );
+    await service.add(
+      project.id,
+      'lexical-one.txt',
+      Buffer.from('Recovery evidence contains enough words to exceed a one token context budget.'),
+    );
+    await service.add(
+      project.id,
+      'lexical-two.txt',
+      Buffer.from('A second recovery excerpt also exceeds the deliberately tiny context budget.'),
+    );
+    const vector = Array.from({ length: 384 }, (_, index) => (index === 3 ? 1 : 0));
+    const semantic = database.sqlite
+      .prepare("SELECT id FROM chunks WHERE content LIKE '%zebra%'")
+      .get() as { id: string };
+    database.sqlite
+      .prepare(
+        `UPDATE chunks
+         SET embedding = ?, embedding_model = ?, embedding_revision = ?, embedding_dimensions = ?
+         WHERE id = ?`,
+      )
+      .run(JSON.stringify(vector), 'synthetic', 'test', 384, semantic.id);
+    database.sqlite
+      .prepare('INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)')
+      .run(semantic.id, JSON.stringify(vector));
+
+    const retrieval = new RetrievalService(database, {
+      embed: () => Promise.resolve([vector]),
+    } as unknown as EmbeddingService);
+    const semanticOnly = await retrieval.retrieve(project.id, 'unmatched query');
+    expect(semanticOnly.some((citation) => citation.chunkId === semantic.id)).toBe(true);
+
+    const bounded = await retrieval.retrieve(project.id, 'recovery', 1);
+    expect(bounded).toHaveLength(1);
+
+    const lexicalOnly = new RetrievalService(database, {
+      embed: () => Promise.resolve([]),
+    } as unknown as EmbeddingService);
+    expect((await lexicalOnly.retrieve(project.id, 'recovery')).length).toBeGreaterThan(0);
+  });
+
   it('indexes valid embeddings and preserves shared binaries until the final reference is deleted', async () => {
     const first = repository.createProject('First', '');
     const second = repository.createProject('Second', '');
@@ -186,6 +234,52 @@ describe('source lifecycle and retrieval fallback', () => {
       .prepare('SELECT embedding FROM chunks WHERE project_id = ?')
       .get(project.id) as { embedding: string | null };
     expect(row.embedding).toBeNull();
+  });
+
+  it('ignores vector candidates outside the project and missing hydrated rows', async () => {
+    const emptyLexical = {
+      all: () => [],
+    };
+    const vectorIndexDatabase = {
+      vectorAvailable: true,
+      sqlite: {
+        prepare: (sql: string) => {
+          if (sql.includes('FROM chunks_fts')) return emptyLexical;
+          if (sql.includes('FROM chunk_vectors')) {
+            return { all: () => [{ id: 'outside-project', distance: 0.1 }] };
+          }
+          if (sql.includes('SELECT source_id AS sourceId')) return { get: () => undefined };
+          throw new Error(`Unexpected SQL in vector-index fixture: ${sql}`);
+        },
+      },
+    } as unknown as AppDatabase;
+    const embedding = {
+      embed: () => Promise.resolve([[1, 0]]),
+    } as unknown as EmbeddingService;
+    await expect(
+      new RetrievalService(vectorIndexDatabase, embedding).retrieve('project', 'semantic query'),
+    ).resolves.toEqual([]);
+
+    const portableDatabase = {
+      vectorAvailable: false,
+      sqlite: {
+        prepare: (sql: string) => {
+          if (sql.includes('FROM chunks_fts')) return emptyLexical;
+          if (sql.includes('embedding IS NOT NULL')) {
+            return {
+              all: () => [
+                { id: 'missing-row', sourceId: 'source', embedding: JSON.stringify([1, 0]) },
+              ],
+            };
+          }
+          if (sql.includes('FROM chunks\n')) return { get: () => undefined };
+          throw new Error(`Unexpected SQL in portable fixture: ${sql}`);
+        },
+      },
+    } as unknown as AppDatabase;
+    await expect(
+      new RetrievalService(portableDatabase, embedding).retrieve('project', 'semantic query'),
+    ).resolves.toEqual([]);
   });
 });
 

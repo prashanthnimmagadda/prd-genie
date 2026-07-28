@@ -30,6 +30,16 @@ describe('reciprocalRankFusion', () => {
     expect(result.filter((item) => item.sourceId === 'same')).toHaveLength(2);
     expect(result.some((item) => item.id === 'different')).toBe(true);
   });
+
+  it('honours a one-result limit and accepts empty rankings', () => {
+    expect(
+      reciprocalRankFusion([[{ id: 'only', sourceId: 'source' }]], {
+        limit: 1,
+        sourceLimit: 1,
+      }),
+    ).toHaveLength(1);
+    expect(reciprocalRankFusion([[]])).toEqual([]);
+  });
 });
 
 describe('cosineSimilarity', () => {
@@ -37,6 +47,8 @@ describe('cosineSimilarity', () => {
     expect(cosineSimilarity([1, 0], [1, 0])).toBe(1);
     expect(cosineSimilarity([1, 0], [-1, 0])).toBe(-1);
     expect(cosineSimilarity([0, 0], [1, 0])).toBe(-1);
+    expect(cosineSimilarity([1, 0], [0, 0])).toBe(-1);
     expect(cosineSimilarity([1], [1, 2])).toBe(-1);
+    expect(cosineSimilarity([], [])).toBe(-1);
   });
 });

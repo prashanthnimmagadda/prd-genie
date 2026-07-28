@@ -1,6 +1,6 @@
 {
   "name": "prd-genie",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "description": "A local-first, bring-your-own-key workbench for drafting and reviewing product requirements.",
   "license": "MIT",
@@ -32,6 +32,9 @@
     "licenses": "node scripts/license-report.mjs",
     "sbom": "node scripts/sbom.mjs",
     "provenance": "node scripts/provenance.mjs",
+    "eval:model": "tsx scripts/evaluate-prd.ts",
+    "ci:offline": "node scripts/offline-ci.mjs",
+    "ci:offline:quick": "node scripts/offline-ci.mjs --quick",
     "check": "npm run content:check && npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build"
   },
   "dependencies": {

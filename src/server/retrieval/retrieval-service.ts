@@ -91,7 +91,7 @@ export class RetrievalService {
               sourceId: row.sourceId,
               score: cosineSimilarity(queryEmbedding, JSON.parse(row.embedding) as number[]),
             }))
-            .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
+            .sort((left, right) => right.score - left.score)
             .slice(0, 40);
         }
       }

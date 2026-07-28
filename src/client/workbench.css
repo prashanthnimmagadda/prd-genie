@@ -236,6 +236,34 @@
   padding: 0.8rem;
 }
 
+.project-lifecycle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.project-lifecycle a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  border-radius: var(--radius);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.project-lifecycle a:hover {
+  background: var(--secondary);
+}
+
+.project-lifecycle svg {
+  width: 0.9rem;
+}
+
 .project-switcher,
 .outline {
   border-bottom: 1px solid var(--border);
@@ -645,6 +673,41 @@
   font-size: 0.68rem;
 }
 
+.proposal-provenance {
+  margin: 0.65rem 0 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.proposal-revision {
+  margin-top: 0.6rem;
+}
+
+.proposal-revision summary,
+.finding-revision span {
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.proposal-revision textarea,
+.finding-revision textarea {
+  width: 100%;
+  min-height: 8rem;
+  margin-top: 0.45rem;
+  padding: 0.55rem;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
 .assist-input {
   padding: 0.65rem;
   border-top: 1px solid var(--border);
@@ -764,6 +827,26 @@
   font-size: 0.7rem;
 }
 
+.finding-revision {
+  display: grid;
+  margin-top: 0.6rem;
+}
+
+.finding-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+
+.finding-citations button {
+  height: auto;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.4rem;
+  white-space: normal;
+  text-align: left;
+}
+
 .evidence-detail {
   margin: 0 1rem;
   padding: 1rem;
@@ -836,6 +919,9 @@
 
 .provider-dialog {
   max-width: 36rem;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .provider-disclosure {

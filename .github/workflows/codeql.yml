@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   analyze:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, prd-genie]
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3

@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { eq } from 'drizzle-orm';
 import type {
+  AiRunProposal,
+  Citation,
   PrdDocument,
   PrdSection,
   ProjectSummary,
@@ -230,11 +232,11 @@ export class Repository {
           createdAt: timestamp,
         })
         .run();
-      this.database.db
-        .update(reviewFindings)
-        .set({ status: 'stale' })
-        .where(eq(reviewFindings.projectId, projectId))
-        .run();
+      this.database.sqlite
+        .prepare(
+          "UPDATE review_findings SET status = 'stale' WHERE project_id = ? AND status = 'open'",
+        )
+        .run(projectId);
       this.database.db
         .update(projects)
         .set({ updatedAt: timestamp })
@@ -319,6 +321,8 @@ export class Repository {
     provider: string;
     model: string;
     sourceRevision: number;
+    targetSectionId?: string;
+    selectionText?: string;
   }): string {
     const id = crypto.randomUUID();
     this.database.db
@@ -328,14 +332,49 @@ export class Repository {
     return id;
   }
 
-  completeAiRun(id: string, errorCode?: string): void {
+  completeAiRun(id: string, errorCode?: string, outputText?: string): void {
     this.database.db
       .update(aiRuns)
       .set({
         status: errorCode ? 'failed' : 'completed',
         errorCode: errorCode ?? null,
+        outputText: outputText ?? null,
         completedAt: now(),
       })
+      .where(eq(aiRuns.id, id))
+      .run();
+  }
+
+  getAiRun(projectId: string, id: string): AiRunProposal {
+    const row = this.database.db.select().from(aiRuns).where(eq(aiRuns.id, id)).get();
+    if (!row || row.projectId !== projectId) {
+      throw new ApiError(404, 'ai_run_not_found', 'AI proposal not found.');
+    }
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      action: row.action as AiRunProposal['action'],
+      scope: row.scope as AiRunProposal['scope'],
+      provider: row.provider as AiRunProposal['provider'],
+      model: row.model,
+      sourceRevision: row.sourceRevision,
+      targetSectionId: row.targetSectionId,
+      selectionText: row.selectionText,
+      outputText: row.outputText,
+      appliedRevision: row.appliedRevision,
+      status: row.status as AiRunProposal['status'],
+      errorCode: row.errorCode,
+    };
+  }
+
+  markAiRunApplied(projectId: string, id: string, revision: number): void {
+    const run = this.getAiRun(projectId, id);
+    if (run.appliedRevision !== null) {
+      throw new ApiError(409, 'proposal_applied', 'This proposal was already applied.');
+    }
+    this.database.db
+      .update(aiRuns)
+      .set({ appliedRevision: revision })
       .where(eq(aiRuns.id, id))
       .run();
   }
@@ -355,19 +394,36 @@ export class Repository {
       .from(reviewFindings)
       .where(eq(reviewFindings.projectId, projectId))
       .all();
-    return rows.map((row) => ({
-      id: row.id,
-      category: row.category as ReviewFinding['category'],
-      severity: row.severity as ReviewFinding['severity'],
-      targetSectionId: row.targetSectionId,
-      rationale: row.rationale,
-      citations: [],
-      proposedPatch: row.proposedPatchJson
-        ? (JSON.parse(row.proposedPatchJson) as ReviewFinding['proposedPatch'])
-        : null,
-      sourceRevision: row.sourceRevision,
-      status: row.status as ReviewFinding['status'],
-    }));
+    const citationById = this.database.sqlite.prepare(`
+      SELECT citations.id, citations.source_id AS sourceId, sources.name AS sourceName,
+             citations.location_id AS locationId, source_locations.locator,
+             citations.chunk_id AS chunkId, citations.excerpt,
+             citations.evidence_status AS evidenceStatus
+      FROM citations
+      JOIN sources ON sources.id = citations.source_id
+      JOIN source_locations ON source_locations.id = citations.location_id
+      WHERE citations.id = ?
+    `);
+    return rows.map((row) => {
+      const citationIds = JSON.parse(row.citationIdsJson) as string[];
+      const findingCitations = citationIds.flatMap((id) => {
+        const citation = citationById.get(id) as Citation | undefined;
+        return citation ? [citation] : [];
+      });
+      return {
+        id: row.id,
+        category: row.category as ReviewFinding['category'],
+        severity: row.severity as ReviewFinding['severity'],
+        targetSectionId: row.targetSectionId,
+        rationale: row.rationale,
+        citations: findingCitations,
+        proposedPatch: row.proposedPatchJson
+          ? (JSON.parse(row.proposedPatchJson) as ReviewFinding['proposedPatch'])
+          : null,
+        sourceRevision: row.sourceRevision,
+        status: row.status as ReviewFinding['status'],
+      };
+    });
   }
 
   storeFinding(input: {
@@ -422,14 +478,89 @@ export class Repository {
     if (!finding || finding.projectId !== projectId) {
       throw new ApiError(404, 'finding_not_found', 'Review finding not found.');
     }
-    if (finding.status === 'stale') {
-      throw new ApiError(409, 'stale_finding', 'This finding targets an older PRD revision.');
+    if (finding.status !== 'open') {
+      throw new ApiError(409, 'finding_closed', 'This finding is no longer open.');
     }
     this.database.db
       .update(reviewFindings)
       .set({ status })
       .where(eq(reviewFindings.id, findingId))
       .run();
+  }
+
+  acceptFinding(
+    projectId: string,
+    findingId: string,
+    expectedRevision: number,
+    proposedMarkdown?: string,
+  ): PrdDocument {
+    let result: PrdDocument | undefined;
+    this.database.sqlite.transaction(() => {
+      const finding = this.database.db
+        .select()
+        .from(reviewFindings)
+        .where(eq(reviewFindings.id, findingId))
+        .get();
+      if (!finding || finding.projectId !== projectId) {
+        throw new ApiError(404, 'finding_not_found', 'Review finding not found.');
+      }
+      if (finding.status !== 'open' || finding.sourceRevision !== expectedRevision) {
+        throw new ApiError(409, 'stale_finding', 'This finding targets an older PRD revision.');
+      }
+      const patch = finding.proposedPatchJson
+        ? (JSON.parse(finding.proposedPatchJson) as NonNullable<ReviewFinding['proposedPatch']>)
+        : null;
+      if (!patch) {
+        throw new ApiError(
+          400,
+          'missing_patch',
+          'This finding does not include a proposed change.',
+        );
+      }
+      const current = this.getPrd(projectId);
+      if (current.revision !== expectedRevision) {
+        throw new ApiError(
+          409,
+          'stale_revision',
+          'The PRD changed after this finding was created.',
+        );
+      }
+      const target = current.sections.find((section) => section.id === patch.sectionId);
+      if (!target || target.body !== patch.beforeMarkdown) {
+        throw new ApiError(409, 'stale_finding', 'The target section changed after this review.');
+      }
+      this.database.db
+        .update(reviewFindings)
+        .set({ status: 'accepted' })
+        .where(eq(reviewFindings.id, findingId))
+        .run();
+      result = this.savePrd(
+        projectId,
+        expectedRevision,
+        current.sections.map((section) =>
+          section.id === patch.sectionId
+            ? { ...section, body: proposedMarkdown ?? patch.afterMarkdown }
+            : section,
+        ),
+        proposedMarkdown === undefined
+          ? `Review finding ${findingId} accepted`
+          : `Review finding ${findingId} revised and accepted`,
+      );
+    })();
+    if (!result) throw new ApiError(500, 'apply_failed', 'The finding could not be applied.');
+    return result;
+  }
+
+  restoreRevision(projectId: string, revision: number, expectedRevision: number): PrdDocument {
+    const row = this.database.db
+      .select()
+      .from(revisions)
+      .where(eq(revisions.projectId, projectId))
+      .all()
+      .find((item) => item.revision === revision);
+    if (!row) throw new ApiError(404, 'revision_not_found', 'Revision not found.');
+    const snapshot = JSON.parse(row.snapshotJson) as PrdSection[];
+    return this.savePrd(projectId, expectedRevision, snapshot, `Restored revision ${revision}`);
   }
 
   getLocation(sourceId: string, locationId: string) {

@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, prd-genie]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4

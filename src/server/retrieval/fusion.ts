@@ -52,8 +52,8 @@ export function cosineSimilarity(left: number[], right: number[]): number {
   let leftMagnitude = 0;
   let rightMagnitude = 0;
   for (let index = 0; index < left.length; index += 1) {
-    const a = left[index] ?? 0;
-    const b = right[index] ?? 0;
+    const a = left[index]!;
+    const b = right[index]!;
     dot += a * b;
     leftMagnitude += a * a;
     rightMagnitude += b * b;

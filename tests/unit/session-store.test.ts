@@ -46,4 +46,17 @@ describe('SessionStore', () => {
       baseUrl: '127.0.0.1',
     });
   });
+
+  it('treats a keyless compatible endpoint as configured', () => {
+    const store = new SessionStore();
+    const session = store.create();
+    store.setProvider(session.id, 'openai-compatible', {
+      baseUrl: 'http://127.0.0.1:1234/v1',
+    });
+    expect(store.state(session.id, 'openai-compatible')).toMatchObject({
+      configured: true,
+      credentialSource: 'session',
+      baseUrl: '127.0.0.1',
+    });
+  });
 });

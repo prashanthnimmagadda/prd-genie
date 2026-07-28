@@ -48,6 +48,7 @@ export function ProviderDialog({
   const [provider, setProvider] = useState<ProviderKind>(project.selectedProvider ?? 'openai');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [headersText, setHeadersText] = useState('');
   const [states, setStates] = useState<ProviderState[]>([]);
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
   const [model, setModel] = useState(project.selectedModel ?? '');
@@ -75,15 +76,50 @@ export function ProviderDialog({
     setBusy(true);
     setError('');
     try {
-      const state = await api.configureProvider(provider, {
-        ...(apiKey ? { apiKey } : {}),
-        ...(endpoint ? { baseUrl: endpoint } : {}),
-      });
+      let headers: Record<string, string> | undefined;
+      if (headersText.trim()) {
+        const parsed = JSON.parse(headersText) as unknown;
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed) ||
+          Object.values(parsed).some((value) => typeof value !== 'string')
+        ) {
+          throw new Error('Custom headers must be a JSON object with string values.');
+        }
+        headers = parsed as Record<string, string>;
+      }
+      const hasNewConfiguration = Boolean(apiKey || baseUrl || headers);
+      const state =
+        currentState?.configured && !hasNewConfiguration
+          ? currentState
+          : await api.configureProvider(provider, {
+              ...(apiKey ? { apiKey } : {}),
+              ...(endpoint ? { baseUrl: endpoint } : {}),
+              ...(headers ? { headers } : {}),
+            });
       setApiKey('');
+      setHeadersText('');
       setStates((current) => [...current.filter((item) => item.provider !== provider), state]);
       const discovered = await api.models(provider);
       setModels(discovered.models);
       if (!model && discovered.models[0]) setModel(discovered.models[0].id);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearSessionCredential() {
+    setBusy(true);
+    setError('');
+    try {
+      await api.clearProvider(provider);
+      const result = await api.providerStates();
+      setStates(result.providers);
+      setModels([]);
+      setModel('');
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -191,6 +227,19 @@ export function ProviderDialog({
           </label>
         )}
 
+        {provider === 'openai-compatible' && (
+          <label className="field">
+            <span>Optional headers as JSON</span>
+            <textarea
+              value={headersText}
+              placeholder='{"X-Provider-Team":"team-id"}'
+              onChange={(event) => setHeadersText(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        )}
+
         <div className="provider-host">
           Outbound host: <code>{currentState?.baseUrl ?? endpoint ?? 'Provider default'}</code>
         </div>
@@ -199,7 +248,14 @@ export function ProviderDialog({
           <Button
             type="button"
             variant="secondary"
-            disabled={busy || (provider !== 'ollama' && !apiKey && !currentState?.configured)}
+            disabled={
+              busy ||
+              (provider !== 'ollama' &&
+                provider !== 'openai-compatible' &&
+                !apiKey &&
+                !currentState?.configured) ||
+              (provider === 'openai-compatible' && !endpoint)
+            }
             onClick={() => void configure()}
           >
             {busy ? (
@@ -209,6 +265,16 @@ export function ProviderDialog({
             )}
             {currentState?.configured ? 'Refresh models' : 'Configure and discover'}
           </Button>
+          {currentState?.credentialSource === 'session' && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => void clearSessionCredential()}
+            >
+              Clear session configuration
+            </Button>
+          )}
         </div>
 
         <div className="model-row">

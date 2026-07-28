@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, prd-genie]
     strategy:
       fail-fast: false
       matrix:
@@ -30,11 +30,11 @@ jobs:
       - run: npm run build
 
   platform-build:
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, prd-genie, '${{ matrix.runner }}']
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        runner: [Linux, macOS, Windows]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,7 +47,7 @@ jobs:
       - run: npm run build
 
   browser:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, prd-genie]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

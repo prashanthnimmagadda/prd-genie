@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { redactHeaders, validateProviderEndpoint } from '../../src/server/providers/endpoints.js';
+import { ApiError } from '../../src/shared/api.js';
 import { normalizeProviderError } from '../../src/server/providers/provider-service.js';
 
 describe('provider endpoint validation', () => {
@@ -45,6 +46,14 @@ describe('provider error normalization', () => {
       'context_overflow',
     );
     expect(normalizeProviderError({ name: 'AbortError' }).code).toBe('cancelled');
+    expect(normalizeProviderError({ message: 'failed to parse JSON schema grammar' }).code).toBe(
+      'malformed_output',
+    );
     expect(normalizeProviderError(new Error('socket failed')).code).toBe('network_failure');
+    expect(normalizeProviderError({ status: 403 }).code).toBe('invalid_credentials');
+    expect(normalizeProviderError({ status: 408 }).code).toBe('network_failure');
+    expect(normalizeProviderError({ status: 500 }).code).toBe('provider_unavailable');
+    const existing = new ApiError(400, 'context_overflow', 'Already normalised.');
+    expect(normalizeProviderError(existing)).toBe(existing);
   });
 });

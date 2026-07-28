@@ -29,7 +29,7 @@ export class ProviderService {
 
   model(sessionId: string | undefined, provider: ProviderKind, modelId: string): LanguageModel {
     const credential = this.sessions.resolve(sessionId, provider);
-    if (provider !== 'ollama' && !credential.apiKey) {
+    if (requiresKey(provider) && !credential.apiKey) {
       throw new ApiError(401, 'missing_credentials', 'Configure a provider key for this session.');
     }
     switch (provider) {
@@ -70,7 +70,7 @@ export class ProviderService {
     signal?: AbortSignal,
   ): Promise<ModelItem[]> {
     const credential = this.sessions.resolve(sessionId, provider);
-    if (provider !== 'ollama' && !credential.apiKey) {
+    if (requiresKey(provider) && !credential.apiKey) {
       throw new ApiError(401, 'missing_credentials', 'Configure a provider key for this session.');
     }
     const request = modelRequest(provider, credential);
@@ -86,6 +86,10 @@ export class ProviderService {
     const payload: unknown = await response.json();
     return parseModels(provider, payload);
   }
+}
+
+function requiresKey(provider: ProviderKind): boolean {
+  return provider === 'openai' || provider === 'anthropic' || provider === 'google';
 }
 
 function modelRequest(
@@ -178,6 +182,13 @@ export function normalizeProviderError(error: unknown): ApiError {
   }
   if (value.status && value.status >= 500) {
     return new ApiError(503, 'provider_unavailable', 'The provider is temporarily unavailable.');
+  }
+  if (/json|schema|grammar|structured|parse|malformed/i.test(value.message ?? '')) {
+    return new ApiError(
+      502,
+      'malformed_output',
+      'The provider could not produce the required structured output.',
+    );
   }
   if (/context|token limit|too long/i.test(value.message ?? '')) {
     return new ApiError(400, 'context_overflow', 'The selected context exceeds the model limit.');

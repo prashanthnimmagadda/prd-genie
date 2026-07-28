@@ -59,6 +59,11 @@ describe('EmbeddingService', () => {
     worker.emit('message', { type: 'error', id: secondMessage.id, message: 'Synthetic failure' });
     await expect(second).rejects.toThrow('Synthetic failure');
     expect(service.getStatus()).toMatchObject({ mode: 'lexical' });
+
+    const third = service.embed(['three']);
+    const thirdMessage = worker.postMessage.mock.calls[2]?.[0] as { id: string };
+    worker.emit('message', { type: 'error', id: thirdMessage.id });
+    await expect(third).rejects.toThrow('Embedding failed');
     await service.close();
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
@@ -67,10 +72,16 @@ describe('EmbeddingService', () => {
     const service = new EmbeddingService();
     const failed = service.embed(['one']);
     const worker = workerState.SyntheticWorker.instances[0]!;
+    worker.emit('message', null);
+    worker.emit('message', {});
     worker.emit('message', { type: 'ignored' });
     worker.emit('message', { type: 'result', id: 'unknown', embeddings: [[1]] });
     worker.emit('error', new Error('Worker crashed'));
     await expect(failed).rejects.toThrow('Worker crashed');
+
+    const nonErrorFailure = service.embed(['again']);
+    worker.emit('error', 'not an error instance');
+    await expect(nonErrorFailure).rejects.toThrow('Embedding worker failed');
     worker.emit('exit', 1);
 
     const exited = service.embed(['two']);

@@ -34,6 +34,20 @@ describe('chunkText', () => {
         { maxTokens: 10, overlapTokens: 10 },
       ),
     ).toThrow('overlapTokens');
+    expect(() =>
+      chunkText(
+        { locationId: 'location', content: 'text', documentHash: 'hash' },
+        { maxTokens: 0, overlapTokens: 0 },
+      ),
+    ).toThrow('maxTokens');
+    expect(() =>
+      chunkText(
+        { locationId: 'location', content: 'text', documentHash: 'hash' },
+        { maxTokens: 10, overlapTokens: -1 },
+      ),
+    ).toThrow('overlapTokens');
+    expect(chunkText({ locationId: 'location', content: '   ', documentHash: 'hash' })).toEqual([]);
     expect(estimateTokens('one two three')).toBe(4);
+    expect(estimateTokens('')).toBe(0);
   });
 });

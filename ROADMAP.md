@@ -1,13 +1,11 @@
 # Roadmap
 
-## Private release candidate
+## Release candidate
 
-- Complete browser verification across Chromium, Firefox, and WebKit.
-- Reach and verify the documented coverage gates.
-- Resolve all high and critical dependency findings.
-- Complete accessibility verification at the supported narrow widths.
-- Produce reviewed SBOM, license, and provenance reports.
-- Complete rights and public-name review.
+- Publish reproducible release evidence with each candidate.
+- Expand the real-model evaluation corpus beyond one synthetic scenario.
+- Record native Windows verification before describing Windows as release-verified.
+- Continue accessibility review with assistive-technology users.
 
 ## Version 0.1
 
@@ -24,5 +22,6 @@
 - Optional local-data encryption design.
 - More portable import and export compatibility.
 - Richer contradiction and evidence diagnostics.
+- Broader provider-specific evaluation fixtures.
 
 Remote hosting, multi-user collaboration, and cloud sync remain out of scope until a separate product and security contract is approved.

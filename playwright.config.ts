@@ -10,12 +10,20 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: 'PRD_GENIE_DATA_DIR=/tmp/prd-genie-e2e PRD_GENIE_PORT=3210 npm run dev',
-    url: 'http://127.0.0.1:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: 'tsx tests/fixtures/mock-openai-server.ts',
+      url: 'http://127.0.0.1:4312/v1/models',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    {
+      command: 'PRD_GENIE_DATA_DIR=/tmp/prd-genie-e2e PRD_GENIE_PORT=3210 npm run dev',
+      url: 'http://127.0.0.1:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },

@@ -129,6 +129,13 @@ describe('ActionService', () => {
     await expect(
       service.run(
         undefined,
+        request({ scope: 'selection', selection: 'not present' }),
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ code: 'missing_selection' });
+    await expect(
+      service.run(
+        undefined,
         request({ scope: 'section', targetSectionId: crypto.randomUUID() }),
         new AbortController().signal,
       ),
@@ -147,10 +154,60 @@ describe('ActionService', () => {
       expect.objectContaining({ chunkId: evidence.chunkId }),
     );
     const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as
-      { maxOutputTokens: number; prompt: string } | undefined;
-    expect(streamInput?.maxOutputTokens).toBe(6000);
+      | {
+          maxOutputTokens: number;
+          prompt: string;
+          providerOptions?: { ollama?: { reasoningEffort?: string } };
+        }
+      | undefined;
+    expect(streamInput?.maxOutputTokens).toBe(1800);
     expect(streamInput?.prompt).toContain('Retrieved source excerpts');
-    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id');
+    expect(streamInput?.providerOptions?.ollama?.reasoningEffort).toBe('none');
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, 'Draft result');
+  });
+
+  it.each([
+    ['Context', 'relevant background'],
+    ['Target users', 'affected users'],
+    ['Goals', 'desired outcomes'],
+    ['Non-goals', 'deliberately excluded'],
+    ['Scope', 'release includes'],
+    ['Success measures', 'outcome metrics'],
+    ['Rollout', 'release stages'],
+    ['Custom decision', 'directly belongs'],
+  ])('adds section-specific boundary guidance for %s', async (title, guidance) => {
+    repository.getPrd.mockReturnValue({
+      ...prd,
+      sections: [{ ...prd.sections[0]!, title }],
+    });
+    const response = await service.run('session', request(), new AbortController().signal);
+    await response.text();
+    const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+    expect(streamInput?.prompt).toContain(guidance);
+  });
+
+  it.each([
+    [{ action: 'ask', scope: 'document' }, 2400],
+    [{ action: 'rewrite', scope: 'document' }, 6000],
+    [{ action: 'ask', scope: 'selection', selection: 'unsaved drafts' }, 1200],
+    [{ action: 'rewrite', scope: 'selection', selection: 'unsaved drafts' }, 1000],
+  ] as const)('uses the action context budget for %o', async (overrides, expected) => {
+    const response = await service.run(
+      'session',
+      request({
+        ...overrides,
+        targetSectionId: overrides.scope === 'document' ? undefined : sectionId,
+        instruction: undefined,
+        provider: overrides.scope === 'document' ? 'openai-compatible' : 'ollama',
+      }),
+      new AbortController().signal,
+    );
+    await response.text();
+    const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as
+      { maxOutputTokens?: number; prompt?: string; providerOptions?: unknown } | undefined;
+    expect(streamInput?.maxOutputTokens).toBe(expected);
+    expect(streamInput?.prompt).toContain('(none)');
+    if (overrides.scope === 'document') expect(streamInput?.providerOptions).toBeUndefined();
   });
 
   it('reviews the complete document and emits only findings for known sections', async () => {
@@ -189,7 +246,55 @@ describe('ActionService', () => {
       { citationIds: string[]; proposedPatch: { sectionId: string } } | undefined;
     expect(storedFinding?.citationIds).toEqual(['stored-citation']);
     expect(storedFinding?.proposedPatch.sectionId).toBe(sectionId);
-    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id');
+    expect(repository.completeAiRun).toHaveBeenCalledWith(
+      'run-id',
+      undefined,
+      'One evidence gap found.',
+    );
+  });
+
+  it('resolves a unique section title and supports findings without patches', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The Problem section needs evidence.',
+        findings: [
+          {
+            category: 'evidence',
+            severity: 'warning',
+            targetSectionId: 'Problem',
+            rationale: 'The claim has no cited support.',
+            citationChunkIds: ['unknown'],
+            proposedMarkdown: null,
+          },
+        ],
+      },
+    });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    await response.text();
+    expect(repository.storeFinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSectionId: sectionId,
+        citationIds: [],
+        proposedPatch: null,
+      }),
+    );
+  });
+
+  it('rejects structured reviews that exceed the post-validation contract', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: { summary: '', findings: [] },
+    });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
   });
 
   it('normalises provider failures and records a failed run', async () => {
@@ -199,7 +304,11 @@ describe('ActionService', () => {
     });
     const response = await service.run(
       'session',
-      request({ action: 'rewrite', scope: 'selection', selection: 'selected words' }),
+      request({
+        action: 'rewrite',
+        scope: 'selection',
+        selection: 'unsaved drafts',
+      }),
       new AbortController().signal,
     );
     expect(await response.text()).toContain('rate_limit');

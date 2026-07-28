@@ -2,10 +2,13 @@ import { Readable } from 'node:stream';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  acceptFindingSchema,
   aiActionSchema,
+  applyAiRunSchema,
   projectCreateSchema,
   projectUpdateSchema,
   providerKinds,
+  restoreRevisionSchema,
   sectionUpdateSchema,
   sessionProviderSchema,
   type ProviderKind,
@@ -19,6 +22,7 @@ import type { ExportService } from '../export/export-service.js';
 import { validateProviderEndpoint } from '../providers/endpoints.js';
 import type { ActionService } from '../providers/action-service.js';
 import type { ProviderService } from '../providers/provider-service.js';
+import type { ProposalService } from '../providers/proposal-service.js';
 import type { SessionStore } from '../providers/session-store.js';
 import type { EmbeddingService } from '../retrieval/embedding-service.js';
 
@@ -29,6 +33,7 @@ interface Services {
   sessions: SessionStore;
   providers: ProviderService;
   actions: ActionService;
+  proposals: ProposalService;
   embeddings: EmbeddingService;
 }
 
@@ -48,12 +53,11 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     }
     done();
   });
-
   app.get('/api/health', () => {
     const retrieval = services.embeddings.getStatus();
     return {
       status: retrieval.mode === 'hybrid' ? 'ok' : 'degraded',
-      version: '0.1.0',
+      version: config.version,
       retrieval,
     };
   });
@@ -145,6 +149,15 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     const { id } = request.params as { id: string };
     return { revisions: services.repository.listRevisions(id) };
   });
+  app.post('/api/projects/:id/revisions/:revision/restore', (request) => {
+    const { id, revision } = request.params as { id: string; revision: string };
+    const targetRevision = Number.parseInt(revision, 10);
+    if (!Number.isSafeInteger(targetRevision) || targetRevision < 0) {
+      throw new ApiError(400, 'invalid_revision', 'Revision must be a non-negative integer.');
+    }
+    const body = parse(restoreRevisionSchema, request.body);
+    return services.repository.restoreRevision(id, targetRevision, body.expectedRevision);
+  });
 
   app.get('/api/projects/:id/sources', (request) => {
     const { id } = request.params as { id: string };
@@ -212,12 +225,22 @@ export function registerApi(app: FastifyInstance, services: Services): void {
 
   app.post('/api/ai/actions', async (request, reply) => {
     const body = parse(aiActionSchema, request.body);
+    const controller = new AbortController();
+    request.raw.once('aborted', () => controller.abort());
+    reply.raw.once('close', () => {
+      if (!reply.raw.writableEnded) controller.abort();
+    });
     const response = await services.actions.run(
       request.cookies[sessionCookie],
       body,
-      request.signal,
+      controller.signal,
     );
     return sendWebResponse(reply, response);
+  });
+  app.post('/api/projects/:projectId/ai-runs/:runId/apply', (request) => {
+    const { projectId, runId } = request.params as { projectId: string; runId: string };
+    const body = parse(applyAiRunSchema, request.body);
+    return services.proposals.apply(projectId, runId, body.revision, body.proposedMarkdown);
   });
 
   app.get('/api/projects/:id/review-findings', (request) => {
@@ -230,11 +253,24 @@ export function registerApi(app: FastifyInstance, services: Services): void {
       findingId: string;
     };
     const body = request.body as { status?: unknown };
-    if (body.status !== 'accepted' && body.status !== 'dismissed') {
-      throw new ApiError(400, 'invalid_status', 'Finding status must be accepted or dismissed.');
+    if (body.status !== 'dismissed') {
+      throw new ApiError(400, 'invalid_status', 'Use the accept endpoint to apply a finding.');
     }
-    services.repository.setFindingStatus(projectId, findingId, body.status);
+    services.repository.setFindingStatus(projectId, findingId, 'dismissed');
     return { ok: true };
+  });
+  app.post('/api/projects/:projectId/review-findings/:findingId/accept', (request) => {
+    const { projectId, findingId } = request.params as {
+      projectId: string;
+      findingId: string;
+    };
+    const body = parse(acceptFindingSchema, request.body);
+    return services.repository.acceptFinding(
+      projectId,
+      findingId,
+      body.revision,
+      body.proposedMarkdown,
+    );
   });
 
   app.get('/api/projects/:id/export', async (request, reply) => {

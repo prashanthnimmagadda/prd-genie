@@ -12,6 +12,7 @@ import { SourceService } from './documents/source-service.js';
 import { ExportService } from './export/export-service.js';
 import { ActionService } from './providers/action-service.js';
 import { ProviderService } from './providers/provider-service.js';
+import { ProposalService } from './providers/proposal-service.js';
 import { SessionStore } from './providers/session-store.js';
 import { EmbeddingService } from './retrieval/embedding-service.js';
 import { RetrievalService } from './retrieval/retrieval-service.js';
@@ -77,6 +78,7 @@ export async function buildApp(
     sessions,
     providers,
     actions: new ActionService(repository, retrieval, providers),
+    proposals: new ProposalService(repository),
   };
   registerApi(app, services);
 

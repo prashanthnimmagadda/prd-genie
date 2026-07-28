@@ -1,8 +1,8 @@
 # PRD Genie
 
-PRD Genie is a private, local-first workbench for turning source material and rough thinking into a review-ready product requirements document. It combines a structured editor, evidence retrieval, explicit AI proposals, and a revision-aware review workflow.
+PRD Genie is a local-first workbench for turning source material and rough thinking into a review-ready product requirements document. It combines a structured editor, evidence retrieval, explicit AI proposals, and a revision-aware review workflow.
 
-This repository is an independent implementation. It contains synthetic fixtures only and is not approved for public release yet.
+This repository is an independent implementation with synthetic fixtures only.
 
 ## What it does
 
@@ -17,9 +17,11 @@ This repository is an independent implementation. It contains synthetic fixtures
 
 ## Status
 
-The project is an early private release candidate. The production build, 63 unit and integration tests, and 15 Playwright checks pass. The browser suite covers Chromium, Firefox, WebKit, axe accessibility checks, and the 320, 375, 414, and 768 px layouts.
+The project is a release candidate. The complete offline gate passes with 88 unit and integration tests plus 18 Playwright checks. The browser suite covers Chromium, Firefox, WebKit, axe accessibility checks, the complete BYOK-to-export workflow, and the 320, 375, 414, and 768 px layouts.
 
-No adoption, reliability, or production-readiness claims are made.
+A real local-provider evaluation passes 20 of 20 deterministic checks for evidence grounding, section scope, citations, structured review, revision binding, application, and restart persistence. It covers one synthetic scenario with Llama 3.1 8B through Ollama. It does not prove equal quality across models or prompts, and human review remains required.
+
+No adoption or universal model-accuracy claims are made.
 
 ![PRD Genie workbench with the document editor, source rail, and review panel](docs/screenshots/workbench.png)
 
@@ -140,6 +142,14 @@ npx playwright install
 npm run test:e2e
 ```
 
+Run the complete release gate locally:
+
+```bash
+npm run ci:offline
+```
+
+The GitHub workflow mirror uses only self-hosted runners. See [Offline CI](docs/OFFLINE_CI.md).
+
 ## Limitations
 
 - Single-user local self-hosting only.
@@ -148,7 +158,7 @@ npm run test:e2e
 - Semantic retrieval downloads a pinned local model on first use.
 - If the model cannot initialise, retrieval continues in a clearly labelled lexical-only mode.
 - Imported legacy browser data is not migrated.
-- Public naming and rights clearance are not complete.
+- Output quality varies by provider and model. Every proposal requires human review and explicit acceptance.
 
 ## Troubleshooting
 

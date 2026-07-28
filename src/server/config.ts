@@ -5,6 +5,7 @@ const defaults = envPaths('prd-genie');
 const dataDir = path.resolve(process.env.PRD_GENIE_DATA_DIR ?? defaults.data);
 
 export const config = {
+  version: process.env.npm_package_version ?? '0.1.0-rc.1',
   host: process.env.PRD_GENIE_HOST ?? '127.0.0.1',
   port: Number.parseInt(process.env.PRD_GENIE_PORT ?? '3210', 10),
   dataDir,

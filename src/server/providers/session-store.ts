@@ -89,7 +89,10 @@ export class SessionStore {
     return {
       provider,
       credentialSource: source,
-      configured: provider === 'ollama' || Boolean(resolved.apiKey),
+      configured:
+        provider === 'ollama' ||
+        Boolean(resolved.apiKey) ||
+        (provider === 'openai-compatible' && Boolean(resolved.baseUrl)),
       baseUrl: resolved.baseUrl ? safeHostname(resolved.baseUrl) : defaultHostname(provider),
     };
   }

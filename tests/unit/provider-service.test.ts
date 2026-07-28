@@ -28,7 +28,18 @@ describe('ProviderService', () => {
   it('rejects missing credentials and endpoints', () => {
     const service = new ProviderService(new SessionStore());
     expect(() => service.model(undefined, 'openai', 'model')).toThrow('Configure');
-    expect(() => service.model(undefined, 'openai-compatible', 'model')).toThrow('Configure');
+    expect(() => service.model(undefined, 'openai-compatible', 'model')).toThrow('endpoint');
+  });
+
+  it('supports keyless OpenAI-compatible endpoints', () => {
+    const sessions = new SessionStore();
+    const session = sessions.create();
+    sessions.setProvider(session.id, 'openai-compatible', {
+      baseUrl: 'http://127.0.0.1:1234/v1',
+    });
+    expect(
+      new ProviderService(sessions).model(session.id, 'openai-compatible', 'local-model'),
+    ).toBeDefined();
   });
 
   it.each([
@@ -64,5 +75,28 @@ describe('ProviderService', () => {
     await expect(service.listModels(undefined, 'ollama')).rejects.toMatchObject({
       code: 'rate_limit',
     });
+  });
+
+  it('rejects malformed model lists and ignores malformed rows', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response('null'))
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [null, 'invalid', { id: 42 }, { id: 'valid', displayName: 'Valid model' }],
+            }),
+          ),
+        ),
+    );
+    const { service, sessionId } = configured('openai-compatible');
+    await expect(service.listModels(sessionId, 'openai-compatible')).rejects.toMatchObject({
+      code: 'malformed_output',
+    });
+    expect(await service.listModels(sessionId, 'openai-compatible')).toEqual([
+      { id: 'valid', name: 'Valid model' },
+    ]);
   });
 });

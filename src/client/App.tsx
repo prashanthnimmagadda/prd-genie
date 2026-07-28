@@ -89,6 +89,15 @@ export default function App() {
     setProjects((current) => current.map((item) => (item.id === project.id ? project : item)));
   }
 
+  async function deleteProject(id: string) {
+    await api.deleteProject(id);
+    setProjects((current) => {
+      const remaining = current.filter((item) => item.id !== id);
+      setSelectedId(remaining[0]?.id ?? null);
+      return remaining;
+    });
+  }
+
   if (loading) {
     return (
       <main className="boot-state" aria-busy="true">
@@ -125,6 +134,7 @@ export default function App() {
         onProjectSelect={setSelectedId}
         onProjectCreate={createProject}
         onProjectChange={updateProject}
+        onProjectDelete={deleteProject}
       />
     </TooltipProvider>
   );
@@ -221,6 +231,7 @@ interface WorkbenchProps {
   onProjectSelect: (id: string) => void;
   onProjectCreate: (name: string) => Promise<void>;
   onProjectChange: (project: ProjectSummary) => void;
+  onProjectDelete: (id: string) => Promise<void>;
 }
 
 function Workbench({
@@ -229,6 +240,7 @@ function Workbench({
   onProjectSelect,
   onProjectCreate,
   onProjectChange,
+  onProjectDelete,
 }: WorkbenchProps) {
   const [prd, setPrd] = useState<PrdDocument | null>(null);
   const [savedPrd, setSavedPrd] = useState<PrdDocument | null>(null);
@@ -243,6 +255,7 @@ function Workbench({
   const [action, setAction] = useState<AiAction>('ask');
   const [scope, setScope] = useState<ActionScope>('section');
   const [output, setOutput] = useState('');
+  const [proposalRunId, setProposalRunId] = useState<string | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -253,7 +266,8 @@ function Workbench({
     locator: string;
     content: string;
   } | null>(null);
-  const [undoSnapshot, setUndoSnapshot] = useState<PrdDocument | null>(null);
+  const [undoRevision, setUndoRevision] = useState<number | null>(null);
+  const [findingDrafts, setFindingDrafts] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -290,8 +304,8 @@ function Workbench({
   );
   const selectedSection = prd?.sections.find((section) => section.id === selectedSectionId);
 
-  async function save(reason = 'Manual edit') {
-    if (!prd) return;
+  async function save(reason = 'Manual edit'): Promise<PrdDocument | null> {
+    if (!prd) return null;
     setSaveBusy(true);
     setError('');
     try {
@@ -299,25 +313,34 @@ function Workbench({
       setPrd(saved);
       setSavedPrd(saved);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
+      return saved;
     } catch (reasonCaught) {
       setError(messageFrom(reasonCaught));
+      return null;
     } finally {
       setSaveBusy(false);
     }
   }
 
-  async function submitAction(instruction: string) {
+  async function submitAction(
+    instruction: string,
+    override?: { action: AiAction; scope: ActionScope },
+  ) {
     if (!prd || !project.selectedProvider || !project.selectedModel) {
       setProviderOpen(true);
       return;
     }
-    if (dirty) await save('Saved before AI action');
-    const current = dirty ? await api.prd(project.id) : prd;
+    const requestedAction = override?.action ?? action;
+    const requestedScope = override?.scope ?? scope;
+    const savedBeforeAction = dirty ? await save('Saved before AI action') : prd;
+    if (!savedBeforeAction) return;
+    const current = savedBeforeAction;
     setBusy(true);
     setError('');
     setOutput('');
+    setProposalRunId(null);
     setCitations([]);
-    if (action === 'review') setFindings([]);
+    if (requestedAction === 'review') setFindings([]);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -325,12 +348,12 @@ function Workbench({
         {
           projectId: project.id,
           revision: current.revision,
-          action,
-          scope,
+          action: requestedAction,
+          scope: requestedScope,
           provider: project.selectedProvider,
           model: project.selectedModel,
           ...(selectedSectionId ? { targetSectionId: selectedSectionId } : {}),
-          ...(scope === 'selection' ? { selection } : {}),
+          ...(requestedScope === 'selection' ? { selection } : {}),
           ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
         },
         {
@@ -341,10 +364,11 @@ function Workbench({
             ),
           onFinding: (finding) => setFindings((value) => [...value, finding]),
           onStatus: (next) => setStatus(next.detail),
+          onCompletion: (completion) => setProposalRunId(completion.runId),
         },
         controller.signal,
       );
-      if (action === 'review') setTab('review');
+      if (requestedAction === 'review') setTab('review');
     } catch (reasonCaught) {
       if (!(reasonCaught instanceof DOMException && reasonCaught.name === 'AbortError')) {
         setError(messageFrom(reasonCaught));
@@ -357,59 +381,53 @@ function Workbench({
   }
 
   async function applyOutput() {
-    if (!prd || !selectedSection || !output.trim()) return;
-    setUndoSnapshot(prd);
-    const next: PrdDocument = {
-      ...prd,
-      sections: prd.sections.map((section) =>
-        section.id === selectedSection.id ? { ...section, body: output.trim() } : section,
-      ),
-    };
-    setPrd(next);
-    const saved = await api.savePrd(
-      project.id,
-      next.revision,
-      next.sections,
-      `${action} proposal accepted`,
-    );
+    if (!prd || !proposalRunId || !output.trim()) return;
+    const sourceRevision = prd.revision;
+    const saved = await api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim());
+    setUndoRevision(sourceRevision);
     setPrd(saved);
     setSavedPrd(saved);
     setOutput('');
+    setProposalRunId(null);
+    setFindings((current) =>
+      current.map((finding) =>
+        finding.status === 'open' ? { ...finding, status: 'stale' } : finding,
+      ),
+    );
   }
 
   async function acceptFinding(finding: ReviewFinding) {
     if (!prd || !finding.proposedPatch || finding.sourceRevision !== prd.revision) return;
-    setUndoSnapshot(prd);
-    const nextSections = prd.sections.map((section) =>
-      section.id === finding.proposedPatch?.sectionId
-        ? { ...section, body: finding.proposedPatch.afterMarkdown }
-        : section,
-    );
-    const saved = await api.savePrd(
+    const sourceRevision = prd.revision;
+    const revised = findingDrafts[finding.id];
+    const saved = await api.acceptFinding(
       project.id,
-      prd.revision,
-      nextSections,
-      'Review proposal accepted',
+      finding.id,
+      sourceRevision,
+      revised === undefined || revised === finding.proposedPatch.afterMarkdown
+        ? undefined
+        : revised,
     );
-    await api.setFindingStatus(project.id, finding.id, 'accepted');
+    setUndoRevision(sourceRevision);
     setPrd(saved);
     setSavedPrd(saved);
     setFindings((current) =>
-      current.map((item) => (item.id === finding.id ? { ...item, status: 'accepted' } : item)),
+      current.map((item) =>
+        item.id === finding.id
+          ? { ...item, status: 'accepted' }
+          : item.status === 'open'
+            ? { ...item, status: 'stale' }
+            : item,
+      ),
     );
   }
 
   async function undoAccepted() {
-    if (!prd || !undoSnapshot) return;
-    const restored = await api.savePrd(
-      project.id,
-      prd.revision,
-      undoSnapshot.sections,
-      'Accepted proposal undone',
-    );
+    if (!prd || undoRevision === null) return;
+    const restored = await api.restoreRevision(project.id, undoRevision, prd.revision);
     setPrd(restored);
     setSavedPrd(restored);
-    setUndoSnapshot(null);
+    setUndoRevision(null);
   }
 
   async function upload(file: File) {
@@ -619,10 +637,34 @@ function Workbench({
             ))
           )}
         </section>
+        <section className="project-lifecycle" aria-label="Project data">
+          <a href={`/api/projects/${project.id}/export?format=archive`}>
+            <Download aria-hidden="true" />
+            Export archive
+          </a>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Delete ${project.name}? Export an archive first if you may need this project later.`,
+                )
+              )
+                return;
+              void onProjectDelete(project.id).catch((reason: unknown) =>
+                setError(messageFrom(reason)),
+              );
+            }}
+          >
+            <Trash2 aria-hidden="true" />
+            Delete project
+          </Button>
+        </section>
       </aside>
 
       <main id="prd-editor" className="document-surface">
-        {undoSnapshot && (
+        {undoRevision !== null && (
           <div className="undo-banner" role="status">
             <span>A proposal changed the current revision.</span>
             <Button variant="ghost" size="sm" onClick={() => void undoAccepted()}>
@@ -862,28 +904,48 @@ function Workbench({
                       </Sources>
                     )}
                     {output && action !== 'ask' && (
-                      <MessageActions>
-                        <MessageAction
-                          label="Apply to selected section"
-                          tooltip="Creates a new revision"
-                          onClick={() =>
-                            void applyOutput().catch((reason: unknown) =>
-                              setError(messageFrom(reason)),
-                            )
-                          }
-                        >
-                          <Check aria-hidden="true" />
-                          Apply
-                        </MessageAction>
-                        <MessageAction
-                          label="Dismiss proposal"
-                          tooltip="Leaves the PRD unchanged"
-                          onClick={() => setOutput('')}
-                        >
-                          <X aria-hidden="true" />
-                          Dismiss
-                        </MessageAction>
-                      </MessageActions>
+                      <>
+                        <p className="proposal-provenance">
+                          Proposal from {project.selectedProvider} / {project.selectedModel},
+                          revision {prd.revision}, {scope} scope
+                        </p>
+                        {!busy && (
+                          <details className="proposal-revision">
+                            <summary>Revise proposal before applying</summary>
+                            <textarea
+                              aria-label="Revised AI proposal"
+                              value={output}
+                              onChange={(event) => setOutput(event.target.value)}
+                            />
+                          </details>
+                        )}
+                        <MessageActions>
+                          <MessageAction
+                            label={`Apply to ${scope}`}
+                            tooltip="Creates a revision bound to this AI run"
+                            disabled={!proposalRunId || busy}
+                            onClick={() =>
+                              void applyOutput().catch((reason: unknown) =>
+                                setError(messageFrom(reason)),
+                              )
+                            }
+                          >
+                            <Check aria-hidden="true" />
+                            Apply
+                          </MessageAction>
+                          <MessageAction
+                            label="Dismiss proposal"
+                            tooltip="Leaves the PRD unchanged"
+                            onClick={() => {
+                              setOutput('');
+                              setProposalRunId(null);
+                            }}
+                          >
+                            <X aria-hidden="true" />
+                            Dismiss
+                          </MessageAction>
+                        </MessageActions>
+                      </>
                     )}
                   </Message>
                 )}
@@ -942,7 +1004,10 @@ function Workbench({
                 onClick={() => {
                   setAction('review');
                   setScope('document');
-                  void submitAction('Run the full structured review.');
+                  void submitAction('Run the full structured review.', {
+                    action: 'review',
+                    scope: 'document',
+                  });
                 }}
               >
                 Run review
@@ -975,7 +1040,35 @@ function Workbench({
                           <pre>{finding.proposedPatch.afterMarkdown}</pre>
                         </div>
                       </div>
+                      {finding.status === 'open' && (
+                        <label className="finding-revision">
+                          <span>Revise before accepting</span>
+                          <textarea
+                            value={findingDrafts[finding.id] ?? finding.proposedPatch.afterMarkdown}
+                            onChange={(event) =>
+                              setFindingDrafts((current) => ({
+                                ...current,
+                                [finding.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
                     </details>
+                  )}
+                  {finding.citations.length > 0 && (
+                    <div className="finding-citations" aria-label="Finding evidence">
+                      {finding.citations.map((citation) => (
+                        <Button
+                          key={citation.id}
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void openCitation(citation)}
+                        >
+                          {citation.sourceName}, {citation.locator}
+                        </Button>
+                      ))}
+                    </div>
                   )}
                   {finding.status === 'open' && (
                     <footer>
@@ -995,7 +1088,7 @@ function Workbench({
                         variant="ghost"
                         onClick={() =>
                           void api
-                            .setFindingStatus(project.id, finding.id, 'dismissed')
+                            .dismissFinding(project.id, finding.id)
                             .then(() =>
                               setFindings((current) =>
                                 current.map((item) =>

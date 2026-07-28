@@ -1,6 +1,6 @@
 # Contributing
 
-This project is currently private while rights and public naming are reviewed.
+PRD Genie welcomes focused changes that preserve its local-first privacy and explicit-approval model.
 
 ## Development
 

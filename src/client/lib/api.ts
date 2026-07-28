@@ -29,7 +29,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...options,
     headers: {
-      ...(options?.body instanceof FormData ? {} : { 'content-type': 'application/json' }),
+      ...(options?.body === undefined || options.body instanceof FormData
+        ? {}
+        : { 'content-type': 'application/json' }),
       ...options?.headers,
     },
   });
@@ -98,7 +100,10 @@ export const api = {
       endOffset: number;
     }>(`/api/projects/${projectId}/sources/${citation.sourceId}/locations/${citation.locationId}`),
   providerStates: () => request<{ providers: ProviderState[] }>('/api/session/providers'),
-  configureProvider: (provider: ProviderKind, value: { apiKey?: string; baseUrl?: string }) =>
+  configureProvider: (
+    provider: ProviderKind,
+    value: { apiKey?: string; baseUrl?: string; headers?: Record<string, string> },
+  ) =>
     request<ProviderState>(`/api/session/providers/${provider}`, {
       method: 'PUT',
       body: JSON.stringify(value),
@@ -109,10 +114,36 @@ export const api = {
     request<{ models: Array<{ id: string; name: string }> }>(`/api/providers/${provider}/models`),
   findings: (id: string) =>
     request<{ findings: ReviewFinding[] }>(`/api/projects/${id}/review-findings`),
-  setFindingStatus: (projectId: string, findingId: string, status: 'accepted' | 'dismissed') =>
+  dismissFinding: (projectId: string, findingId: string) =>
     request<{ ok: true }>(`/api/projects/${projectId}/review-findings/${findingId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status: 'dismissed' }),
+    }),
+  acceptFinding: (
+    projectId: string,
+    findingId: string,
+    revision: number,
+    proposedMarkdown?: string,
+  ) =>
+    request<PrdDocument>(`/api/projects/${projectId}/review-findings/${findingId}/accept`, {
+      method: 'POST',
+      body: JSON.stringify({
+        revision,
+        ...(proposedMarkdown === undefined ? {} : { proposedMarkdown }),
+      }),
+    }),
+  applyAiRun: (projectId: string, runId: string, revision: number, proposedMarkdown?: string) =>
+    request<PrdDocument>(`/api/projects/${projectId}/ai-runs/${runId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({
+        revision,
+        ...(proposedMarkdown === undefined ? {} : { proposedMarkdown }),
+      }),
+    }),
+  restoreRevision: (projectId: string, revision: number, expectedRevision: number) =>
+    request<PrdDocument>(`/api/projects/${projectId}/revisions/${revision}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedRevision }),
     }),
 };
 
@@ -121,6 +152,7 @@ export interface ActionStreamHandlers {
   onCitation: (citation: Citation) => void;
   onFinding: (finding: ReviewFinding) => void;
   onStatus: (status: { stage: string; detail: string }) => void;
+  onCompletion: (completion: { runId: string; revision: number }) => void;
 }
 
 export async function runAction(
@@ -168,6 +200,9 @@ export async function runAction(
       if (part.type === 'data-finding') handlers.onFinding(part.data as ReviewFinding);
       if (part.type === 'data-status') {
         handlers.onStatus(part.data as { stage: string; detail: string });
+      }
+      if (part.type === 'data-completion') {
+        handlers.onCompletion(part.data as { runId: string; revision: number });
       }
       if (part.type === 'error') {
         const payload = JSON.parse(part.errorText ?? '{}') as { code?: string; message?: string };

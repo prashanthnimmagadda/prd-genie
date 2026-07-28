@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest private release candidate and the latest tagged release once public releases begin.
+Security fixes are provided for the latest release candidate and the latest tagged release.
 
 ## Reporting
 

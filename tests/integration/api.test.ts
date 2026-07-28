@@ -60,6 +60,7 @@ describe('API', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       status: 'degraded',
+      version: '0.1.0-rc.1',
       retrieval: { mode: 'lexical' },
     });
   });
@@ -266,7 +267,11 @@ describe('API', () => {
       targetSectionId: sectionId,
       rationale: 'Clarify the actor.',
       citationIds: [],
-      proposedPatch: null,
+      proposedPatch: {
+        sectionId,
+        beforeMarkdown: '',
+        afterMarkdown: 'The actor is the product manager.',
+      },
       sourceRevision: 0,
     });
     const listed = await app.inject({
@@ -280,12 +285,28 @@ describe('API', () => {
       payload: { status: 'unknown' },
     });
     expect(invalid.statusCode).toBe(400);
-    const accepted = await app.inject({
+    const legacyAccepted = await app.inject({
       method: 'PATCH',
       url: `/api/projects/${project.id}/review-findings/${finding.id}`,
       payload: { status: 'accepted' },
     });
-    expect(accepted.json()).toEqual({ ok: true });
+    expect(legacyAccepted.statusCode).toBe(400);
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/review-findings/${finding.id}/accept`,
+      payload: { revision: 0, proposedMarkdown: 'The actor is a working product manager.' },
+    });
+    expect(accepted.statusCode).toBe(200);
+    const acceptedBody = accepted.json<{
+      revision: number;
+      sections: Array<{ body: string }>;
+    }>();
+    expect(acceptedBody.revision).toBe(1);
+    expect(
+      acceptedBody.sections.some(
+        (section) => section.body === 'The actor is a working product manager.',
+      ),
+    ).toBe(true);
   });
 });
 

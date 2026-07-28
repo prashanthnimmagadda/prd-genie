@@ -14,6 +14,29 @@ export default defineConfig({
   build: {
     outDir: 'dist/client',
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'editor',
+              test: /node_modules[\\/](@tiptap|prosemirror)/,
+              priority: 30,
+            },
+            {
+              name: 'markdown',
+              test: /node_modules[\\/](streamdown|mermaid|shiki|hast|remark|rehype)/,
+              priority: 20,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules/,
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
   },
   server: {
     host: '127.0.0.1',

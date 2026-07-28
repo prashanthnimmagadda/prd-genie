@@ -19,6 +19,16 @@ function findMigrationPath(): string {
   return migrationPath;
 }
 
+function migrationFiles(): Array<{ name: string; path: string }> {
+  const initialPath = findMigrationPath();
+  const directory = path.dirname(initialPath);
+  return fs
+    .readdirSync(directory)
+    .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/i.test(name))
+    .sort()
+    .map((name) => ({ name: name.replace(/\.sql$/, ''), path: path.join(directory, name) }));
+}
+
 export function createDatabase(databasePath = config.databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
   const sqlite = new Database(databasePath);
@@ -33,18 +43,21 @@ export function createDatabase(databasePath = config.databasePath) {
     )
   `);
 
-  const migrationName = '0000_initial';
-  const applied = sqlite
-    .prepare('SELECT name FROM app_migrations WHERE name = ?')
-    .get(migrationName) as { name: string } | undefined;
-
-  if (!applied) {
-    const sql = fs.readFileSync(findMigrationPath(), 'utf8');
+  const applied = new Set(
+    (
+      sqlite.prepare('SELECT name FROM app_migrations ORDER BY name').all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name),
+  );
+  for (const migration of migrationFiles()) {
+    if (applied.has(migration.name)) continue;
+    const sql = fs.readFileSync(migration.path, 'utf8');
     sqlite.transaction(() => {
       sqlite.exec(sql);
       sqlite
         .prepare('INSERT INTO app_migrations (name, applied_at) VALUES (?, ?)')
-        .run(migrationName, new Date().toISOString());
+        .run(migration.name, new Date().toISOString());
     })();
   }
 

@@ -174,13 +174,21 @@ describe('Repository', () => {
       status: 'open',
       proposedPatch: { afterMarkdown: 'Supported statement.' },
     });
+    expect(repository.listFindings(project.id)[0]?.citations).toEqual([
+      expect.objectContaining({
+        id: citationId,
+        sourceName: 'synthetic.txt',
+        locator: 'Paragraph 1',
+        excerpt: 'Evidence',
+      }),
+    ]);
     repository.setFindingStatus(project.id, finding.id, 'dismissed');
     expect(repository.listFindings(project.id)[0]?.status).toBe('dismissed');
     expect(repository.getLocation(sourceId, locationId).content).toBe('Evidence');
 
     repository.savePrd(project.id, 0, prd.sections, 'Make findings stale');
     expect(() => repository.setFindingStatus(project.id, finding.id, 'accepted')).toThrow(
-      'older PRD revision',
+      'no longer open',
     );
     repository.completeAiRun(runId, 'provider_unavailable');
   });

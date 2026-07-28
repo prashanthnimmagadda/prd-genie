@@ -66,6 +66,22 @@ export interface SectionPatch {
   afterMarkdown: string;
 }
 
+export interface AiRunProposal {
+  id: string;
+  projectId: string;
+  action: AiAction;
+  scope: ActionScope;
+  provider: ProviderKind;
+  model: string;
+  sourceRevision: number;
+  targetSectionId: string | null;
+  selectionText: string | null;
+  outputText: string | null;
+  appliedRevision: number | null;
+  status: 'running' | 'completed' | 'failed';
+  errorCode: string | null;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -167,16 +183,47 @@ export const sessionProviderSchema = z.object({
   headers: z.record(z.string(), z.string().max(4096)).optional(),
 });
 
-export const aiActionSchema = z.object({
-  projectId: z.string().uuid(),
+export const aiActionSchema = z
+  .object({
+    projectId: z.string().uuid(),
+    revision: z.number().int().nonnegative(),
+    action: z.enum(aiActions),
+    scope: z.enum(actionScopes),
+    provider: z.enum(providerKinds),
+    model: z.string().trim().min(1).max(300),
+    targetSectionId: z.string().uuid().optional(),
+    selection: z.string().max(50_000).optional(),
+    instruction: z.string().trim().max(10_000).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.scope !== 'document' && !value.targetSectionId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['targetSectionId'],
+        message: 'A target section is required for section and selection scopes.',
+      });
+    }
+    if (value.scope === 'selection' && !value.selection?.trim()) {
+      context.addIssue({
+        code: 'custom',
+        path: ['selection'],
+        message: 'Selected text is required for selection scope.',
+      });
+    }
+  });
+
+export const applyAiRunSchema = z.object({
   revision: z.number().int().nonnegative(),
-  action: z.enum(aiActions),
-  scope: z.enum(actionScopes),
-  provider: z.enum(providerKinds),
-  model: z.string().trim().min(1).max(300),
-  targetSectionId: z.string().uuid().optional(),
-  selection: z.string().max(50_000).optional(),
-  instruction: z.string().trim().max(10_000).optional(),
+  proposedMarkdown: z.string().max(500_000).optional(),
+});
+
+export const acceptFindingSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  proposedMarkdown: z.string().max(100_000).optional(),
+});
+
+export const restoreRevisionSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
 });
 
 export type AiActionRequest = z.infer<typeof aiActionSchema>;
@@ -185,14 +232,30 @@ export const reviewFindingOutputSchema = z.object({
   category: z.enum(findingCategories),
   severity: z.enum(severityLevels),
   targetSectionId: z.string(),
-  rationale: z.string().min(1).max(3000),
+  rationale: z.string().min(1).max(1200),
   citationChunkIds: z.array(z.string()).max(8),
-  proposedMarkdown: z.string().max(100_000).nullable(),
+  proposedMarkdown: z.string().max(8000).nullable(),
 });
 
 export const reviewOutputSchema = z.object({
-  summary: z.string().min(1).max(5000),
-  findings: z.array(reviewFindingOutputSchema).max(30),
+  summary: z.string().min(1).max(2000),
+  findings: z.array(reviewFindingOutputSchema).max(20),
+});
+
+export const reviewGenerationSchema = z.object({
+  summary: z.string(),
+  findings: z
+    .array(
+      z.object({
+        category: z.enum(findingCategories),
+        severity: z.enum(severityLevels),
+        targetSectionId: z.string(),
+        rationale: z.string(),
+        citationChunkIds: z.array(z.string()).max(8),
+        proposedMarkdown: z.string().nullable(),
+      }),
+    )
+    .max(20),
 });
 
 export const DEFAULT_SECTIONS = [
