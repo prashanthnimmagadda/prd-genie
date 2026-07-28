@@ -6,6 +6,10 @@ import { execFileSync } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..');
 const hashFile = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sourceVisibility = process.env.PRD_GENIE_SOURCE_VISIBILITY ?? 'local-only';
+if (!['local-only', 'private-github'].includes(sourceVisibility)) {
+  throw new Error('PRD_GENIE_SOURCE_VISIBILITY must be local-only or private-github.');
+}
 const artifacts = [
   'package-lock.json',
   'reports/licenses.json',
@@ -30,7 +34,7 @@ const report = {
   },
   artifacts,
   claims: {
-    sourceVisibility: 'local-only',
+    sourceVisibility,
     employerEraInputsCopied: false,
     publicPromotionApproved: false,
   },
