@@ -1,0 +1,23 @@
+{
+  "brief": {
+    "audience": "Working product managers",
+    "primaryTask": "Draft, edit, evidence-check, and review a product requirements document",
+    "tone": "Technical, restrained, document-first",
+    "direction": "Modern-minimal Workbench",
+    "avoid": [
+      "chat-first composition",
+      "generic dashboard cards",
+      "gradients",
+      "glassmorphism",
+      "fake metrics",
+      "excessive pills",
+      "celebratory motion"
+    ]
+  },
+  "tokens": "tokens.css",
+  "referenceLock": {
+    "Coda AI": "Explicit selection, section, and document scope",
+    "Slite": "Cited evidence, inspectable diffs, and human approval",
+    "Notion Docs": "Document hierarchy and flexible structured sections"
+  }
+}

@@ -1,0 +1,28 @@
+name: Docker smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag prd-genie:smoke .
+      - run: docker run --detach --name prd-genie-smoke --publish 127.0.0.1:3210:3210 prd-genie:smoke
+      - run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail http://127.0.0.1:3210/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs prd-genie-smoke
+          exit 1
+      - if: always()
+        run: docker rm --force prd-genie-smoke

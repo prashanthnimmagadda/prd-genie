@@ -1,0 +1,30 @@
+name: Feature proposal
+description: Propose a focused improvement within the product boundary.
+title: 'feat: '
+labels: ['enhancement', 'needs-triage']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Product-manager problem
+      description: Describe the job, friction, and current workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Privacy and scope effects
+      description: Explain outbound data, persistence, and compatibility effects.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Use synthetic examples only.

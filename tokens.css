@@ -1,0 +1,63 @@
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V5 */
+/* Hallmark · macrostructure: three-pane-document-workbench · genre: modern-minimal · tone: technical and restrained · anchor: cyan-teal · visual QA: preflight blocked */
+:root {
+  --background: oklch(0.985 0.003 255);
+  --foreground: oklch(0.19 0.018 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.018 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0.018 255);
+  --primary: oklch(0.48 0.13 197);
+  --primary-foreground: oklch(0.99 0.004 197);
+  --secondary: oklch(0.955 0.008 255);
+  --secondary-foreground: oklch(0.29 0.025 255);
+  --muted: oklch(0.955 0.008 255);
+  --muted-foreground: oklch(0.49 0.027 255);
+  --accent: oklch(0.93 0.035 197);
+  --accent-foreground: oklch(0.31 0.075 197);
+  --destructive: oklch(0.55 0.2 27);
+  --border: oklch(0.89 0.012 255);
+  --input: oklch(0.89 0.012 255);
+  --ring: oklch(0.55 0.13 197);
+  --surface-raised: oklch(0.97 0.005 255);
+  --surface-selected: oklch(0.94 0.035 197);
+  --warning: oklch(0.72 0.14 78);
+  --warning-foreground: oklch(0.27 0.05 78);
+  --success: oklch(0.55 0.12 153);
+  --overlay: oklch(0.1 0 0 / 0.45);
+  --radius: 0.45rem;
+  --font-sans: 'Source Sans 3', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Source Code Pro', ui-monospace, monospace;
+  --rail-width: 17rem;
+  --review-width: 22rem;
+  --focus-width: 3px;
+  --duration-fast: 120ms;
+  --duration-panel: 180ms;
+}
+
+.dark {
+  --background: oklch(0.16 0.013 255);
+  --foreground: oklch(0.92 0.008 255);
+  --card: oklch(0.205 0.015 255);
+  --card-foreground: oklch(0.92 0.008 255);
+  --popover: oklch(0.205 0.015 255);
+  --popover-foreground: oklch(0.92 0.008 255);
+  --primary: oklch(0.7 0.12 197);
+  --primary-foreground: oklch(0.16 0.03 197);
+  --secondary: oklch(0.25 0.018 255);
+  --secondary-foreground: oklch(0.9 0.008 255);
+  --muted: oklch(0.25 0.018 255);
+  --muted-foreground: oklch(0.7 0.018 255);
+  --accent: oklch(0.3 0.05 197);
+  --accent-foreground: oklch(0.9 0.04 197);
+  --destructive: oklch(0.64 0.19 27);
+  --border: oklch(0.31 0.018 255);
+  --input: oklch(0.31 0.018 255);
+  --ring: oklch(0.7 0.12 197);
+  --surface-raised: oklch(0.19 0.014 255);
+  --surface-selected: oklch(0.3 0.05 197);
+  --warning: oklch(0.76 0.13 78);
+  --warning-foreground: oklch(0.18 0.04 78);
+  --success: oklch(0.68 0.12 153);
+  --overlay: oklch(0.05 0 0 / 0.62);
+}
