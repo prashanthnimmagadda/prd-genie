@@ -30,7 +30,7 @@ const report = {
   },
   artifacts,
   claims: {
-    sourceRepositoryPrivate: true,
+    sourceVisibility: 'local-only',
     employerEraInputsCopied: false,
     publicPromotionApproved: false,
   },
