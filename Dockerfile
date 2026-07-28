@@ -1,4 +1,4 @@
-FROM node:22-trixie-slim AS build
+FROM node:26-trixie-slim AS build
 WORKDIR /app
 RUN apt-get update \
   && apt-get install --no-install-recommends --yes g++ make python3 \
@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:22-trixie-slim AS runtime
+FROM node:26-trixie-slim AS runtime
 ENV NODE_ENV=production
 ENV PRD_GENIE_DATA_DIR=/data
 ENV PRD_GENIE_MODEL_CACHE_DIR=/models
