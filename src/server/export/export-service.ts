@@ -1,13 +1,19 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { PassThrough } from 'node:stream';
-import { ZipArchive } from 'archiver';
+import { createRequire } from 'node:module';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import { PDFDocument, type PDFFont, rgb } from 'pdf-lib';
 import { ApiError } from '../../shared/api.js';
 import type { PrdDocument, ProjectSummary } from '../../shared/types.js';
 import type { AppDatabase } from '../db/client.js';
 import type { Repository } from '../db/repository.js';
+import { ArchiveService } from '../archive/archive-service.js';
+
+const require = createRequire(import.meta.url);
+const pdfFontPaths = {
+  regular: require.resolve('pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf'),
+  bold: require.resolve('pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf'),
+} as const;
 
 export interface ExportResult {
   body: Buffer;
@@ -16,10 +22,14 @@ export interface ExportResult {
 }
 
 export class ExportService {
+  private readonly archives: ArchiveService;
+
   constructor(
     private readonly repository: Repository,
     private readonly database: AppDatabase,
-  ) {}
+  ) {
+    this.archives = new ArchiveService(repository, database);
+  }
 
   async create(projectId: string, format: string): Promise<ExportResult> {
     const project = this.repository.getProject(projectId);
@@ -46,7 +56,7 @@ export class ExportService {
         };
       case 'archive':
         return {
-          body: await this.toArchive(project, prd),
+          body: await this.archives.create(project.id),
           mediaType: 'application/zip',
           filename: `${slug}.prdgenie.zip`,
         };
@@ -58,44 +68,8 @@ export class ExportService {
         );
     }
   }
-
-  private async toArchive(project: ProjectSummary, prd: PrdDocument): Promise<Buffer> {
-    const output = new PassThrough();
-    const data: Buffer[] = [];
-    output.on('data', (chunk: Buffer) => data.push(chunk));
-    const complete = new Promise<Buffer>((resolve, reject) => {
-      output.on('end', () => resolve(Buffer.concat(data)));
-      output.on('error', reject);
-    });
-    const zip = new ZipArchive({ zlib: { level: 9 } });
-    zip.on('error', (error: Error) => output.destroy(error));
-    zip.pipe(output);
-    zip.append(
-      JSON.stringify(
-        {
-          formatVersion: 1,
-          exportedAt: new Date().toISOString(),
-          project,
-          prd,
-          privacy:
-            'This archive contains project content and sources. It contains no provider credentials.',
-        },
-        null,
-        2,
-      ),
-      { name: 'project.json' },
-    );
-    zip.append(toMarkdown(project, prd), { name: 'prd.md' });
-    const sourceRows = this.database.sqlite
-      .prepare('SELECT name, binary_path AS binaryPath FROM sources WHERE project_id = ?')
-      .all(project.id) as Array<{ name: string; binaryPath: string }>;
-    for (const source of sourceRows) {
-      if (fs.existsSync(source.binaryPath)) {
-        zip.file(source.binaryPath, { name: `sources/${path.basename(source.name)}` });
-      }
-    }
-    await zip.finalize();
-    return complete;
+  restoreArchive(buffer: Buffer): Promise<ProjectSummary> {
+    return this.archives.restore(buffer);
   }
 }
 
@@ -132,8 +106,9 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
 
 async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer> {
   const document = await PDFDocument.create();
-  const regular = await document.embedFont(StandardFonts.Helvetica);
-  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  document.registerFontkit(fontkit);
+  const regular = await document.embedFont(fs.readFileSync(pdfFontPaths.regular), { subset: true });
+  const bold = await document.embedFont(fs.readFileSync(pdfFontPaths.bold), { subset: true });
   const size = { width: 612, height: 792 };
   const margin = 54;
   let page = document.addPage([size.width, size.height]);
@@ -141,8 +116,9 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
 
   const write = (text: string, fontSize: number, heading = false) => {
     const font = heading ? bold : regular;
+    assertPdfFontSupportsText(font, text);
     const maxWidth = size.width - margin * 2;
-    for (const line of wrapPdfText(text, fontSize, maxWidth)) {
+    for (const line of wrapPdfText(text, font, fontSize, maxWidth)) {
       if (y < margin + fontSize) {
         page = document.addPage([size.width, size.height]);
         y = size.height - margin;
@@ -159,28 +135,27 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
     y -= fontSize * 0.35;
   };
 
-  write(pdfSafe(project.name), 22, true);
-  if (project.description) write(pdfSafe(project.description), 10);
+  write(project.name, 22, true);
+  if (project.description) write(project.description, 10);
   for (const section of prd.sections) {
-    write(pdfSafe(section.title), 14, true);
-    write(pdfSafe(section.body || 'No content yet.'), 10);
+    write(section.title, 14, true);
+    write(section.body || 'No content yet.', 10);
   }
   return Buffer.from(await document.save());
 }
 
-function wrapPdfText(text: string, fontSize: number, maxWidth: number): string[] {
-  const approximateCharacterWidth = fontSize * 0.52;
-  const limit = Math.max(20, Math.floor(maxWidth / approximateCharacterWidth));
+function wrapPdfText(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
   const result: string[] = [];
   for (const paragraph of text.split('\n')) {
     const words = paragraph.split(/\s+/);
     let line = '';
     for (const word of words) {
-      if (`${line} ${word}`.trim().length > limit && line) {
+      const candidate = `${line} ${word}`.trim();
+      if (font.widthOfTextAtSize(candidate, fontSize) > maxWidth && line) {
         result.push(line);
         line = word;
       } else {
-        line = `${line} ${word}`.trim();
+        line = candidate;
       }
     }
     result.push(line);
@@ -188,10 +163,16 @@ function wrapPdfText(text: string, fontSize: number, maxWidth: number): string[]
   return result;
 }
 
-function pdfSafe(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[^\x20-\x7E\n]/g, (character) => (character === '•' ? '*' : '?'));
+function assertPdfFontSupportsText(font: PDFFont, text: string): void {
+  try {
+    font.encodeText(text);
+  } catch {
+    throw new ApiError(
+      422,
+      'unsupported_pdf_characters',
+      'The PDF export contains characters that the bundled font cannot represent.',
+    );
+  }
 }
 
 function filenameSlug(value: string): string {

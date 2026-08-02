@@ -3,7 +3,10 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   acceptFindingSchema,
+  applyChatGptHandoffSchema,
   aiActionSchema,
+  chatGptHandoffResponseSchema,
+  createChatGptHandoffSchema,
   applyAiRunSchema,
   projectCreateSchema,
   projectUpdateSchema,
@@ -84,13 +87,19 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     }
     const projectName = path.basename(part.filename, path.extname(part.filename));
     const project = services.repository.createProject(projectName || 'Imported PRD', '');
-    const grouped = new Map<string, string[]>();
+    const grouped: Array<{ title: string; bodies: string[] }> = [];
     for (const location of parsed.locations) {
       const title = location.heading ?? 'Imported PRD';
       const body = location.content.replace(/^#{1,6}\s+.+\n?/, '').trim();
-      grouped.set(title, [...(grouped.get(title) ?? []), body]);
+      const startsSection = location.startsHeading === true || /^#{1,6}\s+/m.test(location.content);
+      const current = grouped[grouped.length - 1];
+      if (!current || startsSection || current.title !== title) {
+        grouped.push({ title, bodies: [body] });
+      } else {
+        current.bodies.push(body);
+      }
     }
-    const sections = [...grouped.entries()].map(([title, bodies], position) => ({
+    const sections = grouped.map(({ title, bodies }, position) => ({
       id: crypto.randomUUID(),
       projectId: project.id,
       title,
@@ -116,6 +125,19 @@ export function registerApi(app: FastifyInstance, services: Services): void {
       'PRD imported',
     );
     return reply.code(201).send({ project: services.repository.getProject(project.id), prd });
+  });
+  app.post('/api/projects/restore', async (request, reply) => {
+    const part = await request.file({ limits: { files: 1, fileSize: 250 * 1024 * 1024 } });
+    if (!part) throw new ApiError(400, 'missing_file', 'Choose a PRD Genie project archive.');
+    if (!part.filename.toLowerCase().endsWith('.prdgenie.zip')) {
+      throw new ApiError(
+        415,
+        'unsupported_archive',
+        'Project restore requires a .prdgenie.zip archive.',
+      );
+    }
+    const project = await services.exports.restoreArchive(await part.toBuffer());
+    return reply.code(201).send({ project, prd: services.repository.getPrd(project.id) });
   });
   app.post('/api/projects', (request, reply) => {
     const body = parse(projectCreateSchema, request.body);
@@ -179,6 +201,10 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     services.repository.deleteSource(projectId, sourceId);
     return reply.code(204).send();
   });
+  app.post('/api/projects/:projectId/sources/:sourceId/retry-index', (request, reply) => {
+    const { projectId, sourceId } = request.params as { projectId: string; sourceId: string };
+    return reply.code(202).send(services.sources.retry(projectId, sourceId));
+  });
   app.get('/api/projects/:projectId/sources/:sourceId/locations/:locationId', (request) => {
     const { sourceId, locationId } = request.params as {
       projectId: string;
@@ -241,6 +267,56 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     const { projectId, runId } = request.params as { projectId: string; runId: string };
     const body = parse(applyAiRunSchema, request.body);
     return services.proposals.apply(projectId, runId, body.revision, body.proposedMarkdown);
+  });
+  app.get('/api/projects/:id/ai-runs', (request) => {
+    const { id } = request.params as { id: string };
+    return { runs: services.repository.listAiRuns(id) };
+  });
+
+  app.get('/api/projects/:id/chatgpt-handoffs', (request) => {
+    const { id } = request.params as { id: string };
+    return { handoffs: services.repository.listChatGptHandoffs(id) };
+  });
+  app.post('/api/projects/:id/chatgpt-handoffs', (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = parse(createChatGptHandoffSchema, request.body);
+    const handoff = services.repository.createChatGptHandoff({ projectId: id, ...body });
+    return reply.code(201).send(handoff);
+  });
+  app.post('/api/projects/:id/chatgpt-handoffs/import', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const part = await request.file({ limits: { files: 1, fileSize: 1_000_000 } });
+    if (!part) throw new ApiError(400, 'missing_file', 'Choose a ChatGPT response file.');
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse((await part.toBuffer()).toString('utf8'));
+    } catch {
+      throw new ApiError(400, 'invalid_handoff', 'The ChatGPT response is not valid JSON.');
+    }
+    const response = parse(chatGptHandoffResponseSchema, decoded);
+    const handoff = services.repository.importChatGptHandoffResponse(id, response);
+    return reply.code(201).send(handoff);
+  });
+  app.post('/api/projects/:projectId/chatgpt-handoffs/:handoffId/apply', (request) => {
+    const { projectId, handoffId } = request.params as {
+      projectId: string;
+      handoffId: string;
+    };
+    const body = parse(applyChatGptHandoffSchema, request.body);
+    return services.repository.applyChatGptHandoff(
+      projectId,
+      handoffId,
+      body.revision,
+      body.patches,
+    );
+  });
+  app.delete('/api/projects/:projectId/chatgpt-handoffs/:handoffId', (request, reply) => {
+    const { projectId, handoffId } = request.params as {
+      projectId: string;
+      handoffId: string;
+    };
+    services.repository.dismissChatGptHandoff(projectId, handoffId);
+    return reply.code(204).send();
   });
 
   app.get('/api/projects/:id/review-findings', (request) => {

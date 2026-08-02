@@ -4,6 +4,7 @@
 
 - Publish reproducible release evidence with each candidate.
 - Expand the real-model evaluation corpus beyond one synthetic scenario.
+- Complete current browser, container, archive restore, migration, and ChatGPT handoff verification.
 - Record native Windows verification before describing Windows as release-verified.
 - Continue accessibility review with assistive-technology users.
 
@@ -15,6 +16,8 @@
 - Hybrid retrieval with lexical degradation.
 - Explicit proposals, review findings, citations, accept, dismiss, and undo.
 - Markdown, DOCX, PDF, and archive export.
+- Portable archive restore with local semantic re-indexing.
+- Optional skills-only ChatGPT workflow with a validated manual handoff.
 
 ## Later candidates
 

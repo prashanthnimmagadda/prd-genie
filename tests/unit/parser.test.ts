@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
+import JSZip from 'jszip';
+import { config } from '../../src/server/config.js';
 import { parseDocument } from '../../src/server/documents/parser.js';
 
 describe('parseDocument', () => {
@@ -12,6 +14,10 @@ describe('parseDocument', () => {
     expect(parsed.mediaType).toBe('text/markdown');
     expect(parsed.locations.map((location) => location.heading)).toContain('Problem');
     expect(parsed.locations.map((location) => location.heading)).toContain('Goal');
+    expect(parsed.locations.map((location) => location.content)).toEqual([
+      'Customers cannot recover drafts.',
+      'Reduce lost work.',
+    ]);
   });
 
   it('parses plain text paragraphs', async () => {
@@ -75,5 +81,63 @@ describe('parseDocument', () => {
     const parsed = await parseDocument('brief.docx', await Packer.toBuffer(document));
     expect(parsed.mediaType).toContain('wordprocessingml');
     expect(parsed.locations.some((location) => location.heading === 'Problem')).toBe(true);
+  });
+
+  it('rejects a generic ZIP renamed as DOCX', async () => {
+    const zip = new JSZip();
+    zip.file('notes.txt', 'This is not OOXML.');
+    await expect(
+      parseDocument('notes.docx', await zip.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({
+      code: 'mime_mismatch',
+    });
+  });
+
+  it('rejects DOCX packages whose declared expanded content exceeds the limit', async () => {
+    const document = new Document({
+      sections: [{ children: [new Paragraph({ text: 'Synthetic content' })] }],
+    });
+    const buffer = Buffer.from(await Packer.toBuffer(document));
+    let changed = 0;
+    for (let offset = 0; offset + 46 <= buffer.length; offset += 1) {
+      if (buffer.readUInt32LE(offset) !== 0x02014b50) continue;
+      buffer.writeUInt32LE(60 * 1024 * 1024, offset + 24);
+      changed += 1;
+      if (changed === 2) break;
+    }
+    expect(changed).toBe(2);
+    await expect(parseDocument('oversized.docx', buffer)).rejects.toMatchObject({
+      code: 'docx_resource_limit',
+    });
+  });
+
+  it('enforces configured PDF page and extracted-text limits', async () => {
+    const originalPages = config.maxPdfPages;
+    const originalTextLimit = config.maxPdfExtractedTextChars;
+    try {
+      Object.assign(config, { maxPdfPages: 1 });
+      const pages = await PDFDocument.create();
+      pages.addPage().drawText('First page');
+      pages.addPage().drawText('Second page');
+      await expect(
+        parseDocument('pages.pdf', Buffer.from(await pages.save())),
+      ).rejects.toMatchObject({
+        code: 'pdf_page_limit',
+      });
+
+      Object.assign(config, { maxPdfPages: originalPages, maxPdfExtractedTextChars: 5 });
+      const text = await PDFDocument.create();
+      text.addPage().drawText('Longer than five characters');
+      await expect(parseDocument('text.pdf', Buffer.from(await text.save()))).rejects.toMatchObject(
+        {
+          code: 'pdf_text_limit',
+        },
+      );
+    } finally {
+      Object.assign(config, {
+        maxPdfPages: originalPages,
+        maxPdfExtractedTextChars: originalTextLimit,
+      });
+    }
   });
 });

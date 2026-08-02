@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import fs from 'node:fs';
 
 test('creates a project and exposes the document-first workbench', async ({
   page,
@@ -110,6 +111,94 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(
     providerDialog.getByRole('button', { name: 'Configure and discover' }),
   ).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('validates a ChatGPT handoff, durable history, revision restore, and archive restore', async ({
+  page,
+  request,
+}, testInfo) => {
+  const projectName = `Portable handoff ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', {
+    data: { name: projectName, description: 'Synthetic portable workflow' },
+  });
+  expect(created.ok()).toBe(true);
+  await page.goto('/');
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByRole('tab', { name: 'history' }).click();
+  await page
+    .getByPlaceholder('Describe the draft, review, or rewrite you want ChatGPT to propose.')
+    .fill('Rewrite the problem using only the supplied synthetic context.');
+
+  const requestDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export request' }).click();
+  const requestPath = await (await requestDownload).path();
+  expect(requestPath).toBeTruthy();
+  const handoffRequest = JSON.parse(fs.readFileSync(requestPath, 'utf8')) as {
+    handoffId: string;
+    projectId: string;
+    sourceRevision: number;
+    requestDigest: string;
+    sections: Array<{ id: string; preimageHash: string }>;
+  };
+  const response = {
+    formatVersion: 1,
+    kind: 'prd-genie-response',
+    handoffId: handoffRequest.handoffId,
+    projectId: handoffRequest.projectId,
+    sourceRevision: handoffRequest.sourceRevision,
+    requestDigest: handoffRequest.requestDigest,
+    summary: 'Adds a concrete synthetic user problem.',
+    patches: [
+      {
+        sectionId: handoffRequest.sections[0]!.id,
+        preimageHash: handoffRequest.sections[0]!.preimageHash,
+        afterMarkdown: 'Working product managers lose unsaved draft changes before review.',
+        evidenceIds: [],
+      },
+    ],
+    findings: [],
+    hostModel: 'synthetic-chatgpt-model',
+  };
+  await page.getByLabel('Import ChatGPT handoff response').setInputFiles({
+    name: 'response.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(response)),
+  });
+  await expect(page.getByText('Adds a concrete synthetic user problem.')).toBeVisible();
+  await page.getByRole('button', { name: 'Apply selected' }).click();
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Working product managers',
+  );
+  await expect(page.getByText('Revision 1', { exact: true })).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Restore', exact: true }).last().click();
+  await expect(page.getByText('Revision 2', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Section content').first()).not.toContainText(
+    'Working product managers',
+  );
+
+  const archiveDownload = page.waitForEvent('download');
+  await page.getByRole('link', { name: 'Export archive' }).click();
+  const downloadedArchive = await archiveDownload;
+  const archivePath = await downloadedArchive.path();
+  expect(archivePath).toBeTruthy();
+  await page.getByLabel('Restore PRD Genie project archive').setInputFiles({
+    name: downloadedArchive.suggestedFilename(),
+    mimeType: 'application/zip',
+    buffer: fs.readFileSync(archivePath),
+  });
+  await expect
+    .poll(async () => {
+      const projects = (await (await request.get('/api/projects')).json()) as {
+        projects: Array<{ name: string }>;
+      };
+      return projects.projects.filter((item) => item.name === projectName).length;
+    })
+    .toBe(2);
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);

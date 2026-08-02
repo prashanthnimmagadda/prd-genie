@@ -183,7 +183,11 @@ export function normalizeProviderError(error: unknown): ApiError {
   if (value.status && value.status >= 500) {
     return new ApiError(503, 'provider_unavailable', 'The provider is temporarily unavailable.');
   }
-  if (/json|schema|grammar|structured|parse|malformed/i.test(value.message ?? '')) {
+  if (
+    /json|schema|grammar|structured|parse|malformed|no object generated|did not match/i.test(
+      value.message ?? '',
+    )
+  ) {
     return new ApiError(
       502,
       'malformed_output',

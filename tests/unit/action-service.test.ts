@@ -66,6 +66,8 @@ const evidence: Citation = {
   chunkId: 'chunk-id',
   excerpt: 'Five participants lost unsaved drafts.',
   evidenceStatus: 'supported',
+  available: true,
+  unavailabilityReason: null,
 };
 
 function request(overrides: Partial<AiActionRequest> = {}): AiActionRequest {
@@ -109,6 +111,7 @@ describe('ActionService', () => {
     retrieval.retrieve.mockResolvedValue([evidence]);
     repository.createAiRun.mockReturnValue('run-id');
     repository.storeCitation.mockReturnValue('stored-citation');
+    aiMocks.generateText.mockResolvedValue({ text: 'Draft result' });
     aiMocks.streamText.mockReturnValue({
       toUIMessageStream: () => new ReadableStream({ start: (controller) => controller.close() }),
       text: Promise.resolve('Draft result'),
@@ -153,16 +156,19 @@ describe('ActionService', () => {
     expect(repository.storeCitation).toHaveBeenCalledWith(
       expect.objectContaining({ chunkId: evidence.chunkId }),
     );
-    const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as
+    const generationInput = aiMocks.generateText.mock.calls[0]?.[0] as
       | {
           maxOutputTokens: number;
           prompt: string;
-          providerOptions?: { ollama?: { reasoningEffort?: string } };
+          providerOptions?: { ollama?: { reasoningEffort?: string; think?: boolean } };
+          temperature?: number;
         }
       | undefined;
-    expect(streamInput?.maxOutputTokens).toBe(1800);
-    expect(streamInput?.prompt).toContain('Retrieved source excerpts');
-    expect(streamInput?.providerOptions?.ollama?.reasoningEffort).toBe('none');
+    expect(generationInput?.maxOutputTokens).toBe(1800);
+    expect(generationInput?.prompt).toContain('Retrieved source excerpts');
+    expect(generationInput?.providerOptions?.ollama?.reasoningEffort).toBe('none');
+    expect(generationInput?.providerOptions?.ollama?.think).toBe(false);
+    expect(generationInput?.temperature).toBe(0);
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, 'Draft result');
   });
 
@@ -182,8 +188,9 @@ describe('ActionService', () => {
     });
     const response = await service.run('session', request(), new AbortController().signal);
     await response.text();
-    const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as { prompt?: string } | undefined;
-    expect(streamInput?.prompt).toContain(guidance);
+    const generationInput = aiMocks.generateText.mock.calls[0]?.[0] as
+      { prompt?: string } | undefined;
+    expect(generationInput?.prompt).toContain(guidance);
   });
 
   it.each([
@@ -203,19 +210,22 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     await response.text();
-    const streamInput = aiMocks.streamText.mock.calls[0]?.[0] as
-      { maxOutputTokens?: number; prompt?: string; providerOptions?: unknown } | undefined;
-    expect(streamInput?.maxOutputTokens).toBe(expected);
-    expect(streamInput?.prompt).toContain('(none)');
-    if (overrides.scope === 'document') expect(streamInput?.providerOptions).toBeUndefined();
+    const modelInput = (
+      overrides.action === 'ask'
+        ? aiMocks.streamText.mock.calls[0]?.[0]
+        : aiMocks.generateText.mock.calls[0]?.[0]
+    ) as { maxOutputTokens?: number; prompt?: string; providerOptions?: unknown } | undefined;
+    expect(modelInput?.maxOutputTokens).toBe(expected);
+    expect(modelInput?.prompt).toContain('(none)');
+    if (overrides.scope === 'document') expect(modelInput?.providerOptions).toBeUndefined();
   });
 
   it('reviews the complete document and emits only findings for known sections', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: 'One evidence gap found.',
-        findings: [
-          {
+        findings: {
+          finding1: {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -223,7 +233,7 @@ describe('ActionService', () => {
             citationChunkIds: ['chunk-id', 'unknown'],
             proposedMarkdown: 'Five participants lost unsaved drafts.',
           },
-          {
+          finding2: {
             category: 'clarity',
             severity: 'info',
             targetSectionId: 'unknown-section',
@@ -231,7 +241,10 @@ describe('ActionService', () => {
             citationChunkIds: [],
             proposedMarkdown: null,
           },
-        ],
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
       },
     });
     const response = await service.run(
@@ -257,8 +270,8 @@ describe('ActionService', () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: 'The Problem section needs evidence.',
-        findings: [
-          {
+        findings: {
+          finding1: {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: 'Problem',
@@ -266,7 +279,11 @@ describe('ActionService', () => {
             citationChunkIds: ['unknown'],
             proposedMarkdown: null,
           },
-        ],
+          finding2: null,
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
       },
     });
     const response = await service.run(
@@ -286,7 +303,16 @@ describe('ActionService', () => {
 
   it('rejects structured reviews that exceed the post-validation contract', async () => {
     aiMocks.generateText.mockResolvedValue({
-      output: { summary: '', findings: [] },
+      output: {
+        summary: '',
+        findings: {
+          finding1: null,
+          finding2: null,
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
+      },
     });
     const response = await service.run(
       'session',
@@ -298,10 +324,7 @@ describe('ActionService', () => {
   });
 
   it('normalises provider failures and records a failed run', async () => {
-    aiMocks.streamText.mockReturnValue({
-      toUIMessageStream: () => new ReadableStream({ start: (controller) => controller.close() }),
-      text: Promise.reject(Object.assign(new Error('rate limit'), { status: 429 })),
-    });
+    aiMocks.generateText.mockRejectedValue(Object.assign(new Error('rate limit'), { status: 429 }));
     const response = await service.run(
       'session',
       request({

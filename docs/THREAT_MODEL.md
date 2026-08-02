@@ -7,6 +7,7 @@
 - Uploaded source documents.
 - Extracted source text and embeddings.
 - Citation and review history.
+- Portable project archives and ChatGPT handoffs.
 
 ## Trust boundaries
 
@@ -33,11 +34,15 @@ Source excerpts are labelled as untrusted evidence in system instructions. They 
 
 ### Malicious uploads
 
-The server limits file size, checks supported extensions and file signatures, rejects encrypted PDFs, and parses sources without executing embedded content.
+The server limits file size, checks supported extensions and file signatures, rejects encrypted PDFs, limits PDF pages and extracted text, and bounds DOCX entry count and declared expanded size. Portable restore rejects unsafe paths, unknown files, excessive entries, oversized streamed content, hash mismatches, and inconsistent references. Parsing libraries still process attacker-controlled formats, so only import files from sources you trust and keep dependencies updated.
+
+### Handoff spoofing and replay
+
+ChatGPT handoffs bind the project, source revision, section preimage hashes, evidence allowlist, and request digest. A response can be imported once, becomes stale after later document edits, and is staged for inspection before application. Users must inspect the selected outbound content and the returned patch.
 
 ### Remote network exposure
 
-The application binds to loopback by default. Docker publishes only on host loopback. Remote hosting is unsupported.
+Native execution permits only loopback hosts. Containers require an explicit marker before wildcard binding, and Docker Compose publishes only on host loopback. Remote hosting is unsupported.
 
 ### Local device compromise
 

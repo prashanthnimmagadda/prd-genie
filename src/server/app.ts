@@ -6,6 +6,7 @@ import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
 import { ApiError } from '../shared/api.js';
+import { config } from './config.js';
 import { createDatabase } from './db/client.js';
 import { Repository } from './db/repository.js';
 import { SourceService } from './documents/source-service.js';
@@ -35,7 +36,7 @@ export async function buildApp(
         censor: '[redacted]',
       },
     },
-    bodyLimit: 30 * 1024 * 1024,
+    bodyLimit: config.maxArchiveBytes,
   });
   await app.register(cookie);
   await app.register(helmet, {
@@ -51,7 +52,9 @@ export async function buildApp(
     },
     crossOriginEmbedderPolicy: false,
   });
-  await app.register(multipart, { limits: { files: 1, fileSize: 25 * 1024 * 1024 } });
+  await app.register(multipart, {
+    limits: { files: 1, fileSize: config.maxArchiveBytes },
+  });
 
   app.setErrorHandler((error, request, reply) => {
     const apiError =
@@ -96,6 +99,7 @@ export async function buildApp(
   }
 
   app.addHook('onClose', async () => {
+    await services.sources.close();
     await embeddings.close();
     database.close();
   });

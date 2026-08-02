@@ -22,8 +22,8 @@ const server = createServer(async (request, response) => {
       completion(response, {
         summary:
           'The Problem section lacks a clear consequence for the affected user, which weakens prioritisation. Add the observed review delay without introducing an unsupported business claim.',
-        findings: [
-          {
+        findings: {
+          finding1: {
             category: 'clarity',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -33,15 +33,22 @@ const server = createServer(async (request, response) => {
             proposedMarkdown:
               'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.',
           },
-        ],
+          finding2: null,
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
       });
       return;
     }
 
-    streamCompletion(
-      response,
-      'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.',
-    );
+    const proposal =
+      'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.';
+    if (body.stream === true) {
+      streamCompletion(response, proposal);
+    } else {
+      textCompletion(response, proposal);
+    }
     return;
   }
 
@@ -74,6 +81,23 @@ function completion(response: ServerResponse, output: unknown): void {
       },
     ],
     usage: { prompt_tokens: 100, completion_tokens: 100, total_tokens: 200 },
+  });
+}
+
+function textCompletion(response: ServerResponse, content: string): void {
+  json(response, 200, {
+    id: 'chatcmpl-synthetic-draft',
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content },
+        finish_reason: 'stop',
+      },
+    ],
+    usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 },
   });
 }
 

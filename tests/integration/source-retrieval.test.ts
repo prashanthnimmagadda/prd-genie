@@ -45,7 +45,8 @@ describe('source lifecycle and retrieval fallback', () => {
           '## Constraints\n\nRecovery must work without a network connection.',
       ),
     );
-    expect(source.status).toBe('ready');
+    expect(source.status).toBe('processing');
+    await expect.poll(() => repository.listSources(project.id)[0]?.status).toBe('partial');
     expect(fs.existsSync(path.join(directory, `${source.hash}.md`))).toBe(true);
     expect(repository.listSources(project.id)).toHaveLength(1);
 
@@ -57,6 +58,9 @@ describe('source lifecycle and retrieval fallback', () => {
       sourceName: 'research.md',
       evidenceStatus: 'supported',
     });
+
+    expect(service.retry(project.id, source.id)).toMatchObject({ status: 'processing' });
+    await expect.poll(() => repository.listSources(project.id)[0]?.status).toBe('partial');
 
     await expect(
       service.add(
@@ -70,9 +74,11 @@ describe('source lifecycle and retrieval fallback', () => {
       ),
     ).rejects.toMatchObject({ code: 'duplicate_source' });
 
+    Object.assign(database, { vectorAvailable: false });
     repository.deleteSource(project.id, source.id);
     expect(repository.listSources(project.id)).toHaveLength(0);
     expect(fs.readdirSync(directory)).toHaveLength(0);
+    expect(() => repository.deleteSource(project.id, source.id)).toThrow('Source not found');
   });
 
   it('rejects empty and oversized source buffers before writing', async () => {
@@ -213,13 +219,14 @@ describe('source lifecycle and retrieval fallback', () => {
       return indexed.count === 2;
     });
     const binary = path.join(directory, `${firstSource.hash}.txt`);
+    expect(() => repository.deleteSource(second.id, firstSource.id)).toThrow('Source not found');
     repository.deleteSource(first.id, firstSource.id);
     expect(fs.existsSync(binary)).toBe(true);
     repository.deleteSource(second.id, secondSource.id);
     expect(fs.existsSync(binary)).toBe(false);
   });
 
-  it('ignores malformed embedding dimensions without breaking source ingestion', async () => {
+  it('marks malformed embedding output as lexical-only without breaking ingestion', async () => {
     const project = repository.createProject('Malformed vectors', '');
     const service = new SourceService(database, {
       embed: () => Promise.resolve([[1, 2, 3]]),
@@ -229,11 +236,17 @@ describe('source lifecycle and retrieval fallback', () => {
       'evidence.txt',
       Buffer.from('Synthetic evidence remains usable.'),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.close();
     const row = database.sqlite
-      .prepare('SELECT embedding FROM chunks WHERE project_id = ?')
-      .get(project.id) as { embedding: string | null };
+      .prepare(
+        `SELECT chunks.embedding, sources.status, sources.error
+         FROM chunks JOIN sources ON sources.id = chunks.source_id
+         WHERE chunks.project_id = ?`,
+      )
+      .get(project.id) as { embedding: string | null; status: string; error: string | null };
     expect(row.embedding).toBeNull();
+    expect(row.status).toBe('partial');
+    expect(row.error).toContain('Lexical evidence search remains ready');
   });
 
   it('ignores vector candidates outside the project and missing hydrated rows', async () => {

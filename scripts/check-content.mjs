@@ -96,6 +96,47 @@ for (const term of protectedTerms) {
   if (metadata.toLowerCase().includes(term)) failures.push('Git metadata: protected term');
 }
 
+for (const commit of git(['rev-list', '--all']).trim().split('\n').filter(Boolean)) {
+  const paths = git(['ls-tree', '-r', '--name-only', '-z', commit]).split('\0').filter(Boolean);
+  for (const relative of paths) {
+    if (relative.startsWith('.env') && relative !== '.env.example') {
+      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: environment file`);
+    }
+    if (!textExtensions.has(path.extname(relative).toLowerCase())) continue;
+    let content;
+    try {
+      content = execFileSync('git', ['show', `${commit}:${relative}`], {
+        cwd: root,
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch {
+      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: could not be scanned`);
+      continue;
+    }
+    const lower = content.toLowerCase();
+    if (lower.includes(forbiddenProductTerm)) {
+      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: reserved product term`);
+    }
+    if (content.includes(longDash)) {
+      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: long dash character`);
+    }
+    for (const term of protectedTerms) {
+      if (lower.includes(term)) {
+        failures.push(`Git history ${commit.slice(0, 12)} ${relative}: protected term`);
+      }
+    }
+    for (const pattern of secretPatterns) {
+      if (pattern.test(content)) {
+        failures.push(`Git history ${commit.slice(0, 12)} ${relative}: possible secret`);
+      }
+    }
+    if (sourceSecretPattern.test(content)) {
+      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: possible secret`);
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error('Content guard failed:');
   for (const failure of [...new Set(failures)]) console.error(`- ${failure}`);

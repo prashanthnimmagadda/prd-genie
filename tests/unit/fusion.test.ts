@@ -16,7 +16,7 @@ describe('reciprocalRankFusion', () => {
     expect(result[0]?.id).toBe('b');
   });
 
-  it('limits repeated excerpts from one source', () => {
+  it('favours source diversity before filling unused result slots', () => {
     const result = reciprocalRankFusion(
       [
         Array.from({ length: 10 }, (_, index) => ({
@@ -27,7 +27,10 @@ describe('reciprocalRankFusion', () => {
       ],
       { limit: 8, sourceLimit: 2 },
     );
-    expect(result.filter((item) => item.sourceId === 'same')).toHaveLength(2);
+    expect(result).toHaveLength(8);
+    expect(result.slice(0, 3).filter((item) => item.sourceId === 'same')).toHaveLength(2);
+    expect(result.slice(0, 3).some((item) => item.sourceId === 'different')).toBe(true);
+    expect(result.filter((item) => item.sourceId === 'same')).toHaveLength(7);
     expect(result.some((item) => item.id === 'different')).toBe(true);
   });
 

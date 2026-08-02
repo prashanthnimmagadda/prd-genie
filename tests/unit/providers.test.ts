@@ -49,10 +49,14 @@ describe('provider error normalization', () => {
     expect(normalizeProviderError({ message: 'failed to parse JSON schema grammar' }).code).toBe(
       'malformed_output',
     );
+    expect(
+      normalizeProviderError({ message: 'No object generated: response did not match' }).code,
+    ).toBe('malformed_output');
     expect(normalizeProviderError(new Error('socket failed')).code).toBe('network_failure');
     expect(normalizeProviderError({ status: 403 }).code).toBe('invalid_credentials');
     expect(normalizeProviderError({ status: 408 }).code).toBe('network_failure');
     expect(normalizeProviderError({ status: 500 }).code).toBe('provider_unavailable');
+    expect(normalizeProviderError({ status: 400 }).code).toBe('network_failure');
     const existing = new ApiError(400, 'context_overflow', 'Already normalised.');
     expect(normalizeProviderError(existing)).toBe(existing);
   });

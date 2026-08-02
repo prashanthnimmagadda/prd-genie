@@ -14,6 +14,7 @@ FROM node:${NODE_VERSION}-trixie-slim AS runtime
 ENV NODE_ENV=production
 ENV PRD_GENIE_DATA_DIR=/data
 ENV PRD_GENIE_MODEL_CACHE_DIR=/models
+ENV PRD_GENIE_CONTAINER=1
 ENV PRD_GENIE_HOST=0.0.0.0
 WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./

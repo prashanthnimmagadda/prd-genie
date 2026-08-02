@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-PRD Genie is a single-user desktop-browser application served from a local Node.js process. The default host is `127.0.0.1`. Remote deployment, account authentication, collaboration, and cloud sync are outside the v1 boundary.
+PRD Genie is a single-user local browser application served from a local Node.js process. The default host is `127.0.0.1`. It is not currently a signed native desktop package. Remote deployment, account authentication, collaboration, and cloud sync are outside the v1 boundary.
 
 ## Package layout
 
@@ -14,9 +14,11 @@ PRD Genie is a single-user desktop-browser application served from a local Node.
 
 ## Persistence
 
-SQLite owns projects, PRD sections, revisions, sources, extracted locations, chunks, embeddings, AI runs, citations, and review findings. Source binaries are stored by SHA-256 content hash outside SQLite.
+SQLite owns projects, PRD sections, revisions, sources, extracted locations, chunks, embeddings, AI runs, citations, review findings, and ChatGPT handoff records. Source binaries are stored by SHA-256 content hash outside SQLite.
 
-Each PRD is an ordered list of stable-ID sections. A save creates a monotonically increasing project revision and an immutable JSON snapshot. AI findings target a section ID and source revision. A later save marks open findings stale.
+Each PRD is an ordered list of stable-ID sections. A save creates a monotonically increasing project revision and an immutable JSON snapshot. AI findings and handoffs target a section ID and source revision. A later save marks open findings and outstanding handoffs stale.
+
+Portable archive format version 2 contains project metadata, the current PRD, revision snapshots, source metadata and binaries, extracted locations, chunks, AI runs, durable citation snapshots, and review findings. Session credentials, embeddings, and open ChatGPT handoffs are omitted. Restore validates paths, entry counts, expanded byte limits, hashes, reference integrity, and schema before an atomic identifier-remapped insert. Embeddings are regenerated locally after restore.
 
 ## Retrieval
 
@@ -29,13 +31,15 @@ Each PRD is an ordered list of stable-ID sections. A save creates a monotonicall
 7. Deduplicate and cap repeated excerpts from a single source.
 8. Return no more than eight excerpts inside the action budget.
 
-FTS5 remains available when semantic indexing is unavailable.
+FTS5 remains available when semantic indexing is unavailable. Each source exposes processing, ready, or partial status. Background indexing is tracked during server shutdown and can be retried.
 
 ## Provider boundary
 
 Provider credentials live only in a server memory map keyed by an opaque browser-session cookie. Environment variables are fallback inputs. The selected provider and model are safe project preferences and may be persisted.
 
-Every AI run records provider, model, action, scope, project, and source revision. Citations point to stable source, location, and chunk records. Generated text is a proposal until a user explicitly accepts it.
+Every AI run records provider, model, action, scope, project, and source revision. Citations preserve source name, locator, and excerpt snapshots even if the local source is later deleted. Generated text is a proposal until a user explicitly accepts it.
+
+The ChatGPT path is a separate manual handoff, not provider API access. A handoff contains only user-selected sections and evidence. Imported responses are validated against the request digest, revision, section preimage hashes, evidence allowlist, and replay state, then staged for inspection. Handoff findings remain in their separate handoff record rather than entering the direct-provider review queue.
 
 ## Security controls
 

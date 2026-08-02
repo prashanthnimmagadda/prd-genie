@@ -60,7 +60,7 @@ describe('API', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       status: 'degraded',
-      version: '0.1.0-rc.1',
+      version: '0.1.0-rc.2',
       retrieval: { mode: 'lexical' },
     });
   });
@@ -143,6 +143,104 @@ describe('API', () => {
     });
     expect(markdown.statusCode).toBe(200);
     expect(markdown.body).toContain('synthetic problem');
+    const defaultExport = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/export`,
+    });
+    expect(defaultExport.headers['content-type']).toContain('text/markdown');
+
+    const restored = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/revisions/0/restore`,
+      payload: { expectedRevision: 1 },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json<{ revision: number }>().revision).toBe(2);
+  });
+
+  it('exports, imports, and applies a validated ChatGPT handoff', async () => {
+    const project = repository.createProject('ChatGPT handoff', '');
+    const initial = repository.getPrd(project.id);
+    const section = initial.sections[0]!;
+    const saved = repository.savePrd(
+      project.id,
+      0,
+      initial.sections.map((item) =>
+        item.id === section.id ? { ...item, body: 'Current problem.' } : item,
+      ),
+      'Seed handoff',
+    );
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/chatgpt-handoffs`,
+      payload: {
+        revision: saved.revision,
+        action: 'rewrite',
+        scope: 'section',
+        instruction: 'Make the problem measurable.',
+        sectionIds: [section.id],
+        citationIds: [],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const handoff = created.json<{
+      id: string;
+      request: {
+        requestDigest: string;
+        sections: Array<{ id: string; preimageHash: string }>;
+      };
+    }>();
+    const response = {
+      formatVersion: 1,
+      kind: 'prd-genie-response',
+      handoffId: handoff.id,
+      projectId: project.id,
+      sourceRevision: saved.revision,
+      requestDigest: handoff.request.requestDigest,
+      summary: 'Clarifies the synthetic problem.',
+      patches: [
+        {
+          sectionId: section.id,
+          preimageHash: handoff.request.sections[0]!.preimageHash,
+          afterMarkdown: 'Three of five synthetic participants lose work each week.',
+          evidenceIds: [],
+        },
+      ],
+      findings: [],
+      hostModel: null,
+    };
+    const imported = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/chatgpt-handoffs/import`,
+      headers: { 'content-type': 'multipart/form-data; boundary=test-boundary' },
+      payload: multipart('response.json', JSON.stringify(response)),
+    });
+    expect(imported.statusCode).toBe(201);
+    expect(imported.json()).toMatchObject({ status: 'staged' });
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/chatgpt-handoffs`,
+    });
+    expect(listed.json<{ handoffs: unknown[] }>().handoffs).toHaveLength(1);
+    const applied = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/chatgpt-handoffs/${handoff.id}/apply`,
+      payload: {
+        revision: saved.revision,
+        patches: [
+          {
+            sectionId: section.id,
+            afterMarkdown: response.patches[0]!.afterMarkdown,
+          },
+        ],
+      },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(
+      applied.json<{ sections: Array<{ id: string; body: string }> }>().sections,
+    ).toContainEqual(
+      expect.objectContaining({ id: section.id, body: response.patches[0]!.afterMarkdown }),
+    );
   });
 
   it('imports a Markdown PRD and indexes a synthetic source', async () => {
@@ -169,11 +267,37 @@ describe('API', () => {
       url: `/api/projects/${project.project.id}/sources`,
     });
     expect(listed.json<{ sources: unknown[] }>().sources).toHaveLength(1);
+    await expect
+      .poll(() => repository.listSources(project.project.id)[0]?.status)
+      .not.toBe('processing');
+    const retried = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.project.id}/sources/${sourceId}/retry-index`,
+    });
+    expect(retried.statusCode).toBe(202);
     const deleted = await app.inject({
       method: 'DELETE',
       url: `/api/projects/${project.project.id}/sources/${sourceId}`,
     });
     expect(deleted.statusCode).toBe(204);
+  });
+
+  it('preserves repeated Markdown headings as separate ordered sections', async () => {
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/projects/import',
+      headers: { 'content-type': 'multipart/form-data; boundary=test-boundary' },
+      payload: multipart(
+        'repeated.md',
+        '# Experiment\n\nFirst variant.\n\n# Experiment\n\nSecond variant.',
+      ),
+    });
+    expect(imported.statusCode).toBe(201);
+    const sections = imported.json<{ prd: { sections: Array<{ title: string; body: string }> } }>()
+      .prd.sections;
+    expect(sections).toHaveLength(2);
+    expect(sections.map((section) => section.title)).toEqual(['Experiment', 'Experiment']);
+    expect(sections.map((section) => section.body)).toEqual(['First variant.', 'Second variant.']);
   });
 
   it('updates, reads, and deletes a project through its lifecycle', async () => {
@@ -195,6 +319,41 @@ describe('API', () => {
     expect(removed.statusCode).toBe(204);
     const missing = await app.inject({ method: 'GET', url: `/api/projects/${project.id}` });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('restores a portable archive through the public route', async () => {
+    const project = repository.createProject('Route archive', '');
+    const exported = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/export?format=archive`,
+    });
+    expect(exported.statusCode).toBe(200);
+    const restored = await app.inject({
+      method: 'POST',
+      url: '/api/projects/restore',
+      headers: { 'content-type': 'multipart/form-data; boundary=binary-boundary' },
+      payload: multipartBuffer('project.prdgenie.zip', exported.rawPayload),
+    });
+    expect(restored.statusCode).toBe(201);
+    expect(restored.json()).toMatchObject({ project: { name: 'Route archive' } });
+  });
+
+  it('lists durable AI runs and serves client and API not-found states', async () => {
+    const project = repository.createProject('History route', '');
+    repository.createAiRun({
+      projectId: project.id,
+      action: 'ask',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    const runs = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/ai-runs` });
+    expect(runs.json<{ runs: unknown[] }>().runs).toHaveLength(1);
+    expect((await app.inject({ method: 'GET', url: '/api/missing' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/missing-client-route' })).statusCode).toBe(
+      200,
+    );
   });
 
   it('validates provider names, endpoint transport, and session reuse', async () => {
@@ -322,4 +481,20 @@ function multipart(filename: string, content: string): Buffer {
       '',
     ].join('\r\n'),
   );
+}
+
+function multipartBuffer(filename: string, content: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from(
+      [
+        '--binary-boundary',
+        `Content-Disposition: form-data; name="file"; filename="${filename}"`,
+        'Content-Type: application/zip',
+        '',
+        '',
+      ].join('\r\n'),
+    ),
+    content,
+    Buffer.from('\r\n--binary-boundary--\r\n'),
+  ]);
 }

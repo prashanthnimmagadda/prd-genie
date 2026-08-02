@@ -1,0 +1,4 @@
+interface:
+  display_name: 'PRD Genie Workflows'
+  short_description: 'Draft, review, rewrite, and hand off PRDs'
+  default_prompt: 'Use $prd-workflows to draft a review-ready PRD from my notes.'

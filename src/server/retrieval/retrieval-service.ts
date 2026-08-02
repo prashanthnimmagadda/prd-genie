@@ -137,6 +137,8 @@ export class RetrievalService {
         chunkId: row.id,
         excerpt: row.content,
         evidenceStatus: 'supported',
+        available: true,
+        unavailabilityReason: null,
       });
     }
     return citations;

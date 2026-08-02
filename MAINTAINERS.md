@@ -14,7 +14,9 @@ At least one maintainer review is required for ordinary changes. Security, persi
 - No secret or protected-content matches.
 - Reviewed license and SBOM reports.
 - Documented unresolved issues.
-- Explicit approval immediately before any public promotion.
+- Explicit approval immediately before any public promotion, recording the exact Git SHA, version, immutable artifact hashes, target, completed validation, rollback or halt path, and known unresolved issues.
+
+A merge, tag, upload, release pull request, or submission is not approval for public availability. Release automation must remain disabled or private until the public-promotion approval is recorded.
 
 ## Decision records
 

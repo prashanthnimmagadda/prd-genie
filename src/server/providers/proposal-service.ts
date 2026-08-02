@@ -68,7 +68,7 @@ function applyScopedProposal(
   return sections.map((section) => (section.id === target.id ? { ...section, body } : section));
 }
 
-function normalizeSectionBody(output: string, title: string): string {
+export function normalizeSectionBody(output: string, title: string): string {
   const heading = /^#{1,6}[ \t]+([^\n]+)\n+/;
   const match = output.match(heading);
   if (!match) return output;
@@ -80,6 +80,13 @@ function normalizeSectionBody(output: string, title: string): string {
     );
   }
   return output.slice(match[0].length).trim();
+}
+
+export function normalizeDocumentProposal(output: string, sections: PrdSection[]): string {
+  const parsed = parseDocumentProposal(output, sections);
+  return parsed
+    .map((section) => `<!-- section:${section.id} -->\n## ${section.title}\n${section.body}`)
+    .join('\n\n');
 }
 
 export function parseDocumentProposal(output: string, sections: PrdSection[]): PrdSection[] {

@@ -8,6 +8,7 @@ import {
   Download,
   FilePlus2,
   FolderOpen,
+  History,
   KeyRound,
   Menu,
   PanelRight,
@@ -16,15 +17,19 @@ import {
   Save,
   SearchCheck,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import type {
   AiAction,
+  AiRunProposal,
+  ChatGptHandoffSummary,
   ActionScope,
   Citation,
   PrdDocument,
   ProjectSummary,
   ReviewFinding,
+  RevisionSummary,
   SourceSummary,
 } from '@shared/types';
 import { api, runAction } from '@/lib/api';
@@ -54,7 +59,7 @@ import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai
 import { SectionEditor } from '@/components/SectionEditor';
 import { ProviderDialog } from '@/components/ProviderDialog';
 
-type PanelTab = 'assist' | 'review' | 'evidence';
+type PanelTab = 'assist' | 'review' | 'evidence' | 'history';
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -80,7 +85,9 @@ export default function App() {
   }
 
   async function importProject(file: File) {
-    const { project } = await api.importProject(file);
+    const { project } = file.name.toLowerCase().endsWith('.prdgenie.zip')
+      ? await api.restoreProject(file)
+      : await api.importProject(file);
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
   }
@@ -133,6 +140,7 @@ export default function App() {
         projects={projects}
         onProjectSelect={setSelectedId}
         onProjectCreate={createProject}
+        onProjectImport={importProject}
         onProjectChange={updateProject}
         onProjectDelete={deleteProject}
       />
@@ -200,7 +208,7 @@ function EmptyWorkspace({
           className="visually-hidden"
           type="file"
           aria-label="Import PRD file"
-          accept=".md,.markdown,.docx,.txt"
+          accept=".md,.markdown,.docx,.txt,.prdgenie.zip"
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (!file) return;
@@ -230,6 +238,7 @@ interface WorkbenchProps {
   projects: ProjectSummary[];
   onProjectSelect: (id: string) => void;
   onProjectCreate: (name: string) => Promise<void>;
+  onProjectImport: (file: File) => Promise<void>;
   onProjectChange: (project: ProjectSummary) => void;
   onProjectDelete: (id: string) => Promise<void>;
 }
@@ -239,6 +248,7 @@ function Workbench({
   projects,
   onProjectSelect,
   onProjectCreate,
+  onProjectImport,
   onProjectChange,
   onProjectDelete,
 }: WorkbenchProps) {
@@ -246,6 +256,14 @@ function Workbench({
   const [savedPrd, setSavedPrd] = useState<PrdDocument | null>(null);
   const [sources, setSources] = useState<SourceSummary[]>([]);
   const [findings, setFindings] = useState<ReviewFinding[]>([]);
+  const [aiRuns, setAiRuns] = useState<AiRunProposal[]>([]);
+  const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
+  const [handoffs, setHandoffs] = useState<ChatGptHandoffSummary[]>([]);
+  const [handoffInstruction, setHandoffInstruction] = useState('');
+  const [handoffCitationIds, setHandoffCitationIds] = useState<string[]>([]);
+  const [handoffDrafts, setHandoffDrafts] = useState<Record<string, Record<string, string | null>>>(
+    {},
+  );
   const [selectedSectionId, setSelectedSectionId] = useState('');
   const [selection, setSelection] = useState('');
   const [tab, setTab] = useState<PanelTab>('assist');
@@ -265,11 +283,15 @@ function Workbench({
   const [evidenceDetail, setEvidenceDetail] = useState<{
     locator: string;
     content: string;
+    excerpt: string;
+    available: boolean;
   } | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const [findingDrafts, setFindingDrafts] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const handoffInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const onOnline = () => setOffline(false);
@@ -283,17 +305,38 @@ function Workbench({
   }, []);
 
   useEffect(() => {
-    Promise.all([api.prd(project.id), api.sources(project.id), api.findings(project.id)])
-      .then(([document, sourceResult, findingResult]) => {
+    Promise.all([
+      api.prd(project.id),
+      api.sources(project.id),
+      api.findings(project.id),
+      api.aiRuns(project.id),
+      api.revisions(project.id),
+      api.chatGptHandoffs(project.id),
+    ])
+      .then(([document, sourceResult, findingResult, runResult, revisionResult, handoffResult]) => {
         setError('');
         setPrd(document);
         setSavedPrd(document);
         setSources(sourceResult.sources);
         setFindings(findingResult.findings);
+        setAiRuns(runResult.runs);
+        setRevisions(revisionResult.revisions);
+        setHandoffs(handoffResult.handoffs);
         setSelectedSectionId(document.sections[0]?.id ?? '');
       })
       .catch((reason: unknown) => setError(messageFrom(reason)));
   }, [project.id]);
+
+  useEffect(() => {
+    if (!sources.some((source) => source.status === 'processing')) return;
+    const timer = window.setInterval(() => {
+      void api
+        .sources(project.id)
+        .then((result) => setSources(result.sources))
+        .catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [project.id, sources]);
 
   const dirty = useMemo(
     () =>
@@ -313,6 +356,7 @@ function Workbench({
       setPrd(saved);
       setSavedPrd(saved);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
+      void api.revisions(project.id).then((result) => setRevisions(result.revisions));
       return saved;
     } catch (reasonCaught) {
       setError(messageFrom(reasonCaught));
@@ -332,6 +376,10 @@ function Workbench({
     }
     const requestedAction = override?.action ?? action;
     const requestedScope = override?.scope ?? scope;
+    if (offline && project.selectedProvider !== 'ollama') {
+      setError('This provider requires a network connection. Local Ollama remains available.');
+      return;
+    }
     const savedBeforeAction = dirty ? await save('Saved before AI action') : prd;
     if (!savedBeforeAction) return;
     const current = savedBeforeAction;
@@ -364,7 +412,10 @@ function Workbench({
             ),
           onFinding: (finding) => setFindings((value) => [...value, finding]),
           onStatus: (next) => setStatus(next.detail),
-          onCompletion: (completion) => setProposalRunId(completion.runId),
+          onCompletion: (completion) => {
+            setProposalRunId(completion.runId);
+            void api.aiRuns(project.id).then((result) => setAiRuns(result.runs));
+          },
         },
         controller.signal,
       );
@@ -394,6 +445,12 @@ function Workbench({
         finding.status === 'open' ? { ...finding, status: 'stale' } : finding,
       ),
     );
+    void Promise.all([api.revisions(project.id), api.aiRuns(project.id)]).then(
+      ([revisionResult, runResult]) => {
+        setRevisions(revisionResult.revisions);
+        setAiRuns(runResult.runs);
+      },
+    );
   }
 
   async function acceptFinding(finding: ReviewFinding) {
@@ -420,6 +477,12 @@ function Workbench({
             : item,
       ),
     );
+    void Promise.all([api.revisions(project.id), api.aiRuns(project.id)]).then(
+      ([revisionResult, runResult]) => {
+        setRevisions(revisionResult.revisions);
+        setAiRuns(runResult.runs);
+      },
+    );
   }
 
   async function undoAccepted() {
@@ -428,6 +491,7 @@ function Workbench({
     setPrd(restored);
     setSavedPrd(restored);
     setUndoRevision(null);
+    setRevisions((await api.revisions(project.id)).revisions);
   }
 
   async function upload(file: File) {
@@ -443,12 +507,82 @@ function Workbench({
   async function openCitation(citation: Citation) {
     setTab('evidence');
     setPanelOpen(true);
+    if (!citation.available || !citation.sourceId || !citation.locationId) {
+      setEvidenceDetail({
+        locator: citation.locator,
+        content: 'The local source was deleted. This historical excerpt is retained for audit.',
+        excerpt: citation.excerpt,
+        available: false,
+      });
+      return;
+    }
     try {
       const location = await api.sourceLocation(project.id, citation);
-      setEvidenceDetail({ locator: location.locator, content: location.content });
+      setEvidenceDetail({
+        locator: location.locator,
+        content: location.content,
+        excerpt: citation.excerpt,
+        available: true,
+      });
     } catch (reason) {
       setError(messageFrom(reason));
     }
+  }
+
+  async function createChatGptHandoff() {
+    if (!prd || !selectedSectionId || !handoffInstruction.trim()) return;
+    const handoffAction = action === 'ask' ? 'rewrite' : action;
+    const handoffScope = scope === 'document' ? 'document' : 'section';
+    const sectionIds =
+      handoffScope === 'document' ? prd.sections.map((section) => section.id) : [selectedSectionId];
+    const handoff = await api.createChatGptHandoff(project.id, {
+      revision: prd.revision,
+      action: handoffAction,
+      scope: handoffScope,
+      instruction: handoffInstruction.trim(),
+      sectionIds,
+      citationIds: handoffCitationIds,
+    });
+    setHandoffs((current) => [handoff, ...current]);
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(handoff.request, null, 2)], { type: 'application/json' }),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `prd-genie-request-${handoff.id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importChatGptHandoff(file: File) {
+    const handoff = await api.importChatGptHandoff(project.id, file);
+    setHandoffs((current) => [handoff, ...current.filter((item) => item.id !== handoff.id)]);
+    setTab('history');
+  }
+
+  async function applyChatGptHandoff(handoff: ChatGptHandoffSummary) {
+    if (!prd || !handoff.response) return;
+    const configured = handoffDrafts[handoff.id] ?? {};
+    const patches = handoff.response.patches.flatMap((patch) => {
+      const revised = configured[patch.sectionId];
+      if (revised === null) return [];
+      return [{ sectionId: patch.sectionId, afterMarkdown: revised ?? patch.afterMarkdown }];
+    });
+    if (patches.length === 0) {
+      setError('Select at least one ChatGPT patch before applying the handoff.');
+      return;
+    }
+    const restoredRevision = prd.revision;
+    const saved = await api.applyChatGptHandoff(project.id, handoff.id, prd.revision, patches);
+    setUndoRevision(restoredRevision);
+    setPrd(saved);
+    setSavedPrd(saved);
+    const [handoffResult, revisionResult] = await Promise.all([
+      api.chatGptHandoffs(project.id),
+      api.revisions(project.id),
+    ]);
+    setHandoffs(handoffResult.handoffs);
+    setRevisions(revisionResult.revisions);
   }
 
   if (!prd) {
@@ -467,7 +601,8 @@ function Workbench({
       </a>
       {offline && (
         <div className="offline-banner" role="status">
-          You are offline. Editing and local sources remain available; provider actions are paused.
+          You are offline. Editing, local sources, and Ollama remain available. Remote provider
+          actions are paused.
         </div>
       )}
       <header className="topbar">
@@ -556,6 +691,26 @@ function Workbench({
               <span>{item.name}</span>
             </button>
           ))}
+          <Button variant="ghost" size="sm" onClick={() => archiveInputRef.current?.click()}>
+            <Upload aria-hidden="true" />
+            Restore archive
+          </Button>
+          <input
+            ref={archiveInputRef}
+            className="visually-hidden"
+            type="file"
+            accept=".prdgenie.zip"
+            aria-label="Restore PRD Genie project archive"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                void onProjectImport(file).catch((reason: unknown) =>
+                  setError(messageFrom(reason)),
+                );
+              }
+              event.target.value = '';
+            }}
+          />
         </nav>
 
         <nav className="outline" aria-label="Document outline">
@@ -616,7 +771,26 @@ function Workbench({
                 <div>
                   <span>{source.name}</span>
                   <small>{source.status}</small>
+                  {source.error && <small>{source.error}</small>}
                 </div>
+                {(source.status === 'partial' || source.status === 'failed') && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      void api
+                        .retrySourceIndex(project.id, source.id)
+                        .then((updated) =>
+                          setSources((current) =>
+                            current.map((item) => (item.id === updated.id ? updated : item)),
+                          ),
+                        )
+                        .catch((reason: unknown) => setError(messageFrom(reason)));
+                    }}
+                  >
+                    Retry index
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -809,7 +983,7 @@ function Workbench({
         aria-label="Assist and review"
       >
         <div className="panel-tabs" role="tablist" aria-label="Assistant panels">
-          {(['assist', 'review', 'evidence'] as const).map((value) => (
+          {(['assist', 'review', 'evidence', 'history'] as const).map((value) => (
             <button
               key={value}
               role="tab"
@@ -962,7 +1136,7 @@ function Workbench({
                       ? 'How should this be improved?'
                       : 'Ask about this PRD'
                 }
-                disabled={busy || offline}
+                disabled={busy || (offline && project.selectedProvider !== 'ollama')}
               />
               <PromptInputFooter>
                 <PromptInputTools>
@@ -978,7 +1152,7 @@ function Workbench({
                 </PromptInputTools>
                 <PromptInputSubmit
                   status={busy ? 'streaming' : 'ready'}
-                  disabled={offline}
+                  disabled={offline && project.selectedProvider !== 'ollama'}
                   onClick={(event) => {
                     if (busy) {
                       event.preventDefault();
@@ -1000,7 +1174,7 @@ function Workbench({
               </div>
               <Button
                 size="sm"
-                disabled={busy}
+                disabled={busy || (offline && project.selectedProvider !== 'ollama')}
                 onClick={() => {
                   setAction('review');
                   setScope('document');
@@ -1121,6 +1295,8 @@ function Workbench({
             {evidenceDetail ? (
               <article className="evidence-detail">
                 <strong>{evidenceDetail.locator}</strong>
+                {!evidenceDetail.available && <small>Historical snapshot, source deleted</small>}
+                <blockquote>{evidenceDetail.excerpt}</blockquote>
                 <p>{evidenceDetail.content}</p>
               </article>
             ) : citations.length > 0 ? (
@@ -1131,7 +1307,10 @@ function Workbench({
                   onClick={() => void openCitation(citation)}
                 >
                   <span>{citation.sourceName}</span>
-                  <small>{citation.locator}</small>
+                  <small>
+                    {citation.locator}
+                    {citation.available ? '' : ' (source deleted)'}
+                  </small>
                 </button>
               ))
             ) : (
@@ -1141,6 +1320,286 @@ function Workbench({
                 <small>Generated answers surface the exact excerpts they used.</small>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === 'history' && (
+          <div className="history-panel">
+            <div className="panel-intro">
+              <div>
+                <p className="eyebrow">Durable project record</p>
+                <h2>History</h2>
+              </div>
+            </div>
+            <section className="history-section" aria-labelledby="chatgpt-handoff-heading">
+              <h3 id="chatgpt-handoff-heading">ChatGPT handoff</h3>
+              <div className="handoff-compose">
+                <p>
+                  Export only the current {scope === 'document' ? 'document' : 'section'} and the
+                  evidence you select below. OpenAI processes this material inside ChatGPT. A
+                  ChatGPT subscription does not provide API access to the standalone app.
+                </p>
+                <label>
+                  <span>Instruction</span>
+                  <textarea
+                    value={handoffInstruction}
+                    onChange={(event) => setHandoffInstruction(event.target.value)}
+                    placeholder="Describe the draft, review, or rewrite you want ChatGPT to propose."
+                    maxLength={10_000}
+                  />
+                </label>
+                {citations.length > 0 && (
+                  <fieldset>
+                    <legend>Evidence excerpts to send</legend>
+                    {citations.map((citation) => (
+                      <label key={citation.id}>
+                        <input
+                          type="checkbox"
+                          checked={handoffCitationIds.includes(citation.id)}
+                          onChange={(event) =>
+                            setHandoffCitationIds((current) =>
+                              event.target.checked
+                                ? [...current, citation.id]
+                                : current.filter((id) => id !== citation.id),
+                            )
+                          }
+                        />
+                        <span>
+                          {citation.sourceName}, {citation.locator}: {citation.excerpt}
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                <div className="handoff-actions">
+                  <Button
+                    size="sm"
+                    disabled={!handoffInstruction.trim() || dirty}
+                    onClick={() =>
+                      void createChatGptHandoff().catch((reason: unknown) =>
+                        setError(messageFrom(reason)),
+                      )
+                    }
+                  >
+                    <Download aria-hidden="true" />
+                    Export request
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handoffInputRef.current?.click()}
+                  >
+                    <Upload aria-hidden="true" />
+                    Import response
+                  </Button>
+                  <input
+                    ref={handoffInputRef}
+                    className="visually-hidden"
+                    type="file"
+                    accept="application/json,.json"
+                    aria-label="Import ChatGPT handoff response"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        void importChatGptHandoff(file).catch((reason: unknown) =>
+                          setError(messageFrom(reason)),
+                        );
+                      }
+                      event.target.value = '';
+                    }}
+                  />
+                </div>
+                {dirty && <small>Save the PRD before creating a handoff.</small>}
+              </div>
+              {handoffs.map((handoff) => (
+                <article className="handoff-row" key={handoff.id}>
+                  <header>
+                    <div>
+                      <strong>
+                        {handoff.action} on {handoff.scope}
+                      </strong>
+                      <small>
+                        Revision {handoff.sourceRevision}, {handoff.status}
+                      </small>
+                    </div>
+                    <span>{new Date(handoff.createdAt).toLocaleString()}</span>
+                  </header>
+                  {handoff.response && (
+                    <>
+                      <p>{handoff.response.summary}</p>
+                      {handoff.response.patches.map((patch) => {
+                        const configured = handoffDrafts[handoff.id]?.[patch.sectionId];
+                        const enabled = configured !== null;
+                        const sectionTitle =
+                          prd.sections.find((section) => section.id === patch.sectionId)?.title ??
+                          'Unknown section';
+                        return (
+                          <label className="handoff-patch" key={patch.sectionId}>
+                            <span>
+                              <input
+                                type="checkbox"
+                                checked={enabled}
+                                onChange={(event) =>
+                                  setHandoffDrafts((current) => ({
+                                    ...current,
+                                    [handoff.id]: {
+                                      ...current[handoff.id],
+                                      [patch.sectionId]: event.target.checked
+                                        ? patch.afterMarkdown
+                                        : null,
+                                    },
+                                  }))
+                                }
+                              />
+                              Apply to {sectionTitle}
+                            </span>
+                            <textarea
+                              disabled={!enabled || handoff.status !== 'staged'}
+                              value={configured ?? patch.afterMarkdown}
+                              onChange={(event) =>
+                                setHandoffDrafts((current) => ({
+                                  ...current,
+                                  [handoff.id]: {
+                                    ...current[handoff.id],
+                                    [patch.sectionId]: event.target.value,
+                                  },
+                                }))
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                      {handoff.response.findings.map((finding, index) => (
+                        <div className="handoff-finding" key={`${handoff.id}-${index}`}>
+                          <strong>
+                            {finding.severity}: {finding.category.replace('-', ' ')}
+                          </strong>
+                          <p>{finding.rationale}</p>
+                        </div>
+                      ))}
+                      {handoff.status === 'staged' && (
+                        <footer>
+                          <Button
+                            size="sm"
+                            disabled={handoff.sourceRevision !== prd.revision || dirty}
+                            onClick={() =>
+                              void applyChatGptHandoff(handoff).catch((reason: unknown) =>
+                                setError(messageFrom(reason)),
+                              )
+                            }
+                          >
+                            <Check aria-hidden="true" />
+                            Apply selected
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              void api
+                                .dismissChatGptHandoff(project.id, handoff.id)
+                                .then(() =>
+                                  setHandoffs((current) =>
+                                    current.map((item) =>
+                                      item.id === handoff.id
+                                        ? { ...item, status: 'dismissed' }
+                                        : item,
+                                    ),
+                                  ),
+                                )
+                                .catch((reason: unknown) => setError(messageFrom(reason)))
+                            }
+                          >
+                            Dismiss
+                          </Button>
+                        </footer>
+                      )}
+                    </>
+                  )}
+                </article>
+              ))}
+            </section>
+            <section className="history-section" aria-labelledby="revision-history-heading">
+              <h3 id="revision-history-heading">Revisions</h3>
+              {revisions.map((revision) => (
+                <article className="history-row" key={revision.id}>
+                  <div>
+                    <strong>Revision {revision.revision}</strong>
+                    <span>{revision.reason}</span>
+                    <small>{new Date(revision.createdAt).toLocaleString()}</small>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={revision.revision === prd.revision || dirty}
+                    onClick={() => {
+                      if (
+                        !window.confirm(`Restore revision ${revision.revision} as a new revision?`)
+                      )
+                        return;
+                      void api
+                        .restoreRevision(project.id, revision.revision, prd.revision)
+                        .then(async (restored) => {
+                          setPrd(restored);
+                          setSavedPrd(restored);
+                          setRevisions((await api.revisions(project.id)).revisions);
+                        })
+                        .catch((reason: unknown) => setError(messageFrom(reason)));
+                    }}
+                  >
+                    <RotateCcw aria-hidden="true" />
+                    Restore
+                  </Button>
+                </article>
+              ))}
+            </section>
+            <section className="history-section" aria-labelledby="ai-history-heading">
+              <h3 id="ai-history-heading">AI runs</h3>
+              {aiRuns.length === 0 ? (
+                <div className="panel-empty">
+                  <History aria-hidden="true" />
+                  <p>No AI actions yet.</p>
+                </div>
+              ) : (
+                aiRuns.map((run) => (
+                  <article className="history-row" key={run.id}>
+                    <div>
+                      <strong>
+                        {run.action} on {run.scope}
+                      </strong>
+                      <span>
+                        {run.provider} / {run.model}
+                      </span>
+                      <small>
+                        Revision {run.sourceRevision}, {run.status},{' '}
+                        {new Date(run.startedAt).toLocaleString()}
+                      </small>
+                    </div>
+                    {run.outputText && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setAction(run.action);
+                          setScope(run.scope);
+                          setOutput(run.outputText ?? '');
+                          setCitations(run.citations);
+                          setProposalRunId(
+                            run.action !== 'ask' &&
+                              run.appliedRevision === null &&
+                              run.sourceRevision === prd.revision
+                              ? run.id
+                              : null,
+                          );
+                          setTab('assist');
+                        }}
+                      >
+                        Inspect
+                      </Button>
+                    )}
+                  </article>
+                ))
+              )}
+            </section>
           </div>
         )}
 

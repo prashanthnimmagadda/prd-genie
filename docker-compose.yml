@@ -4,6 +4,7 @@ services:
     environment:
       PRD_GENIE_DATA_DIR: /data
       PRD_GENIE_MODEL_CACHE_DIR: /models
+      PRD_GENIE_CONTAINER: '1'
       PRD_GENIE_HOST: 0.0.0.0
     ports:
       - '127.0.0.1:3210:3210'

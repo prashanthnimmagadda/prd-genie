@@ -3,10 +3,23 @@ import envPaths from 'env-paths';
 
 const defaults = envPaths('prd-genie');
 const dataDir = path.resolve(process.env.PRD_GENIE_DATA_DIR ?? defaults.data);
+const loopbackHosts = new Set(['127.0.0.1', '::1']);
+
+export function resolveServerHost(host: string, isContainer: boolean): string {
+  if (loopbackHosts.has(host)) return host;
+  if (isContainer && host === '0.0.0.0') return host;
+
+  throw new Error(
+    'PRD_GENIE_HOST must be 127.0.0.1 or ::1. 0.0.0.0 is allowed only when PRD_GENIE_CONTAINER=1.',
+  );
+}
 
 export const config = {
-  version: process.env.npm_package_version ?? '0.1.0-rc.1',
-  host: process.env.PRD_GENIE_HOST ?? '127.0.0.1',
+  version: process.env.npm_package_version ?? '0.1.0-rc.2',
+  host: resolveServerHost(
+    process.env.PRD_GENIE_HOST ?? '127.0.0.1',
+    process.env.PRD_GENIE_CONTAINER === '1',
+  ),
   port: Number.parseInt(process.env.PRD_GENIE_PORT ?? '3210', 10),
   dataDir,
   databasePath: path.join(dataDir, 'prd-genie.sqlite'),
@@ -16,6 +29,13 @@ export const config = {
   ),
   sessionIdleMs: 8 * 60 * 60 * 1000,
   maxUploadBytes: 25 * 1024 * 1024,
+  maxArchiveBytes: 250 * 1024 * 1024,
+  maxArchiveManifestBytes: 20 * 1024 * 1024,
+  maxDocxEntries: 5_000,
+  maxDocxExpandedBytes: 100 * 1024 * 1024,
+  maxPdfPages: 200,
+  maxPdfExtractedTextChars: 2 * 1024 * 1024,
+  pdfParseTimeoutMs: 15_000,
 } as const;
 
 export const embeddingModel = {

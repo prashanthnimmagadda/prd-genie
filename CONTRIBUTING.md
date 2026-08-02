@@ -9,7 +9,8 @@ PRD Genie welcomes focused changes that preserve its local-first privacy and exp
 3. Create a focused branch.
 4. Add synthetic tests for behavior changes.
 5. Run `npm run check`.
-6. Describe privacy, migration, and compatibility effects in the pull request.
+6. Run `npm run ci:offline` before requesting a release merge when browser, security, or packaging behavior changes.
+7. Describe privacy, migration, compatibility, and outbound-data effects in the pull request.
 
 Use Conventional Commit messages such as `feat: add citation locator` or `fix: preserve section order`.
 
@@ -22,6 +23,7 @@ Use Conventional Commit messages such as `feat: add citation locator` or `fix: p
 - Preserve lexical retrieval when embeddings are unavailable.
 - Use accessible names, visible focus, keyboard operation, and reduced-motion support.
 - Add only dependencies with clear provenance and compatible licenses.
+- Regenerate and review the license inventory and SBOM after dependency changes.
 
 ## Tests
 

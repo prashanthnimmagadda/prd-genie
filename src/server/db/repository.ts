@@ -1,7 +1,11 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type {
   AiRunProposal,
+  ChatGptHandoffRequest,
+  ChatGptHandoffResponse,
+  ChatGptHandoffSummary,
   Citation,
   PrdDocument,
   PrdSection,
@@ -14,6 +18,7 @@ import { ApiError } from '../../shared/api.js';
 import type { AppDatabase } from './client.js';
 import {
   aiRuns,
+  chatGptHandoffs,
   citations,
   prdDocuments,
   prdSections,
@@ -23,9 +28,14 @@ import {
   sourceLocations,
   sources,
 } from './schema.js';
+import { deleteSourceData } from './source-deletion.js';
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export class Repository {
@@ -237,6 +247,11 @@ export class Repository {
           "UPDATE review_findings SET status = 'stale' WHERE project_id = ? AND status = 'open'",
         )
         .run(projectId);
+      this.database.sqlite
+        .prepare(
+          "UPDATE chatgpt_handoffs SET status = 'stale' WHERE project_id = ? AND status IN ('exported', 'staged')",
+        )
+        .run(projectId);
       this.database.db
         .update(projects)
         .set({ updatedAt: timestamp })
@@ -282,36 +297,7 @@ export class Repository {
   }
 
   deleteSource(projectId: string, sourceId: string): void {
-    const source = this.database.db.select().from(sources).where(eq(sources.id, sourceId)).get();
-    if (!source || source.projectId !== projectId) {
-      throw new ApiError(404, 'source_not_found', 'Source not found.');
-    }
-    this.database.sqlite.transaction(() => {
-      if (this.database.vectorAvailable) {
-        const vectorIds = this.database.sqlite
-          .prepare('SELECT id FROM chunks WHERE source_id = ?')
-          .all(sourceId) as Array<{ id: string }>;
-        const deleteVector = this.database.sqlite.prepare(
-          'DELETE FROM chunk_vectors WHERE chunk_id = ?',
-        );
-        for (const row of vectorIds) deleteVector.run(row.id);
-      }
-      this.database.sqlite
-        .prepare(
-          'DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE source_id = ?)',
-        )
-        .run(sourceId);
-      this.database.db.delete(sources).where(eq(sources.id, sourceId)).run();
-    })();
-    const remaining = this.database.sqlite
-      .prepare('SELECT count(*) AS count FROM sources WHERE binary_path = ?')
-      .get(source.binaryPath) as { count: number };
-    if (remaining.count > 0) return;
-    try {
-      fs.unlinkSync(source.binaryPath);
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-    }
+    deleteSourceData(this.database, projectId, sourceId);
   }
 
   createAiRun(input: {
@@ -364,7 +350,299 @@ export class Repository {
       appliedRevision: row.appliedRevision,
       status: row.status as AiRunProposal['status'],
       errorCode: row.errorCode,
+      startedAt: row.startedAt,
+      completedAt: row.completedAt,
+      citations: this.listCitationsForRun(row.id),
     };
+  }
+
+  listAiRuns(projectId: string): AiRunProposal[] {
+    this.getProject(projectId);
+    const rows = this.database.db
+      .select({ id: aiRuns.id })
+      .from(aiRuns)
+      .where(eq(aiRuns.projectId, projectId))
+      .orderBy(aiRuns.startedAt)
+      .all()
+      .reverse();
+    return rows.map((row) => this.getAiRun(projectId, row.id));
+  }
+
+  createChatGptHandoff(input: {
+    projectId: string;
+    revision: number;
+    action: ChatGptHandoffRequest['action'];
+    scope: ChatGptHandoffRequest['scope'];
+    instruction: string;
+    sectionIds: string[];
+    citationIds: string[];
+  }): ChatGptHandoffSummary {
+    const prd = this.getPrd(input.projectId);
+    if (prd.revision !== input.revision) {
+      throw new ApiError(409, 'stale_revision', 'The PRD changed before this handoff was created.');
+    }
+    const uniqueSectionIds = [...new Set(input.sectionIds)];
+    if (uniqueSectionIds.length !== input.sectionIds.length) {
+      throw new ApiError(400, 'duplicate_section', 'Each handoff section must be unique.');
+    }
+    const sectionById = new Map(prd.sections.map((section) => [section.id, section]));
+    const sections = uniqueSectionIds.map((id) => {
+      const section = sectionById.get(id);
+      if (!section) throw new ApiError(400, 'invalid_section', 'A handoff section is invalid.');
+      return {
+        id: section.id,
+        title: section.title,
+        markdown: section.body,
+        preimageHash: sha256(section.body),
+      };
+    });
+    const evidenceLookup = this.database.sqlite.prepare(
+      `SELECT citations.id, citations.source_name AS sourceName,
+              citations.locator, citations.excerpt, citations.available,
+              citations.unavailability_reason AS unavailabilityReason
+       FROM citations
+       JOIN ai_runs ON ai_runs.id = citations.ai_run_id
+       WHERE citations.id = ? AND ai_runs.project_id = ?`,
+    );
+    const uniqueCitationIds = [...new Set(input.citationIds)];
+    if (uniqueCitationIds.length !== input.citationIds.length) {
+      throw new ApiError(400, 'duplicate_evidence', 'Each handoff excerpt must be unique.');
+    }
+    const evidence = uniqueCitationIds.map((id) => {
+      const citation = evidenceLookup.get(id, input.projectId) as
+        | (ChatGptHandoffRequest['evidence'][number] & {
+            available: number;
+            unavailabilityReason: string | null;
+          })
+        | undefined;
+      if (!citation) {
+        throw new ApiError(400, 'invalid_evidence', 'A handoff evidence excerpt is invalid.');
+      }
+      if (!citation.available) {
+        throw new ApiError(
+          409,
+          'evidence_unavailable',
+          `Citation ${citation.id} is no longer available and cannot be exported.`,
+        );
+      }
+      return {
+        id: citation.id,
+        sourceName: citation.sourceName,
+        locator: citation.locator,
+        excerpt: citation.excerpt,
+      };
+    });
+    const handoffId = crypto.randomUUID();
+    const digestPayload = {
+      formatVersion: 1 as const,
+      kind: 'prd-genie-request' as const,
+      handoffId,
+      projectId: input.projectId,
+      sourceRevision: input.revision,
+      action: input.action,
+      scope: input.scope,
+      instruction: input.instruction,
+      sections,
+      evidence,
+    };
+    const requestDigest = sha256(JSON.stringify(digestPayload));
+    const request: ChatGptHandoffRequest = { ...digestPayload, requestDigest };
+    const timestamp = now();
+    this.database.db
+      .insert(chatGptHandoffs)
+      .values({
+        id: handoffId,
+        projectId: input.projectId,
+        sourceRevision: input.revision,
+        action: input.action,
+        scope: input.scope,
+        requestDigest,
+        requestJson: JSON.stringify(request),
+        status: 'exported',
+        createdAt: timestamp,
+      })
+      .run();
+    return this.getChatGptHandoff(input.projectId, handoffId);
+  }
+
+  listChatGptHandoffs(projectId: string): ChatGptHandoffSummary[] {
+    this.getProject(projectId);
+    const rows = this.database.db
+      .select({ id: chatGptHandoffs.id })
+      .from(chatGptHandoffs)
+      .where(eq(chatGptHandoffs.projectId, projectId))
+      .orderBy(chatGptHandoffs.createdAt)
+      .all()
+      .reverse();
+    return rows.map((row) => this.getChatGptHandoff(projectId, row.id));
+  }
+
+  getChatGptHandoff(projectId: string, id: string): ChatGptHandoffSummary {
+    const row = this.database.db
+      .select()
+      .from(chatGptHandoffs)
+      .where(eq(chatGptHandoffs.id, id))
+      .get();
+    if (!row || row.projectId !== projectId) {
+      throw new ApiError(404, 'handoff_not_found', 'ChatGPT handoff not found.');
+    }
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      sourceRevision: row.sourceRevision,
+      action: row.action as ChatGptHandoffSummary['action'],
+      scope: row.scope as ChatGptHandoffSummary['scope'],
+      status: row.status as ChatGptHandoffSummary['status'],
+      request: JSON.parse(row.requestJson) as ChatGptHandoffRequest,
+      response: row.responseJson ? (JSON.parse(row.responseJson) as ChatGptHandoffResponse) : null,
+      createdAt: row.createdAt,
+      importedAt: row.importedAt,
+      appliedRevision: row.appliedRevision,
+    };
+  }
+
+  importChatGptHandoffResponse(
+    projectId: string,
+    response: ChatGptHandoffResponse,
+  ): ChatGptHandoffSummary {
+    const handoff = this.getChatGptHandoff(projectId, response.handoffId);
+    if (handoff.status !== 'exported') {
+      throw new ApiError(409, 'handoff_replayed', 'This handoff already has a response.');
+    }
+    if (
+      response.projectId !== projectId ||
+      response.sourceRevision !== handoff.sourceRevision ||
+      response.requestDigest !== handoff.request.requestDigest
+    ) {
+      throw new ApiError(409, 'handoff_mismatch', 'The response does not match this handoff.');
+    }
+    const current = this.getPrd(projectId);
+    if (current.revision !== handoff.sourceRevision) {
+      throw new ApiError(409, 'stale_handoff', 'The PRD changed after this handoff was exported.');
+    }
+    const allowedSections = new Map(
+      handoff.request.sections.map((section) => [section.id, section.preimageHash]),
+    );
+    const allowedEvidence = new Set(handoff.request.evidence.map((evidence) => evidence.id));
+    const patchSections = new Set<string>();
+    for (const patch of response.patches) {
+      if (patchSections.has(patch.sectionId)) {
+        throw new ApiError(400, 'duplicate_patch', 'A handoff section can be patched only once.');
+      }
+      patchSections.add(patch.sectionId);
+      if (allowedSections.get(patch.sectionId) !== patch.preimageHash) {
+        throw new ApiError(400, 'invalid_patch', 'A patch is outside the exported section scope.');
+      }
+      if (patch.evidenceIds.some((id) => !allowedEvidence.has(id))) {
+        throw new ApiError(
+          400,
+          'citation_spoofed',
+          'A patch cites evidence not sent in the handoff.',
+        );
+      }
+    }
+    for (const finding of response.findings) {
+      if (!allowedSections.has(finding.sectionId)) {
+        throw new ApiError(400, 'invalid_finding', 'A finding targets an unknown section.');
+      }
+      if (finding.evidenceIds.some((id) => !allowedEvidence.has(id))) {
+        throw new ApiError(
+          400,
+          'citation_spoofed',
+          'A finding cites evidence not sent in the handoff.',
+        );
+      }
+    }
+    const currentById = new Map(current.sections.map((section) => [section.id, section.body]));
+    for (const [sectionId, preimageHash] of allowedSections) {
+      const body = currentById.get(sectionId);
+      if (body === undefined || sha256(body) !== preimageHash) {
+        throw new ApiError(409, 'stale_handoff', 'An exported section changed before import.');
+      }
+    }
+    const responseJson = JSON.stringify(response);
+    this.database.db
+      .update(chatGptHandoffs)
+      .set({
+        responseJson,
+        responseDigest: sha256(responseJson),
+        status: 'staged',
+        importedAt: now(),
+      })
+      .where(eq(chatGptHandoffs.id, handoff.id))
+      .run();
+    return this.getChatGptHandoff(projectId, handoff.id);
+  }
+
+  applyChatGptHandoff(
+    projectId: string,
+    id: string,
+    expectedRevision: number,
+    selectedPatches: Array<{ sectionId: string; afterMarkdown: string }>,
+  ): PrdDocument {
+    const handoff = this.getChatGptHandoff(projectId, id);
+    if (handoff.status !== 'staged' || !handoff.response) {
+      throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
+    }
+    if (expectedRevision !== handoff.sourceRevision) {
+      throw new ApiError(409, 'stale_handoff', 'The PRD revision no longer matches this handoff.');
+    }
+    const current = this.getPrd(projectId);
+    if (current.revision !== expectedRevision) {
+      throw new ApiError(409, 'stale_revision', 'The PRD changed after this handoff was imported.');
+    }
+    const responsePatchById = new Map(
+      handoff.response.patches.map((patch) => [patch.sectionId, patch]),
+    );
+    const selectedIds = new Set<string>();
+    for (const patch of selectedPatches) {
+      if (selectedIds.has(patch.sectionId) || !responsePatchById.has(patch.sectionId)) {
+        throw new ApiError(400, 'invalid_patch', 'A selected handoff patch is invalid.');
+      }
+      selectedIds.add(patch.sectionId);
+    }
+    const sectionById = new Map(current.sections.map((section) => [section.id, section]));
+    for (const patch of selectedPatches) {
+      const currentSection = sectionById.get(patch.sectionId);
+      const responsePatch = responsePatchById.get(patch.sectionId);
+      if (
+        !currentSection ||
+        !responsePatch ||
+        sha256(currentSection.body) !== responsePatch.preimageHash
+      ) {
+        throw new ApiError(409, 'stale_handoff', 'A handoff target changed before acceptance.');
+      }
+    }
+    const selectedById = new Map(
+      selectedPatches.map((patch) => [patch.sectionId, patch.afterMarkdown]),
+    );
+    const saved = this.savePrd(
+      projectId,
+      expectedRevision,
+      current.sections.map((section) => ({
+        ...section,
+        body: selectedById.get(section.id) ?? section.body,
+      })),
+      `ChatGPT handoff ${id} accepted`,
+    );
+    this.database.db
+      .update(chatGptHandoffs)
+      .set({ status: 'applied', appliedRevision: saved.revision })
+      .where(eq(chatGptHandoffs.id, id))
+      .run();
+    return saved;
+  }
+
+  dismissChatGptHandoff(projectId: string, id: string): void {
+    const handoff = this.getChatGptHandoff(projectId, id);
+    if (handoff.status !== 'staged') {
+      throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
+    }
+    this.database.db
+      .update(chatGptHandoffs)
+      .set({ status: 'dismissed' })
+      .where(eq(chatGptHandoffs.id, id))
+      .run();
   }
 
   markAiRunApplied(projectId: string, id: string, revision: number): void {
@@ -388,6 +666,24 @@ export class Repository {
     return id;
   }
 
+  private listCitationsForRun(aiRunId: string): Citation[] {
+    return this.database.sqlite
+      .prepare(
+        `SELECT id, source_id AS sourceId, source_name AS sourceName,
+                location_id AS locationId, locator, chunk_id AS chunkId, excerpt,
+                evidence_status AS evidenceStatus, available,
+                unavailability_reason AS unavailabilityReason
+         FROM citations
+         WHERE ai_run_id = ?
+         ORDER BY created_at, id`,
+      )
+      .all(aiRunId)
+      .map((row) => {
+        const citation = row as Omit<Citation, 'available'> & { available: number };
+        return { ...citation, available: Boolean(citation.available) };
+      });
+  }
+
   listFindings(projectId: string): ReviewFinding[] {
     const rows = this.database.db
       .select()
@@ -395,20 +691,19 @@ export class Repository {
       .where(eq(reviewFindings.projectId, projectId))
       .all();
     const citationById = this.database.sqlite.prepare(`
-      SELECT citations.id, citations.source_id AS sourceId, sources.name AS sourceName,
-             citations.location_id AS locationId, source_locations.locator,
-             citations.chunk_id AS chunkId, citations.excerpt,
-             citations.evidence_status AS evidenceStatus
+      SELECT id, source_id AS sourceId, source_name AS sourceName,
+             location_id AS locationId, locator, chunk_id AS chunkId, excerpt,
+             evidence_status AS evidenceStatus, available,
+             unavailability_reason AS unavailabilityReason
       FROM citations
-      JOIN sources ON sources.id = citations.source_id
-      JOIN source_locations ON source_locations.id = citations.location_id
-      WHERE citations.id = ?
+      WHERE id = ?
     `);
     return rows.map((row) => {
       const citationIds = JSON.parse(row.citationIdsJson) as string[];
       const findingCitations = citationIds.flatMap((id) => {
-        const citation = citationById.get(id) as Citation | undefined;
-        return citation ? [citation] : [];
+        const citation = citationById.get(id) as
+          (Omit<Citation, 'available'> & { available: number }) | undefined;
+        return citation ? [{ ...citation, available: Boolean(citation.available) }] : [];
       });
       return {
         id: row.id,

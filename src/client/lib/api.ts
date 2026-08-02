@@ -1,5 +1,7 @@
 import type {
   AiActionRequest,
+  AiRunProposal,
+  ChatGptHandoffSummary,
   Citation,
   HealthResponse,
   PrdDocument,
@@ -7,6 +9,7 @@ import type {
   ProviderKind,
   ProviderState,
   ReviewFinding,
+  RevisionSummary,
   SourceSummary,
 } from '@shared/types';
 
@@ -63,6 +66,14 @@ export const api = {
       body: data,
     });
   },
+  restoreProject: (file: File) => {
+    const data = new FormData();
+    data.set('file', file);
+    return request<{ project: ProjectSummary; prd: PrdDocument }>('/api/projects/restore', {
+      method: 'POST',
+      body: data,
+    });
+  },
   updateProject: (
     id: string,
     update: Partial<
@@ -91,6 +102,10 @@ export const api = {
   },
   deleteSource: (projectId: string, sourceId: string) =>
     request<void>(`/api/projects/${projectId}/sources/${sourceId}`, { method: 'DELETE' }),
+  retrySourceIndex: (projectId: string, sourceId: string) =>
+    request<SourceSummary>(`/api/projects/${projectId}/sources/${sourceId}/retry-index`, {
+      method: 'POST',
+    }),
   sourceLocation: (projectId: string, citation: Citation) =>
     request<{
       id: string;
@@ -114,6 +129,48 @@ export const api = {
     request<{ models: Array<{ id: string; name: string }> }>(`/api/providers/${provider}/models`),
   findings: (id: string) =>
     request<{ findings: ReviewFinding[] }>(`/api/projects/${id}/review-findings`),
+  aiRuns: (id: string) => request<{ runs: AiRunProposal[] }>(`/api/projects/${id}/ai-runs`),
+  revisions: (id: string) =>
+    request<{ revisions: RevisionSummary[] }>(`/api/projects/${id}/revisions`),
+  chatGptHandoffs: (id: string) =>
+    request<{ handoffs: ChatGptHandoffSummary[] }>(`/api/projects/${id}/chatgpt-handoffs`),
+  createChatGptHandoff: (
+    id: string,
+    value: {
+      revision: number;
+      action: 'draft' | 'review' | 'rewrite';
+      scope: 'selection' | 'section' | 'document';
+      instruction: string;
+      sectionIds: string[];
+      citationIds: string[];
+    },
+  ) =>
+    request<ChatGptHandoffSummary>(`/api/projects/${id}/chatgpt-handoffs`, {
+      method: 'POST',
+      body: JSON.stringify(value),
+    }),
+  importChatGptHandoff: (id: string, file: File) => {
+    const data = new FormData();
+    data.set('file', file);
+    return request<ChatGptHandoffSummary>(`/api/projects/${id}/chatgpt-handoffs/import`, {
+      method: 'POST',
+      body: data,
+    });
+  },
+  applyChatGptHandoff: (
+    projectId: string,
+    handoffId: string,
+    revision: number,
+    patches: Array<{ sectionId: string; afterMarkdown: string }>,
+  ) =>
+    request<PrdDocument>(`/api/projects/${projectId}/chatgpt-handoffs/${handoffId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ revision, patches }),
+    }),
+  dismissChatGptHandoff: (projectId: string, handoffId: string) =>
+    request<void>(`/api/projects/${projectId}/chatgpt-handoffs/${handoffId}`, {
+      method: 'DELETE',
+    }),
   dismissFinding: (projectId: string, findingId: string) =>
     request<{ ok: true }>(`/api/projects/${projectId}/review-findings/${findingId}`, {
       method: 'PATCH',

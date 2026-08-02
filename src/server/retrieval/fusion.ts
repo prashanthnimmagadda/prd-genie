@@ -36,12 +36,20 @@ export function reciprocalRankFusion(
   );
   const counts = new Map<string, number>();
   const diverse: FusedCandidate[] = [];
+  const deferred: FusedCandidate[] = [];
   for (const candidate of sorted) {
     const count = counts.get(candidate.sourceId) ?? 0;
-    if (count >= sourceLimit) continue;
+    if (count >= sourceLimit) {
+      deferred.push(candidate);
+      continue;
+    }
     counts.set(candidate.sourceId, count + 1);
     diverse.push(candidate);
     if (diverse.length === limit) break;
+  }
+  for (const candidate of deferred) {
+    if (diverse.length === limit) break;
+    diverse.push(candidate);
   }
   return diverse;
 }

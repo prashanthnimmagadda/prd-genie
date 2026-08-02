@@ -39,13 +39,15 @@ export type Severity = (typeof severityLevels)[number];
 
 export interface Citation {
   id: string;
-  sourceId: string;
+  sourceId: string | null;
   sourceName: string;
-  locationId: string;
+  locationId: string | null;
   locator: string;
-  chunkId: string;
+  chunkId: string | null;
   excerpt: string;
   evidenceStatus: EvidenceStatus;
+  available: boolean;
+  unavailabilityReason: 'source_deleted' | null;
 }
 
 export interface ReviewFinding {
@@ -80,6 +82,84 @@ export interface AiRunProposal {
   appliedRevision: number | null;
   status: 'running' | 'completed' | 'failed';
   errorCode: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  citations: Citation[];
+}
+
+export interface RevisionSummary {
+  id: string;
+  revision: number;
+  reason: string;
+  createdAt: string;
+}
+
+export interface ChatGptHandoffSection {
+  id: string;
+  title: string;
+  markdown: string;
+  preimageHash: string;
+}
+
+export interface ChatGptHandoffEvidence {
+  id: string;
+  sourceName: string;
+  locator: string;
+  excerpt: string;
+}
+
+export interface ChatGptHandoffRequest {
+  formatVersion: 1;
+  kind: 'prd-genie-request';
+  handoffId: string;
+  projectId: string;
+  sourceRevision: number;
+  requestDigest: string;
+  action: 'draft' | 'review' | 'rewrite';
+  scope: ActionScope;
+  instruction: string;
+  sections: ChatGptHandoffSection[];
+  evidence: ChatGptHandoffEvidence[];
+}
+
+export interface ChatGptHandoffPatch {
+  sectionId: string;
+  preimageHash: string;
+  afterMarkdown: string;
+  evidenceIds: string[];
+}
+
+export interface ChatGptHandoffResponse {
+  formatVersion: 1;
+  kind: 'prd-genie-response';
+  handoffId: string;
+  projectId: string;
+  sourceRevision: number;
+  requestDigest: string;
+  summary: string;
+  patches: ChatGptHandoffPatch[];
+  findings: Array<{
+    category: FindingCategory;
+    severity: Severity;
+    sectionId: string;
+    rationale: string;
+    evidenceIds: string[];
+  }>;
+  hostModel: string | null;
+}
+
+export interface ChatGptHandoffSummary {
+  id: string;
+  projectId: string;
+  sourceRevision: number;
+  action: ChatGptHandoffRequest['action'];
+  scope: ActionScope;
+  status: 'exported' | 'staged' | 'stale' | 'applied' | 'dismissed';
+  request: ChatGptHandoffRequest;
+  response: ChatGptHandoffResponse | null;
+  createdAt: string;
+  importedAt: string | null;
+  appliedRevision: number | null;
 }
 
 export interface ProjectSummary {
@@ -226,6 +306,62 @@ export const restoreRevisionSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
 });
 
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export const createChatGptHandoffSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  action: z.enum(['draft', 'review', 'rewrite']),
+  scope: z.enum(actionScopes),
+  instruction: z.string().trim().min(1).max(10_000),
+  sectionIds: z.array(z.string().uuid()).min(1).max(50),
+  citationIds: z.array(z.string().uuid()).max(8).default([]),
+});
+
+export const chatGptHandoffResponseSchema = z.object({
+  formatVersion: z.literal(1),
+  kind: z.literal('prd-genie-response'),
+  handoffId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  sourceRevision: z.number().int().nonnegative(),
+  requestDigest: sha256Schema,
+  summary: z.string().trim().min(1).max(4000),
+  patches: z
+    .array(
+      z.object({
+        sectionId: z.string().uuid(),
+        preimageHash: sha256Schema,
+        afterMarkdown: z.string().max(100_000),
+        evidenceIds: z.array(z.string().uuid()).max(8),
+      }),
+    )
+    .max(50),
+  findings: z
+    .array(
+      z.object({
+        category: z.enum(findingCategories),
+        severity: z.enum(severityLevels),
+        sectionId: z.string().uuid(),
+        rationale: z.string().trim().min(1).max(1200),
+        evidenceIds: z.array(z.string().uuid()).max(8),
+      }),
+    )
+    .max(20),
+  hostModel: z.string().trim().min(1).max(300).nullable(),
+});
+
+export const applyChatGptHandoffSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  patches: z
+    .array(
+      z.object({
+        sectionId: z.string().uuid(),
+        afterMarkdown: z.string().max(100_000),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
+
 export type AiActionRequest = z.infer<typeof aiActionSchema>;
 
 export const reviewFindingOutputSchema = z.object({
@@ -242,20 +378,24 @@ export const reviewOutputSchema = z.object({
   findings: z.array(reviewFindingOutputSchema).max(20),
 });
 
+const reviewGenerationFindingSchema = z.object({
+  category: z.enum(findingCategories),
+  severity: z.enum(severityLevels),
+  targetSectionId: z.string(),
+  rationale: z.string(),
+  citationChunkIds: z.array(z.string()).max(8),
+  proposedMarkdown: z.string().nullable(),
+});
+
 export const reviewGenerationSchema = z.object({
   summary: z.string(),
-  findings: z
-    .array(
-      z.object({
-        category: z.enum(findingCategories),
-        severity: z.enum(severityLevels),
-        targetSectionId: z.string(),
-        rationale: z.string(),
-        citationChunkIds: z.array(z.string()).max(8),
-        proposedMarkdown: z.string().nullable(),
-      }),
-    )
-    .max(20),
+  findings: z.object({
+    finding1: reviewGenerationFindingSchema.nullable(),
+    finding2: reviewGenerationFindingSchema.nullable(),
+    finding3: reviewGenerationFindingSchema.nullable(),
+    finding4: reviewGenerationFindingSchema.nullable(),
+    finding5: reviewGenerationFindingSchema.nullable(),
+  }),
 });
 
 export const DEFAULT_SECTIONS = [

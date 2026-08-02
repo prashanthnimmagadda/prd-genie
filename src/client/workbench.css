@@ -618,7 +618,8 @@
 
 .assist-panel,
 .review-panel,
-.evidence-panel {
+.evidence-panel,
+.history-panel {
   min-height: 0;
   overflow-y: auto;
 }
@@ -862,6 +863,166 @@
 
 .evidence-detail p {
   line-height: 1.65;
+}
+
+.evidence-detail blockquote {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border-left: 3px solid var(--primary);
+  background: var(--secondary);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.evidence-detail small {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--destructive);
+}
+
+.history-section {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0 0.8rem 1rem;
+}
+
+.history-section h3 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.history-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.history-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.history-row strong,
+.history-row span,
+.history-row small {
+  overflow-wrap: anywhere;
+}
+
+.handoff-compose,
+.handoff-row {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.handoff-compose {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.handoff-compose p,
+.handoff-row p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.handoff-compose > label,
+.handoff-patch {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.handoff-compose textarea,
+.handoff-patch textarea {
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.55rem;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.handoff-compose fieldset {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 12rem;
+  margin: 0;
+  padding: 0.6rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+
+.handoff-compose fieldset label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.handoff-actions,
+.handoff-row footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.handoff-row {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.handoff-row header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.handoff-row header > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.handoff-row header span,
+.handoff-row header small {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+}
+
+.handoff-patch > span {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.handoff-finding {
+  padding: 0.55rem;
+  border-left: 3px solid var(--warning);
+  background: var(--secondary);
+}
+
+.history-row span,
+.history-row small {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
 }
 
 .citation-row {

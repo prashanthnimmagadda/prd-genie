@@ -31,6 +31,12 @@ describe('ProviderService', () => {
     expect(() => service.model(undefined, 'openai-compatible', 'model')).toThrow('endpoint');
   });
 
+  it('rejects model discovery without required credentials', async () => {
+    await expect(
+      new ProviderService(new SessionStore()).listModels(undefined, 'anthropic'),
+    ).rejects.toMatchObject({ code: 'missing_credentials' });
+  });
+
   it('supports keyless OpenAI-compatible endpoints', () => {
     const sessions = new SessionStore();
     const session = sessions.create();
@@ -98,5 +104,50 @@ describe('ProviderService', () => {
     expect(await service.listModels(sessionId, 'openai-compatible')).toEqual([
       { id: 'valid', name: 'Valid model' },
     ]);
+  });
+
+  it('normalises network rejection and supports compatible model-list variants', async () => {
+    const { service, sessionId } = configured('openai-compatible');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('offline')));
+    await expect(
+      service.listModels(sessionId, 'openai-compatible', new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'network_failure' });
+
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              models: [
+                { name: 'z-compatible-model' },
+                { id: 'a-compatible-model', displayName: 'A compatible model' },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({}))),
+    );
+    expect(await service.listModels(sessionId, 'openai-compatible')).toEqual([
+      { id: 'a-compatible-model', name: 'A compatible model' },
+      { id: 'z-compatible-model', name: 'z-compatible-model' },
+    ]);
+    expect(await service.listModels(sessionId, 'openai-compatible')).toEqual([]);
+  });
+
+  it('discovers models from a keyless compatible endpoint', async () => {
+    const sessions = new SessionStore();
+    const session = sessions.create();
+    sessions.setProvider(session.id, 'openai-compatible', {
+      baseUrl: 'http://127.0.0.1:1234/v1',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'local' }] }))),
+    );
+    await expect(
+      new ProviderService(sessions).listModels(session.id, 'openai-compatible'),
+    ).resolves.toEqual([{ id: 'local', name: 'local' }]);
   });
 });

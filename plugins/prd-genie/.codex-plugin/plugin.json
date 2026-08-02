@@ -1,0 +1,28 @@
+{
+  "name": "prd-genie",
+  "version": "0.2.0",
+  "description": "Evidence-aware PRD drafting, review, rewrite, and safe local handoff workflows.",
+  "author": {
+    "name": "PRD Genie Maintainers",
+    "url": "https://github.com/prashanthnimmagadda/prd-genie"
+  },
+  "homepage": "https://github.com/prashanthnimmagadda/prd-genie",
+  "repository": "https://github.com/prashanthnimmagadda/prd-genie",
+  "license": "MIT",
+  "keywords": ["product-management", "prd", "requirements", "review"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "PRD Genie",
+    "shortDescription": "Draft and review evidence-aware PRDs.",
+    "longDescription": "Turn supplied notes and evidence into review-ready requirements, then return a revision-bound proposal for explicit approval in the local workbench.",
+    "developerName": "PRD Genie Maintainers",
+    "category": "Productivity",
+    "capabilities": ["Draft", "Review", "Rewrite", "Safe handoff"],
+    "websiteURL": "https://github.com/prashanthnimmagadda/prd-genie",
+    "defaultPrompt": [
+      "Draft a PRD from these notes and mark assumptions.",
+      "Review this PRD for gaps and testability.",
+      "Prepare a safe PRD Genie proposal handoff."
+    ]
+  }
+}

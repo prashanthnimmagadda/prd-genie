@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sources, sourceLocations, chunks } from '../../src/server/db/schema.js';
+import type { ChatGptHandoffResponse } from '../../src/shared/types.js';
 
 describe('Repository', () => {
   let database: AppDatabase;
@@ -150,8 +151,12 @@ describe('Repository', () => {
       sourceId,
       locationId,
       chunkId,
+      sourceName: 'synthetic.txt',
+      locator: 'Paragraph 1',
       excerpt: 'Evidence',
       evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
     });
     const finding = repository.storeFinding({
       aiRunId: runId,
@@ -216,5 +221,206 @@ describe('Repository', () => {
       .run();
     repository.deleteProject(project.id);
     expect(repository.listProjects()).toEqual([]);
+  });
+
+  it('stages and applies a revision-bound ChatGPT handoff without replay', () => {
+    const project = repository.createProject('Handoff', '');
+    const initial = repository.getPrd(project.id);
+    const problem = initial.sections[0]!;
+    const saved = repository.savePrd(
+      project.id,
+      0,
+      initial.sections.map((section) =>
+        section.id === problem.id ? { ...section, body: 'Current problem.' } : section,
+      ),
+      'Seeded problem',
+    );
+    const handoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: saved.revision,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Make the problem measurable.',
+      sectionIds: [problem.id],
+      citationIds: [],
+    });
+    const response: ChatGptHandoffResponse = {
+      formatVersion: 1,
+      kind: 'prd-genie-response',
+      handoffId: handoff.id,
+      projectId: project.id,
+      sourceRevision: saved.revision,
+      requestDigest: handoff.request.requestDigest,
+      summary: 'Clarifies the affected workflow.',
+      patches: [
+        {
+          sectionId: problem.id,
+          preimageHash: handoff.request.sections[0]!.preimageHash,
+          afterMarkdown: 'Three of five synthetic participants lose draft changes each week.',
+          evidenceIds: [],
+        },
+      ],
+      findings: [],
+      hostModel: null,
+    };
+    const staged = repository.importChatGptHandoffResponse(project.id, response);
+    expect(staged.status).toBe('staged');
+    expect(() => repository.importChatGptHandoffResponse(project.id, response)).toThrow(
+      'already has a response',
+    );
+    const applied = repository.applyChatGptHandoff(project.id, handoff.id, saved.revision, [
+      { sectionId: problem.id, afterMarkdown: response.patches[0]!.afterMarkdown },
+    ]);
+    expect(applied.revision).toBe(saved.revision + 1);
+    expect(applied.sections.find((section) => section.id === problem.id)?.body).toContain(
+      'synthetic participants',
+    );
+    expect(repository.getChatGptHandoff(project.id, handoff.id)).toMatchObject({
+      status: 'applied',
+      appliedRevision: applied.revision,
+    });
+  });
+
+  it('marks an outstanding ChatGPT handoff stale when the PRD changes', () => {
+    const project = repository.createProject('Stale handoff', '');
+    const initial = repository.getPrd(project.id);
+    const problem = initial.sections[0]!;
+    const handoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: initial.revision,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Clarify the problem.',
+      sectionIds: [problem.id],
+      citationIds: [],
+    });
+    repository.savePrd(
+      project.id,
+      initial.revision,
+      initial.sections.map((section) =>
+        section.id === problem.id ? { ...section, body: 'A later local edit.' } : section,
+      ),
+      'Later edit',
+    );
+    expect(repository.getChatGptHandoff(project.id, handoff.id).status).toBe('stale');
+  });
+
+  it('retains citation snapshots after deleting their local source', () => {
+    const project = repository.createProject('Evidence lifecycle', '');
+    const sourceId = crypto.randomUUID();
+    const locationId = crypto.randomUUID();
+    const chunkId = crypto.randomUUID();
+    database.db
+      .insert(sources)
+      .values({
+        id: sourceId,
+        projectId: project.id,
+        name: 'deleted-source.txt',
+        mediaType: 'text/plain',
+        size: 8,
+        hash: 'c'.repeat(64),
+        binaryPath: path.join(os.tmpdir(), `missing-${sourceId}.txt`),
+        status: 'ready',
+        error: null,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+    database.db
+      .insert(sourceLocations)
+      .values({
+        id: locationId,
+        sourceId,
+        locator: 'Paragraph 1',
+        heading: null,
+        ordinal: 0,
+        content: 'Evidence',
+        startOffset: 0,
+        endOffset: 8,
+      })
+      .run();
+    database.db
+      .insert(chunks)
+      .values({
+        id: chunkId,
+        projectId: project.id,
+        sourceId,
+        locationId,
+        ordinal: 0,
+        content: 'Evidence',
+        tokenCount: 2,
+        startOffset: 0,
+        endOffset: 8,
+        documentHash: 'c'.repeat(64),
+      })
+      .run();
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'ask',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    const citationId = repository.storeCitation({
+      aiRunId: runId,
+      sourceId,
+      locationId,
+      chunkId,
+      sourceName: 'deleted-source.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Evidence',
+      evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
+    });
+    repository.completeAiRun(runId, undefined, 'Historical answer');
+    repository.deleteSource(project.id, sourceId);
+    expect(repository.listAiRuns(project.id)[0]?.citations[0]).toMatchObject({
+      sourceId: null,
+      locationId: null,
+      chunkId: null,
+      sourceName: 'deleted-source.txt',
+      excerpt: 'Evidence',
+      available: false,
+      unavailabilityReason: 'source_deleted',
+    });
+    expect(() =>
+      repository.createChatGptHandoff({
+        projectId: project.id,
+        revision: repository.getPrd(project.id).revision,
+        action: 'rewrite',
+        scope: 'document',
+        instruction: 'Review only available evidence.',
+        sectionIds: repository.getPrd(project.id).sections.map((section) => section.id),
+        citationIds: [citationId],
+      }),
+    ).toThrow('no longer available');
+  });
+
+  it('surfaces unexpected filesystem errors after source records are deleted', () => {
+    const project = repository.createProject('Filesystem failure', '');
+    const sourceId = crypto.randomUUID();
+    const binaryPath = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-delete-error-'));
+    database.db
+      .insert(sources)
+      .values({
+        id: sourceId,
+        projectId: project.id,
+        name: 'directory.txt',
+        mediaType: 'text/plain',
+        size: 0,
+        hash: 'd'.repeat(64),
+        binaryPath,
+        status: 'ready',
+        error: null,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+    try {
+      expect(() => repository.deleteSource(project.id, sourceId)).toThrow();
+      expect(repository.listSources(project.id)).toHaveLength(0);
+    } finally {
+      fs.rmSync(binaryPath, { recursive: true, force: true });
+    }
   });
 });

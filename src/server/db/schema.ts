@@ -148,17 +148,15 @@ export const citations = sqliteTable('citations', {
   aiRunId: text('ai_run_id')
     .notNull()
     .references(() => aiRuns.id, { onDelete: 'cascade' }),
-  sourceId: text('source_id')
-    .notNull()
-    .references(() => sources.id, { onDelete: 'cascade' }),
-  locationId: text('location_id')
-    .notNull()
-    .references(() => sourceLocations.id, { onDelete: 'cascade' }),
-  chunkId: text('chunk_id')
-    .notNull()
-    .references(() => chunks.id, { onDelete: 'cascade' }),
+  sourceId: text('source_id').references(() => sources.id, { onDelete: 'set null' }),
+  locationId: text('location_id').references(() => sourceLocations.id, { onDelete: 'set null' }),
+  chunkId: text('chunk_id').references(() => chunks.id, { onDelete: 'set null' }),
+  sourceName: text('source_name').notNull(),
+  locator: text('locator').notNull(),
   excerpt: text('excerpt').notNull(),
   evidenceStatus: text('evidence_status').notNull(),
+  available: integer('available', { mode: 'boolean' }).notNull().default(true),
+  unavailabilityReason: text('unavailability_reason'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -185,4 +183,26 @@ export const reviewFindings = sqliteTable(
     createdAt: text('created_at').notNull(),
   },
   (table) => [index('findings_project_idx').on(table.projectId, table.status)],
+);
+
+export const chatGptHandoffs = sqliteTable(
+  'chatgpt_handoffs',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    sourceRevision: integer('source_revision').notNull(),
+    action: text('action').notNull(),
+    scope: text('scope').notNull(),
+    requestDigest: text('request_digest').notNull(),
+    requestJson: text('request_json').notNull(),
+    responseDigest: text('response_digest'),
+    responseJson: text('response_json'),
+    status: text('status').notNull(),
+    createdAt: text('created_at').notNull(),
+    importedAt: text('imported_at'),
+    appliedRevision: integer('applied_revision'),
+  },
+  (table) => [index('handoffs_project_idx').on(table.projectId, table.createdAt)],
 );

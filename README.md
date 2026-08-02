@@ -13,15 +13,14 @@ This repository is an independent implementation with synthetic fixtures only.
 - Connects directly to a provider using a session key or environment fallback.
 - Previews every AI rewrite or review finding before it changes the PRD.
 - Records revisions, citations, provider, model, action, scope, and source revision.
-- Exports Markdown, DOCX, PDF, or a portable project archive.
+- Exports and restores a portable project archive with revision and evidence history.
+- Creates a revision-bound handoff for optional use with the included ChatGPT skills plugin.
 
 ## Status
 
-The project is a release candidate. The complete offline gate passes with 88 unit and integration tests plus 18 Playwright checks. The browser suite covers Chromium, Firefox, WebKit, axe accessibility checks, the complete BYOK-to-export workflow, and the 320, 375, 414, and 768 px layouts.
+The public `v0.1.0-rc.1` release is an early candidate, not a finished product claim. Development changes are validated against the exact release commit before a later candidate is promoted. See [Quality and model evaluation](docs/QUALITY.md) for the evidence rules and current limitations.
 
-A real local-provider evaluation passes 20 of 20 deterministic checks for evidence grounding, section scope, citations, structured review, revision binding, application, and restart persistence. It covers one synthetic scenario with Llama 3.1 8B through Ollama. It does not prove equal quality across models or prompts, and human review remains required.
-
-No adoption or universal model-accuracy claims are made.
+No adoption, universal accuracy, native desktop packaging, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
 ![PRD Genie workbench with the document editor, source rail, and review panel](docs/screenshots/workbench.png)
 
@@ -63,9 +62,17 @@ OpenAI-compatible endpoints use `OPENAI_COMPATIBLE_BASE_URL` as an optional envi
 
 The application talks directly to these providers. It does not use an intermediary model gateway.
 
+## ChatGPT plan usage
+
+A ChatGPT Plus, Pro, Business, Enterprise, or other ChatGPT plan does not provide API credentials or API usage to this standalone application. PRD Genie never asks for ChatGPT cookies or automates a ChatGPT browser session.
+
+The repository includes a skills-only ChatGPT plugin and a manual, revision-bound file handoff. A user can choose the exact PRD sections and evidence excerpts to export, use the plugin in a supported ChatGPT surface, and import the response as a staged proposal. The local app validates project, revision, section hashes, evidence IDs, request digest, response size, and replay state before any proposal can be applied.
+
+See [ChatGPT integration](docs/CHATGPT_INTEGRATION.md) for installation boundaries, privacy, and limitations.
+
 ## Privacy and outbound data
 
-Local project data, extracted source text, revisions, and citations are stored in SQLite. Source binaries are stored by content hash in the application data directory.
+Local project data, extracted source text, revisions, citations, AI history, review findings, and ChatGPT handoff records are stored in SQLite. Source binaries are stored by content hash in the application data directory.
 
 For an AI action, the server sends only:
 
@@ -81,11 +88,12 @@ Project files and SQLite data rely on operating-system disk protection. They are
 
 ## Supported files
 
-| Operation       | Supported                             |
-| --------------- | ------------------------------------- |
-| PRD import      | Markdown, DOCX, plain text            |
-| Evidence source | PDF, DOCX, Markdown, plain text       |
-| Export          | Markdown, DOCX, PDF, portable archive |
+| Operation       | Supported                                     |
+| --------------- | --------------------------------------------- |
+| PRD import      | Markdown, DOCX, plain text                    |
+| Evidence source | PDF, DOCX, Markdown, plain text               |
+| Export          | Markdown, DOCX, PDF, portable project archive |
+| Project restore | PRD Genie portable project archive            |
 
 Legacy Word files, spreadsheets, presentations, images, encrypted PDFs, mismatched file signatures, and unsupported archives are rejected with an explicit client error.
 
@@ -148,7 +156,7 @@ Run the complete release gate locally:
 npm run ci:offline
 ```
 
-The GitHub workflow mirror uses only self-hosted runners. See [Offline CI](docs/OFFLINE_CI.md).
+The authoritative release gate runs outside GitHub Actions. Checked-in workflow definitions request self-hosted runners, but repository plan, storage, and GitHub service charges remain account-dependent. See [Offline CI](docs/OFFLINE_CI.md).
 
 ## Limitations
 
@@ -158,6 +166,8 @@ The GitHub workflow mirror uses only self-hosted runners. See [Offline CI](docs/
 - Semantic retrieval downloads a pinned local model on first use.
 - If the model cannot initialise, retrieval continues in a clearly labelled lexical-only mode.
 - Imported legacy browser data is not migrated.
+- PRD Genie is a local browser application served by Node.js. It is not currently distributed as a signed macOS app, Windows installer, or Linux desktop package.
+- ChatGPT plugin availability and file handling vary by plan, region, workspace policy, and supported ChatGPT surface.
 - Output quality varies by provider and model. Every proposal requires human review and explicit acceptance.
 
 ## Troubleshooting
@@ -178,10 +188,14 @@ Remote endpoints must use HTTPS. Plain HTTP is accepted only for loopback hosts.
 
 The PRD revision changed after the proposal was generated. Run the action again against the current revision.
 
+**A restored project shows lexical-only indexing**
+
+Portable archives omit embeddings. Lexical search is ready after restore. Use the source retry action after the local embedding model becomes available.
+
 ## Contributing and security
 
 See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Support](SUPPORT.md), and the [Roadmap](ROADMAP.md).
 
 ## License
 
-MIT. The local embedding model has its own Apache-2.0 notice in [Third-party notices](THIRD_PARTY_NOTICES.md).
+MIT. Model, font, archive, and dependency notices are documented in [Third-party notices](THIRD_PARTY_NOTICES.md) and the generated license inventory.
