@@ -135,6 +135,31 @@ describe('portable project archive restore', () => {
     ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
+  it('rejects invalid typed state and a current PRD that diverges from revision history', async () => {
+    const project = repository.createProject('Typed archive', '');
+    const archive = await exporter.create(project.id, 'archive');
+
+    const invalidProvider = await JSZip.loadAsync(archive.body);
+    const invalidProviderManifest = JSON.parse(
+      await invalidProvider.file('project.json')!.async('string'),
+    ) as { project: { selectedProvider: string | null } };
+    invalidProviderManifest.project.selectedProvider = 'untrusted-provider';
+    invalidProvider.file('project.json', JSON.stringify(invalidProviderManifest));
+    await expect(
+      exporter.restoreArchive(await invalidProvider.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const divergent = await JSZip.loadAsync(archive.body);
+    const divergentManifest = JSON.parse(await divergent.file('project.json')!.async('string')) as {
+      prd: { sections: Array<{ body: string }> };
+    };
+    divergentManifest.prd.sections[0]!.body = 'State not present in the final revision snapshot.';
+    divergent.file('project.json', JSON.stringify(divergentManifest));
+    await expect(
+      exporter.restoreArchive(await divergent.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
   it('rejects empty, corrupt, unsafe, missing, and malformed archive manifests', async () => {
     await expect(exporter.restoreArchive(Buffer.alloc(0))).rejects.toMatchObject({
       code: 'archive_too_large',

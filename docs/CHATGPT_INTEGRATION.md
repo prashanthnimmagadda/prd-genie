@@ -10,7 +10,7 @@ The standalone PRD Genie application still connects to model providers through a
 
 The plugin runs in the ChatGPT conversation. Users must share only the PRD sections and evidence they are authorized to send to OpenAI. The standalone application does not receive ChatGPT cookies, account tokens, unrelated conversation history, billing data, or subscription details.
 
-Exporting a handoff is an intentional disclosure to ChatGPT and OpenAI by the user. It is outside the standalone provider request path. The exported request and imported response are retained locally as handoff records until dismissed or the project is deleted.
+Exporting a handoff is an intentional disclosure to ChatGPT and OpenAI by the user. It is outside the standalone provider request path. The exported request and imported response are retained locally as handoff records until the user deletes the handoff or deletes the project.
 
 The first integration is skills-only. It does not operate a remote PRD Genie service. An optional local MCP adapter may be considered later, but it will remain disabled by default and will stage proposals only.
 

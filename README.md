@@ -156,7 +156,7 @@ Run the complete release gate locally:
 npm run ci:offline
 ```
 
-The authoritative release gate runs outside GitHub Actions. Checked-in workflow definitions request self-hosted runners, but repository plan, storage, and GitHub service charges remain account-dependent. See [Offline CI](docs/OFFLINE_CI.md).
+The authoritative release gate runs outside GitHub Actions. Repository Actions remain disabled, and checked-in workflow templates are manual-only, so pushes and pull requests cannot create CI billing or execute code on a maintainer machine. See [Offline CI](docs/OFFLINE_CI.md).
 
 ## Limitations
 

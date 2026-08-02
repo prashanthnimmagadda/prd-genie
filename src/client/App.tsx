@@ -432,7 +432,7 @@ function Workbench({
   }
 
   async function applyOutput() {
-    if (!prd || !proposalRunId || !output.trim()) return;
+    if (!prd || !proposalRunId || !output.trim() || dirty) return;
     const sourceRevision = prd.revision;
     const saved = await api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim());
     setUndoRevision(sourceRevision);
@@ -454,7 +454,7 @@ function Workbench({
   }
 
   async function acceptFinding(finding: ReviewFinding) {
-    if (!prd || !finding.proposedPatch || finding.sourceRevision !== prd.revision) return;
+    if (!prd || !finding.proposedPatch || finding.sourceRevision !== prd.revision || dirty) return;
     const sourceRevision = prd.revision;
     const revised = findingDrafts[finding.id];
     const saved = await api.acceptFinding(
@@ -1097,7 +1097,7 @@ function Workbench({
                           <MessageAction
                             label={`Apply to ${scope}`}
                             tooltip="Creates a revision bound to this AI run"
-                            disabled={!proposalRunId || busy}
+                            disabled={!proposalRunId || busy || dirty}
                             onClick={() =>
                               void applyOutput().catch((reason: unknown) =>
                                 setError(messageFrom(reason)),
@@ -1248,7 +1248,9 @@ function Workbench({
                     <footer>
                       <Button
                         size="sm"
-                        disabled={!finding.proposedPatch || finding.sourceRevision !== prd.revision}
+                        disabled={
+                          !finding.proposedPatch || finding.sourceRevision !== prd.revision || dirty
+                        }
                         onClick={() =>
                           void acceptFinding(finding).catch((reason: unknown) =>
                             setError(messageFrom(reason)),
@@ -1477,44 +1479,40 @@ function Workbench({
                           <p>{finding.rationale}</p>
                         </div>
                       ))}
-                      {handoff.status === 'staged' && (
-                        <footer>
-                          <Button
-                            size="sm"
-                            disabled={handoff.sourceRevision !== prd.revision || dirty}
-                            onClick={() =>
-                              void applyChatGptHandoff(handoff).catch((reason: unknown) =>
-                                setError(messageFrom(reason)),
-                              )
-                            }
-                          >
-                            <Check aria-hidden="true" />
-                            Apply selected
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() =>
-                              void api
-                                .dismissChatGptHandoff(project.id, handoff.id)
-                                .then(() =>
-                                  setHandoffs((current) =>
-                                    current.map((item) =>
-                                      item.id === handoff.id
-                                        ? { ...item, status: 'dismissed' }
-                                        : item,
-                                    ),
-                                  ),
-                                )
-                                .catch((reason: unknown) => setError(messageFrom(reason)))
-                            }
-                          >
-                            Dismiss
-                          </Button>
-                        </footer>
-                      )}
                     </>
                   )}
+                  <footer>
+                    {handoff.status === 'staged' && (
+                      <Button
+                        size="sm"
+                        disabled={handoff.sourceRevision !== prd.revision || dirty}
+                        onClick={() =>
+                          void applyChatGptHandoff(handoff).catch((reason: unknown) =>
+                            setError(messageFrom(reason)),
+                          )
+                        }
+                      >
+                        <Check aria-hidden="true" />
+                        Apply selected
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        void api
+                          .dismissChatGptHandoff(project.id, handoff.id)
+                          .then(() =>
+                            setHandoffs((current) =>
+                              current.filter((item) => item.id !== handoff.id),
+                            ),
+                          )
+                          .catch((reason: unknown) => setError(messageFrom(reason)))
+                      }
+                    >
+                      Delete handoff
+                    </Button>
+                  </footer>
                 </article>
               ))}
             </section>

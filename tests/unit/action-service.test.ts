@@ -172,6 +172,40 @@ describe('ActionService', () => {
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, 'Draft result');
   });
 
+  it('discloses only section metadata required by the selected scope', async () => {
+    const confidentialId = '33333333-3333-4333-8333-333333333333';
+    repository.getPrd.mockReturnValue({
+      ...prd,
+      sections: [
+        ...prd.sections,
+        {
+          ...prd.sections[0]!,
+          id: confidentialId,
+          title: 'Confidential acquisition plan',
+          body: 'Private content that is outside the selected scope.',
+          position: 1,
+        },
+      ],
+    });
+    const scoped = await service.run('session', request(), new AbortController().signal);
+    await scoped.text();
+    const scopedPrompt = (aiMocks.generateText.mock.calls[0]?.[0] as { prompt: string }).prompt;
+    expect(scopedPrompt).toContain(`${sectionId}: Problem`);
+    expect(scopedPrompt).not.toContain(confidentialId);
+    expect(scopedPrompt).not.toContain('Confidential acquisition plan');
+    expect(scopedPrompt).not.toContain('Private content that is outside the selected scope.');
+
+    const document = await service.run(
+      'session',
+      request({ scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    await document.text();
+    const documentPrompt = (aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt;
+    expect(documentPrompt).toContain(confidentialId);
+    expect(documentPrompt).toContain('Confidential acquisition plan');
+  });
+
   it.each([
     ['Context', 'relevant background'],
     ['Target users', 'affected users'],

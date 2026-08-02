@@ -55,6 +55,26 @@ describe('API', () => {
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
   });
 
+  it('rejects DNS-rebinding hosts and cross-origin browser requests', async () => {
+    const rebound = await app.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: { host: 'private.example' },
+    });
+    expect(rebound.statusCode).toBe(421);
+    expect(rebound.json()).toMatchObject({ error: { code: 'invalid_host' } });
+
+    const crossOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { host: '127.0.0.1:3210', origin: 'https://private.example' },
+      payload: { name: 'Blocked', description: '' },
+    });
+    expect(crossOrigin.statusCode).toBe(403);
+    expect(crossOrigin.json()).toMatchObject({ error: { code: 'invalid_origin' } });
+    expect(repository.listProjects()).toEqual([]);
+  });
+
   it('reports lexical degradation before the embedding model is initialised', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/health' });
     expect(response.statusCode).toBe(200);
@@ -241,6 +261,52 @@ describe('API', () => {
     ).toContainEqual(
       expect.objectContaining({ id: section.id, body: response.patches[0]!.afterMarkdown }),
     );
+  });
+
+  it('deletes a dismissed ChatGPT handoff and its retained payload', async () => {
+    const project = repository.createProject('Dismiss handoff', '');
+    const current = repository.getPrd(project.id);
+    const section = current.sections[0]!;
+    const handoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: current.revision,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Improve the synthetic section.',
+      sectionIds: [section.id],
+      citationIds: [],
+    });
+    const response = {
+      formatVersion: 1 as const,
+      kind: 'prd-genie-response' as const,
+      handoffId: handoff.id,
+      projectId: project.id,
+      sourceRevision: current.revision,
+      requestDigest: handoff.request.requestDigest,
+      summary: 'Synthetic response.',
+      patches: [
+        {
+          sectionId: section.id,
+          preimageHash: handoff.request.sections[0]!.preimageHash,
+          afterMarkdown: 'Replacement.',
+          evidenceIds: [],
+        },
+      ],
+      findings: [],
+      hostModel: null,
+    };
+    repository.importChatGptHandoffResponse(project.id, response);
+
+    const dismissed = await app.inject({
+      method: 'DELETE',
+      url: `/api/projects/${project.id}/chatgpt-handoffs/${handoff.id}`,
+    });
+    expect(dismissed.statusCode).toBe(204);
+    expect(repository.listChatGptHandoffs(project.id)).toEqual([]);
+    const retained = database.sqlite
+      .prepare('SELECT count(*) AS count FROM chatgpt_handoffs WHERE id = ?')
+      .get(handoff.id) as { count: number };
+    expect(retained.count).toBe(0);
   });
 
   it('imports a Markdown PRD and indexes a synthetic source', async () => {

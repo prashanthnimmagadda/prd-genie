@@ -6,7 +6,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const quick = process.argv.includes('--quick');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const hostPolicyCheck = `
-  import { resolveServerHost } from './src/server/config.ts';
+  import { isAllowedBrowserOrigin, isAllowedRequestHost, resolveServerHost } from './src/server/config.ts';
   const permittedNativeHosts = ['127.0.0.1', '::1'];
   for (const host of permittedNativeHosts) {
     if (resolveServerHost(host, false) !== host) throw new Error(\`Expected \${host} to be accepted.\`);
@@ -18,6 +18,28 @@ const hostPolicyCheck = `
   }
   if (resolveServerHost('0.0.0.0', true) !== '0.0.0.0') {
     throw new Error('Expected the container marker to permit 0.0.0.0.');
+  }
+  for (const host of ['127.0.0.1:3210', 'localhost:3210', '[::1]:3210']) {
+    if (!isAllowedRequestHost(host)) throw new Error(\`Expected request host \${host} to be accepted.\`);
+  }
+  for (const host of ['private.example', '127.0.0.1.private.example']) {
+    if (isAllowedRequestHost(host)) throw new Error(\`Expected request host \${host} to be rejected.\`);
+  }
+  if (!isAllowedBrowserOrigin('http://127.0.0.1:3210', '127.0.0.1:3210')) {
+    throw new Error('Expected the same loopback browser origin to be accepted.');
+  }
+  if (isAllowedBrowserOrigin('https://private.example', '127.0.0.1:3210')) {
+    throw new Error('Expected a cross-origin browser request to be rejected.');
+  }
+`;
+const workflowPolicyCheck = `
+  import fs from 'node:fs';
+  import path from 'node:path';
+  const directory = path.resolve('.github/workflows');
+  const automaticTrigger = /^\\s*(pull_request|pull_request_target|push|schedule)\\s*:/m;
+  for (const name of fs.readdirSync(directory)) {
+    const content = fs.readFileSync(path.join(directory, name), 'utf8');
+    if (automaticTrigger.test(content)) throw new Error(\`Automatic GitHub Actions trigger found in \${name}.\`);
   }
 `;
 
@@ -36,6 +58,16 @@ const steps = [
       hostPolicyCheck,
     ],
   ],
+  [
+    'workflow-policy',
+    [
+      process.execPath,
+      '--experimental-strip-types',
+      '--input-type=module',
+      '--eval',
+      workflowPolicyCheck,
+    ],
+  ],
   ['content', ['run', 'content:check']],
   ['format', ['run', 'format:check']],
   ['lint', ['run', 'lint']],
@@ -52,7 +84,7 @@ const startedAt = new Date();
 const results = [];
 for (const [name, args] of steps) {
   const stepStartedAt = new Date();
-  const [command, ...commandArgs] = name === 'host-policy' ? args : [npm, ...args];
+  const [command, ...commandArgs] = name.endsWith('-policy') ? args : [npm, ...args];
   const result = spawnSync(command, commandArgs, {
     cwd: root,
     env: { ...process.env, CI: '1' },
@@ -80,6 +112,12 @@ const report = {
     node: process.version,
     platform: process.platform,
     architecture: process.arch,
+  },
+  git: {
+    sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
+    clean:
+      spawnSync('git', ['status', '--porcelain=v1'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+        .length === 0,
   },
   passed,
   results,

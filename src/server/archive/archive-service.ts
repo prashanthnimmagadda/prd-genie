@@ -3,7 +3,15 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import JSZip, { type JSZipObject } from 'jszip';
 import { z } from 'zod';
-import type { ProjectSummary } from '../../shared/types.js';
+import {
+  actionScopes,
+  aiActions,
+  evidenceStatuses,
+  findingCategories,
+  providerKinds,
+  severityLevels,
+  type ProjectSummary,
+} from '../../shared/types.js';
 import { ApiError } from '../../shared/api.js';
 import { config } from '../config.js';
 import type { AppDatabase } from '../db/client.js';
@@ -31,7 +39,7 @@ const sourceSchema = z.object({
     .max(25 * 1024 * 1024),
   hash: z.string().regex(/^[a-f0-9]{64}$/),
   archivePath: z.string().min(1).max(1200),
-  status: z.string().max(30),
+  status: z.enum(['processing', 'ready', 'partial', 'failed']),
   error: z.string().max(4000).nullable(),
   createdAt: timestamp,
 });
@@ -60,16 +68,16 @@ const chunkSchema = z.object({
 const aiRunSchema = z.object({
   id,
   projectId: id,
-  action: z.string().max(30),
-  scope: z.string().max(30),
-  provider: z.string().max(100),
+  action: z.enum(aiActions),
+  scope: z.enum(actionScopes),
+  provider: z.enum(providerKinds),
   model: z.string().max(300),
   sourceRevision: z.number().int().nonnegative(),
   targetSectionId: id.nullable(),
   selectionText: z.string().max(50_000).nullable(),
   outputText: z.string().max(500_000).nullable(),
   appliedRevision: z.number().int().nonnegative().nullable(),
-  status: z.string().max(30),
+  status: z.enum(['running', 'completed', 'failed']),
   errorCode: z.string().max(100).nullable(),
   startedAt: timestamp,
   completedAt: timestamp.nullable(),
@@ -83,17 +91,17 @@ const citationSchema = z.object({
   sourceName: z.string().max(1024),
   locator: z.string().max(500),
   excerpt: z.string().max(100_000),
-  evidenceStatus: z.string().max(30),
+  evidenceStatus: z.enum(evidenceStatuses),
   available: z.boolean(),
-  unavailabilityReason: z.string().max(100).nullable(),
+  unavailabilityReason: z.literal('source_deleted').nullable(),
   createdAt: timestamp,
 });
 const findingSchema = z.object({
   id,
   aiRunId: id,
   projectId: id,
-  category: z.string().max(50),
-  severity: z.string().max(30),
+  category: z.enum(findingCategories),
+  severity: z.enum(severityLevels),
   targetSectionId: id,
   rationale: z.string().max(1200),
   citationIds: z.array(id).max(8),
@@ -101,7 +109,7 @@ const findingSchema = z.object({
     .object({ sectionId: id, beforeMarkdown: z.string(), afterMarkdown: z.string() })
     .nullable(),
   sourceRevision: z.number().int().nonnegative(),
-  status: z.string().max(30),
+  status: z.enum(['open', 'accepted', 'dismissed', 'stale']),
   createdAt: timestamp,
 });
 const manifestSchema = z.object({
@@ -113,7 +121,7 @@ const manifestSchema = z.object({
     id,
     name: z.string().min(1).max(120),
     description: z.string().max(1000),
-    selectedProvider: z.string().max(100).nullable(),
+    selectedProvider: z.enum(providerKinds).nullable(),
     selectedModel: z.string().max(300).nullable(),
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -654,6 +662,16 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     manifest.findings.map((row) => row.id),
     'finding',
   );
+  const revisionNumbers = manifest.revisions.map((row) => row.revision);
+  if (
+    revisionNumbers.length !== manifest.prd.revision + 1 ||
+    revisionNumbers.some((revision, index) => revision !== index) ||
+    !validSectionOrder(manifest.prd.sections) ||
+    manifest.revisions.some((revision) => !validSectionOrder(revision.snapshot)) ||
+    !sameSections(manifest.revisions.at(-1)?.snapshot, manifest.prd.sections)
+  ) {
+    invalidReferences();
+  }
   if (manifest.prd.projectId !== manifest.project.id) invalidReferences();
   const currentSections = new Set(manifest.prd.sections.map((row) => row.id));
   const historicalSections = new Set([
@@ -716,6 +734,29 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
   ) {
     invalidReferences();
   }
+}
+
+function validSectionOrder(sections: ArchiveManifest['prd']['sections']): boolean {
+  return sections.every((section, index) => section.position === index);
+}
+
+function sameSections(
+  left: ArchiveManifest['prd']['sections'] | undefined,
+  right: ArchiveManifest['prd']['sections'],
+): boolean {
+  if (!left || left.length !== right.length) return false;
+  return left.every((section, index) => {
+    const candidate = right[index];
+    return (
+      candidate !== undefined &&
+      section.id === candidate.id &&
+      section.projectId === candidate.projectId &&
+      section.title === candidate.title &&
+      section.body === candidate.body &&
+      section.position === candidate.position &&
+      section.updatedAt === candidate.updatedAt
+    );
+  });
 }
 
 function invalidReferences(): never {

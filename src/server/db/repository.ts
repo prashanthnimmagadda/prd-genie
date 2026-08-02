@@ -132,6 +132,7 @@ export class Repository {
         );
         for (const row of vectorIds) deleteVector.run(row.id);
       }
+      this.database.sqlite.prepare('DELETE FROM chunks_fts WHERE project_id = ?').run(id);
       this.database.db.delete(projects).where(eq(projects.id, id)).run();
     })();
     for (const { binaryPath } of binaries) {
@@ -634,15 +635,8 @@ export class Repository {
   }
 
   dismissChatGptHandoff(projectId: string, id: string): void {
-    const handoff = this.getChatGptHandoff(projectId, id);
-    if (handoff.status !== 'staged') {
-      throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
-    }
-    this.database.db
-      .update(chatGptHandoffs)
-      .set({ status: 'dismissed' })
-      .where(eq(chatGptHandoffs.id, id))
-      .run();
+    this.getChatGptHandoff(projectId, id);
+    this.database.db.delete(chatGptHandoffs).where(eq(chatGptHandoffs.id, id)).run();
   }
 
   markAiRunApplied(projectId: string, id: string, revision: number): void {

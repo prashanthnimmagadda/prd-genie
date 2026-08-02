@@ -192,14 +192,14 @@ export class SourceService {
           batch.forEach((item, index) => {
             const vector = vectors[index]!;
             const serialized = JSON.stringify(vector);
-            statement.run(
+            const update = statement.run(
               serialized,
               embeddingModel.id,
               embeddingModel.revision,
               embeddingModel.dimensions,
               item.id,
             );
-            insertVector?.run(item.id, serialized);
+            if (update.changes === 1) insertVector?.run(item.id, serialized);
           });
         })();
       }

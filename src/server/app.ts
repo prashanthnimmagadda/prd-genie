@@ -6,7 +6,7 @@ import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
 import { ApiError } from '../shared/api.js';
-import { config } from './config.js';
+import { config, isAllowedBrowserOrigin, isAllowedRequestHost } from './config.js';
 import { createDatabase } from './db/client.js';
 import { Repository } from './db/repository.js';
 import { SourceService } from './documents/source-service.js';
@@ -54,6 +54,18 @@ export async function buildApp(
   });
   await app.register(multipart, {
     limits: { files: 1, fileSize: config.maxArchiveBytes },
+  });
+
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (!isAllowedRequestHost(request.headers.host)) {
+      done(new ApiError(421, 'invalid_host', 'Requests must use a loopback host.'));
+      return;
+    }
+    if (!isAllowedBrowserOrigin(request.headers.origin, request.headers.host)) {
+      done(new ApiError(403, 'invalid_origin', 'Browser requests must originate from loopback.'));
+      return;
+    }
+    done();
   });
 
   app.setErrorHandler((error, request, reply) => {

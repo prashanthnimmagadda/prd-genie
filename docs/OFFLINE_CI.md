@@ -42,11 +42,11 @@ Before merge, a maintainer records:
 
 The generated reports are ignored by Git because they include timestamps and machine-specific evidence. Release artifacts include reviewed copies.
 
-## Non-authoritative GitHub workflow coverage
+## GitHub Actions policy
 
-The checked-in workflow definitions request the labels `self-hosted` and `prd-genie`. Platform jobs also request their operating-system label. They do not select GitHub-hosted compute, but repository plan, artifact storage, and other GitHub services remain account-dependent. Repository settings currently keep Actions disabled; enabling them is a separate maintainer decision.
+Repository Actions remain disabled. Checked-in workflow definitions are manual-only and request self-hosted runners, so pushes and pull requests cannot start them. They are non-authoritative templates for a possible future isolated runner design, not part of the current CI path.
 
-The trusted-machine command above is the release source of truth. It refuses to run when it detects a GitHub Actions environment. Untrusted pull-request code must never execute on a maintainer workstation or privileged self-hosted runner.
+The trusted-machine command above is the only release source of truth and refuses to run in a GitHub Actions environment. Do not run untrusted pull-request code directly on a maintainer workstation. Review the change first, then validate it in a disposable, non-privileged environment. Enabling Actions or dispatching a workflow requires an explicit governance decision and must not create GitHub billing or expose persistent maintainer resources.
 
 ## Platform policy
 

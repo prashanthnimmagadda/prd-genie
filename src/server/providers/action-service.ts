@@ -286,8 +286,12 @@ function buildPrompt(
   citations: Citation[],
   instruction?: string,
 ): string {
-  const sectionMap = prd.sections.map((section) => `${section.id}: ${section.title}`).join('\n');
   const targetSection = prd.sections.find((section) => section.id === request.targetSectionId);
+  const disclosedSections =
+    request.scope === 'document' ? prd.sections : targetSection ? [targetSection] : [];
+  const sectionMap = disclosedSections
+    .map((section) => `${section.id}: ${section.title}`)
+    .join('\n');
   const boundaryGuidance = targetSection
     ? sectionBoundaryGuidance(targetSection.title)
     : 'Keep each kind of PRD content in the section whose heading describes it.';

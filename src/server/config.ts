@@ -4,6 +4,7 @@ import envPaths from 'env-paths';
 const defaults = envPaths('prd-genie');
 const dataDir = path.resolve(process.env.PRD_GENIE_DATA_DIR ?? defaults.data);
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
+const loopbackRequestHostnames = new Set(['127.0.0.1', '[::1]', 'localhost']);
 
 export function resolveServerHost(host: string, isContainer: boolean): string {
   if (loopbackHosts.has(host)) return host;
@@ -12,6 +13,32 @@ export function resolveServerHost(host: string, isContainer: boolean): string {
   throw new Error(
     'PRD_GENIE_HOST must be 127.0.0.1 or ::1. 0.0.0.0 is allowed only when PRD_GENIE_CONTAINER=1.',
   );
+}
+
+export function isAllowedRequestHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  try {
+    return loopbackRequestHostnames.has(new URL(`http://${hostHeader}`).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedBrowserOrigin(
+  originHeader: string | undefined,
+  hostHeader: string | undefined,
+): boolean {
+  if (!originHeader) return true;
+  if (!hostHeader || !isAllowedRequestHost(hostHeader)) return false;
+  try {
+    const origin = new URL(originHeader);
+    return (
+      (origin.protocol === 'http:' || origin.protocol === 'https:') &&
+      loopbackRequestHostnames.has(origin.hostname.toLowerCase())
+    );
+  } catch {
+    return false;
+  }
 }
 
 export const config = {

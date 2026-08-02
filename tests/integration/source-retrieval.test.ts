@@ -226,6 +226,53 @@ describe('source lifecycle and retrieval fallback', () => {
     expect(fs.existsSync(binary)).toBe(false);
   });
 
+  it('removes lexical data and prevents late vectors after project deletion', async () => {
+    const project = repository.createProject('Delete while indexing', '');
+    const vector = Array.from({ length: 384 }, (_, index) => (index === 4 ? 1 : 0));
+    let resolveEmbedding: ((vectors: number[][]) => void) | undefined;
+    const pending = new Promise<number[][]>((resolve) => {
+      resolveEmbedding = resolve;
+    });
+    const service = new SourceService(database, {
+      embed: () => pending,
+    } as unknown as EmbeddingService);
+    await service.add(
+      project.id,
+      'pending.txt',
+      Buffer.from('Synthetic evidence is deleted before semantic indexing completes.'),
+    );
+    expect(
+      (
+        database.sqlite
+          .prepare('SELECT count(*) AS count FROM chunks_fts WHERE project_id = ?')
+          .get(project.id) as { count: number }
+      ).count,
+    ).toBeGreaterThan(0);
+
+    repository.deleteProject(project.id);
+    resolveEmbedding?.([vector]);
+    await service.close();
+
+    expect(
+      (
+        database.sqlite
+          .prepare('SELECT count(*) AS count FROM chunks_fts WHERE project_id = ?')
+          .get(project.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(
+      (database.sqlite.prepare('SELECT count(*) AS count FROM chunks').get() as { count: number })
+        .count,
+    ).toBe(0);
+    expect(
+      (
+        database.sqlite.prepare('SELECT count(*) AS count FROM chunk_vectors').get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(0);
+  });
+
   it('marks malformed embedding output as lexical-only without breaking ingestion', async () => {
     const project = repository.createProject('Malformed vectors', '');
     const service = new SourceService(database, {

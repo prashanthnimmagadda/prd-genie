@@ -23,7 +23,7 @@ Provider handling, retention, and training policies are controlled by that provi
 
 Creating a ChatGPT handoff writes the user-selected PRD sections, instruction, and evidence excerpts to a local handoff record and downloadable JSON file. Sending that file to ChatGPT is an intentional disclosure by the user to OpenAI and is outside the standalone provider request path.
 
-An imported ChatGPT response is retained locally with its request until the handoff is dismissed or the project is deleted. The standalone application does not receive ChatGPT cookies, identity tokens, subscription details, billing data, or unrelated conversation history.
+An imported ChatGPT response is retained locally with its request until the user deletes the handoff or deletes the project. Deleting a handoff removes its request and response records from SQLite without changing any PRD revision that was already accepted. The standalone application does not receive ChatGPT cookies, identity tokens, subscription details, billing data, or unrelated conversation history.
 
 ## Credentials
 

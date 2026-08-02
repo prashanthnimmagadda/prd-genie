@@ -42,7 +42,7 @@ ChatGPT handoffs bind the project, source revision, section preimage hashes, evi
 
 ### Remote network exposure
 
-Native execution permits only loopback hosts. Containers require an explicit marker before wildcard binding, and Docker Compose publishes only on host loopback. Remote hosting is unsupported.
+Native execution permits only loopback hosts. The server rejects non-loopback `Host` headers and non-loopback browser origins to prevent DNS rebinding and remote cross-site mutations. Different loopback ports remain permitted for the local development proxy. Containers require an explicit marker before wildcard binding, and Docker Compose publishes only on host loopback. Remote hosting is unsupported.
 
 ### Local device compromise
 

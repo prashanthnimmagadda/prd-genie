@@ -82,6 +82,10 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     .fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await page.getByLabel('Section content').first().fill('Unsaved local edit must be preserved.');
+  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeDisabled();
+  await page.getByLabel('Section content').first().fill('');
+  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
   await page.getByRole('button', { name: 'Apply to section' }).click();
   await expect(page.getByRole('status')).toContainText('proposal changed');
   await expect(page.getByLabel('Section content').first()).toContainText(
@@ -96,6 +100,10 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('button', { name: 'Run review' }).click();
   await expect(page.getByText('The evidence establishes repeated draft loss')).toBeVisible();
   await page.getByText('Inspect proposed diff').click();
+  await page.getByLabel('Section content').first().fill('Unsaved review edit must be preserved.');
+  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+  await page.getByLabel('Section content').first().fill('');
+  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Accept', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('proposal changed');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();

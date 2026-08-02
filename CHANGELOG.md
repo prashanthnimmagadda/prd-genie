@@ -30,3 +30,10 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Ensured draft and rewrite previews exactly match the validated Markdown that is applied.
 - Preserved repeated Markdown headings without indexing heading-only evidence chunks.
 - Made the authoritative local CI gate fully offline and cache-only for advisory checks.
+- Blocked DNS-rebinding hosts and non-loopback browser origins at the server boundary.
+- Removed project source text from FTS and prevented late embedding writes after deletion.
+- Protected unsaved editor changes when applying AI proposals and review findings.
+- Limited section-scoped provider prompts to the selected section metadata.
+- Made ChatGPT handoff deletion remove its retained request and response payloads.
+- Rejected portable archives with invalid typed state or divergent revision history.
+- Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.
