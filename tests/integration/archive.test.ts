@@ -159,6 +159,47 @@ describe('portable project archive restore', () => {
       sourceRevision: 0,
     });
     repository.completeAiRun(runId, undefined, 'Synthetic review complete.');
+
+    const availableArchive = await exporter.create(project.id, 'archive');
+    const availableRestore = await exporter.restoreArchive(availableArchive.body);
+    const availableRestoreAgain = await exporter.restoreArchive(
+      (await exporter.create(availableRestore.id, 'archive')).body,
+    );
+    expect(repository.listFindings(availableRestoreAgain.id)[0]?.citations[0]).toMatchObject({
+      sourceName: 'temporary-evidence.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Synthetic evidence retained for audit history.',
+      available: true,
+      unavailabilityReason: null,
+    });
+    for (const mutation of [
+      (citation: Record<string, unknown>) => {
+        citation.sourceName = 'forged.txt';
+      },
+      (citation: Record<string, unknown>) => {
+        citation.locator = 'Forged locator';
+      },
+      (citation: Record<string, unknown>) => {
+        citation.excerpt = 'Forged excerpt';
+      },
+      (citation: Record<string, unknown>) => {
+        citation.unavailabilityReason = 'source_deleted';
+      },
+      (citation: Record<string, unknown>) => {
+        citation.chunkId = null;
+      },
+    ]) {
+      const forged = await JSZip.loadAsync(availableArchive.body);
+      const manifest = JSON.parse(await forged.file('project.json')!.async('string')) as {
+        citations: Array<Record<string, unknown>>;
+      };
+      mutation(manifest.citations[0]!);
+      forged.file('project.json', JSON.stringify(manifest));
+      await expect(
+        exporter.restoreArchive(await forged.generateAsync({ type: 'nodebuffer' })),
+      ).rejects.toMatchObject({ code: 'invalid_archive' });
+    }
+
     repository.deleteSource(project.id, sourceId);
 
     const archive = await exporter.create(project.id, 'archive');
@@ -172,6 +213,34 @@ describe('portable project archive restore', () => {
         unavailabilityReason: 'source_deleted',
       }),
     ]);
+    const restoredAgain = await exporter.restoreArchive(
+      (await exporter.create(restored.id, 'archive')).body,
+    );
+    expect(repository.listFindings(restoredAgain.id)[0]?.citations[0]).toMatchObject({
+      available: false,
+      unavailabilityReason: 'source_deleted',
+    });
+    for (const mutation of [
+      (citation: Record<string, unknown>) => {
+        citation.unavailabilityReason = null;
+      },
+      (citation: Record<string, unknown>) => {
+        citation.sourceId = sourceId;
+      },
+      (citation: Record<string, unknown>) => {
+        citation.available = true;
+      },
+    ]) {
+      const forged = await JSZip.loadAsync(archive.body);
+      const manifest = JSON.parse(await forged.file('project.json')!.async('string')) as {
+        citations: Array<Record<string, unknown>>;
+      };
+      mutation(manifest.citations[0]!);
+      forged.file('project.json', JSON.stringify(manifest));
+      await expect(
+        exporter.restoreArchive(await forged.generateAsync({ type: 'nodebuffer' })),
+      ).rejects.toMatchObject({ code: 'invalid_archive' });
+    }
   });
 
   it('rejects unknown archive files and inconsistent chunk linkages', async () => {
@@ -403,10 +472,10 @@ describe('portable project archive restore', () => {
     repository.savePrd(
       project.id,
       revisionOne.revision,
-      revisionOne.sections.map((section, index) =>
-        index === 0 ? { ...section, body: 'A later unrelated manual change.' } : section,
-      ),
-      'Make review historical',
+      revisionOne.sections
+        .filter((section) => section.id !== addedSection.id)
+        .map((section, position) => ({ ...section, position })),
+      'Remove reviewed section',
     );
     const archive = await exporter.create(project.id, 'archive');
     const restored = await exporter.restoreArchive(archive.body);
@@ -416,6 +485,18 @@ describe('portable project archive restore', () => {
       sourceRevision: 1,
     });
     expect(restoredFinding.targetSectionId).not.toBe(addedSection.id);
+    expect(
+      repository
+        .getPrd(restored.id)
+        .sections.some((section) => section.id === restoredFinding.targetSectionId),
+    ).toBe(false);
+    const restoredAgain = await exporter.restoreArchive(
+      (await exporter.create(restored.id, 'archive')).body,
+    );
+    expect(repository.listFindings(restoredAgain.id)[0]).toMatchObject({
+      status: 'stale',
+      sourceRevision: 1,
+    });
 
     const forged = await JSZip.loadAsync(archive.body);
     const manifest = JSON.parse(await forged.file('project.json')!.async('string')) as {
@@ -479,6 +560,25 @@ describe('portable project archive restore', () => {
     await expect(
       exporter.restoreArchive(await unrelated.generateAsync({ type: 'nodebuffer' })),
     ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    for (const mutateFindings of [
+      (findings: Array<{ status: string }>) => {
+        findings[0]!.status = 'stale';
+      },
+      (findings: Array<{ status: string }>) => {
+        findings.splice(0, 1);
+      },
+    ]) {
+      const contradictory = await JSZip.loadAsync(archive.body);
+      const contradictoryManifest = JSON.parse(
+        await contradictory.file('project.json')!.async('string'),
+      ) as { findings: Array<{ status: string }> };
+      mutateFindings(contradictoryManifest.findings);
+      contradictory.file('project.json', JSON.stringify(contradictoryManifest));
+      await expect(
+        exporter.restoreArchive(await contradictory.generateAsync({ type: 'nodebuffer' })),
+      ).rejects.toMatchObject({ code: 'invalid_archive' });
+    }
   });
 
   it('rejects forged applied runs, duplicate applications, and invalid scoped targets', async () => {
@@ -505,6 +605,16 @@ describe('portable project archive restore', () => {
         exporter.restoreArchive(await zip.generateAsync({ type: 'nodebuffer' })),
       ).rejects.toMatchObject({ code: 'invalid_archive' });
     }
+
+    const detachedApplication = await JSZip.loadAsync(archive.body);
+    const detachedApplicationManifest = JSON.parse(
+      await detachedApplication.file('project.json')!.async('string'),
+    ) as { aiRuns: Array<{ appliedRevision: number | null }> };
+    detachedApplicationManifest.aiRuns[0]!.appliedRevision = null;
+    detachedApplication.file('project.json', JSON.stringify(detachedApplicationManifest));
+    await expect(
+      exporter.restoreArchive(await detachedApplication.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
 
     const unrelatedRevision = await JSZip.loadAsync(archive.body);
     const unrelatedRevisionManifest = JSON.parse(

@@ -733,6 +733,33 @@ export class Repository {
     proposedPatch: ReviewFinding['proposedPatch'];
     sourceRevision: number;
   }): ReviewFinding {
+    const run = this.getAiRun(input.projectId, input.aiRunId);
+    const revision = this.database.sqlite
+      .prepare(
+        `SELECT snapshot_json AS snapshotJson
+         FROM revisions WHERE project_id = ? AND revision = ?`,
+      )
+      .get(input.projectId, input.sourceRevision) as { snapshotJson: string } | undefined;
+    const sourceSections = revision ? (JSON.parse(revision.snapshotJson) as PrdSection[]) : [];
+    const sourceTarget = sourceSections.find((section) => section.id === input.targetSectionId);
+    const runCitationIds = new Set(this.listCitationsForRun(input.aiRunId).map((row) => row.id));
+    if (
+      run.action !== 'review' ||
+      run.sourceRevision !== input.sourceRevision ||
+      !sourceTarget ||
+      input.citationIds.some((citationId) => !runCitationIds.has(citationId)) ||
+      (input.proposedPatch !== null &&
+        (input.proposedPatch.sectionId !== input.targetSectionId ||
+          input.proposedPatch.beforeMarkdown !== sourceTarget.body))
+    ) {
+      throw new ApiError(400, 'invalid_finding', 'The review finding is not bound to its source.');
+    }
+    const current = this.getPrd(input.projectId);
+    const findingStatus: ReviewFinding['status'] =
+      current.revision === input.sourceRevision &&
+      current.sections.some((section) => section.id === input.targetSectionId)
+        ? 'open'
+        : 'stale';
     const id = crypto.randomUUID();
     const finding: ReviewFinding = {
       id,
@@ -743,7 +770,7 @@ export class Repository {
       citations: [],
       proposedPatch: input.proposedPatch,
       sourceRevision: input.sourceRevision,
-      status: 'open',
+      status: findingStatus,
     };
     this.database.db
       .insert(reviewFindings)
@@ -758,7 +785,7 @@ export class Repository {
         citationIdsJson: JSON.stringify(input.citationIds),
         proposedPatchJson: input.proposedPatch ? JSON.stringify(input.proposedPatch) : null,
         sourceRevision: input.sourceRevision,
-        status: 'open',
+        status: findingStatus,
         createdAt: now(),
       })
       .run();

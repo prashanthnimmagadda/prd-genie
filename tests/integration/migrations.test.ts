@@ -34,6 +34,8 @@ describe('database migrations', () => {
     const chunkId = crypto.randomUUID();
     const runId = crypto.randomUUID();
     const citationId = crypto.randomUUID();
+    const sectionId = crypto.randomUUID();
+    const findingId = crypto.randomUUID();
     const timestamp = '2026-01-01T00:00:00.000Z';
     legacy
       .prepare(
@@ -69,9 +71,39 @@ describe('database migrations', () => {
         `INSERT INTO ai_runs
          (id, project_id, action, scope, provider, model, source_revision, status,
           error_code, started_at, completed_at)
-         VALUES (?, ?, 'ask', 'document', 'ollama', 'synthetic', 0, 'completed', NULL, ?, ?)`,
+         VALUES (?, ?, 'review', 'document', 'ollama', 'synthetic', 0, 'completed', NULL, ?, ?)`,
       )
       .run(runId, projectId, timestamp, timestamp);
+    legacy
+      .prepare('INSERT INTO prd_documents (project_id, revision, updated_at) VALUES (?, 0, ?)')
+      .run(projectId, timestamp);
+    legacy
+      .prepare(
+        `INSERT INTO prd_sections (id, project_id, title, body, position, updated_at)
+         VALUES (?, ?, 'Problem', '', 0, ?)`,
+      )
+      .run(sectionId, projectId, timestamp);
+    legacy
+      .prepare(
+        `INSERT INTO revisions
+         (id, project_id, revision, reason, snapshot_json, created_at)
+         VALUES (?, ?, 0, 'Initial PRD', ?, ?)`,
+      )
+      .run(
+        crypto.randomUUID(),
+        projectId,
+        JSON.stringify([
+          {
+            id: sectionId,
+            projectId,
+            title: 'Problem',
+            body: '',
+            position: 0,
+            updatedAt: timestamp,
+          },
+        ]),
+        timestamp,
+      );
     legacy
       .prepare(
         `INSERT INTO citations
@@ -79,6 +111,15 @@ describe('database migrations', () => {
          VALUES (?, ?, ?, ?, ?, 'Evidence', 'supported', ?)`,
       )
       .run(citationId, runId, sourceId, locationId, chunkId, timestamp);
+    legacy
+      .prepare(
+        `INSERT INTO review_findings
+         (id, ai_run_id, project_id, category, severity, target_section_id, rationale,
+          citation_ids_json, proposed_patch_json, source_revision, status, created_at)
+         VALUES (?, ?, ?, 'evidence', 'warning', ?, 'Retain this audit finding.', ?, NULL, 0,
+                 'dismissed', ?)`,
+      )
+      .run(findingId, runId, projectId, sectionId, JSON.stringify([citationId]), timestamp);
     legacy.close();
 
     const upgraded = createDatabase(databasePath);
@@ -99,6 +140,30 @@ describe('database migrations', () => {
           .prepare("SELECT name FROM app_migrations WHERE name = '0003_chatgpt_handoffs'")
           .get(),
       ).toBeTruthy();
+      expect(
+        upgraded.sqlite
+          .prepare("SELECT name FROM app_migrations WHERE name = '0004_durable_review_findings'")
+          .get(),
+      ).toBeTruthy();
+      expect(
+        upgraded.sqlite
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'findings_project_idx'",
+          )
+          .get(),
+      ).toBeTruthy();
+      expect(
+        (
+          upgraded.sqlite.prepare("PRAGMA foreign_key_list('review_findings')").all() as Array<{
+            table: string;
+          }>
+        ).map((row) => row.table),
+      ).not.toContain('prd_sections');
+      upgraded.sqlite.prepare('DELETE FROM prd_sections WHERE id = ?').run(sectionId);
+      expect(
+        upgraded.sqlite.prepare('SELECT status FROM review_findings WHERE id = ?').get(findingId),
+      ).toEqual({ status: 'dismissed' });
+      expect(upgraded.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally {
       upgraded.close();
     }

@@ -88,6 +88,27 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     .fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByRole('tab', { name: 'history' }).click();
+  const durableRewrite = page
+    .locator('.history-row')
+    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'synthetic-prd-model' })
+    .first();
+  await durableRewrite.getByRole('button', { name: 'Inspect' }).click();
+  await expect(
+    page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
+  ).toContainText('revision 0, rewrite on section scope');
+  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await page.locator('.action-context select').first().selectOption('ask');
+  await page.locator('.action-context select').nth(1).selectOption('document');
+  await expect(
+    page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
+  ).toContainText('rewrite on section scope');
+  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await page.locator('.action-context select').first().selectOption('rewrite');
+  await page.locator('.action-context select').nth(1).selectOption('section');
   await page.getByLabel('Section content').first().fill('Unsaved local edit must be preserved.');
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeDisabled();
   await page.getByLabel('Undo editor change').first().click();
@@ -100,6 +121,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     await heldApply;
     await route.continue();
   });
+  await page.getByText('Revise proposal before applying').click();
   await page.getByRole('button', { name: 'Apply to section' }).click();
   await expect(page.getByLabel('Section content').first()).toHaveAttribute(
     'contenteditable',
@@ -107,6 +129,8 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   );
   await expect(page.getByLabel('Section title').first()).toBeDisabled();
   await expect(page.getByPlaceholder('How should this be improved?')).toBeDisabled();
+  await expect(page.getByLabel('Revised AI proposal')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Dismiss proposal' })).toBeDisabled();
   await page.getByRole('tab', { name: 'review' }).click();
   await expect(page.getByRole('button', { name: 'Run review' })).toBeDisabled();
   await page.getByRole('tab', { name: 'assist' }).click();
@@ -170,6 +194,16 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('tab', { name: 'review' }).click();
   await page.getByRole('button', { name: 'Run review' }).click();
   await expect(page.getByText('The evidence establishes repeated draft loss')).toBeVisible();
+  await page.getByRole('tab', { name: 'history' }).click();
+  const durableReview = page
+    .locator('.history-row')
+    .filter({ hasText: 'review on document' })
+    .filter({ hasText: 'synthetic-prd-model' })
+    .first();
+  await durableReview.getByRole('button', { name: 'Inspect' }).click();
+  await expect(page.getByRole('button', { name: /^Apply to/ })).toHaveCount(0);
+  await expect(page.getByLabel('Revised AI proposal')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'review' }).click();
   await page.getByText('Inspect proposed diff').click();
   await page.getByLabel('Section content').first().fill('Unsaved review edit must be preserved.');
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
@@ -183,8 +217,21 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('tab', { name: 'review' }).click();
   await page.getByText('Inspect proposed diff').click();
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeEnabled();
+  let releaseFinding!: () => void;
+  const heldFinding = new Promise<void>((resolve) => {
+    releaseFinding = resolve;
+  });
+  await page.route('**/api/projects/*/review-findings/*/accept', async (route) => {
+    await heldFinding;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Accept', exact: true }).click();
+  await expect(page.locator('.finding-revision textarea')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeDisabled();
+  releaseFinding();
   await expect(page.getByRole('status')).toContainText('proposal changed');
+  await page.unroute('**/api/projects/*/review-findings/*/accept');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
@@ -258,10 +305,27 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
     buffer: Buffer.from(JSON.stringify(response)),
   });
   await expect(page.getByText('Adds a concrete synthetic user problem.')).toBeVisible();
+  let releaseHandoff!: () => void;
+  const heldHandoff = new Promise<void>((resolve) => {
+    releaseHandoff = resolve;
+  });
+  await page.route('**/api/projects/*/chatgpt-handoffs/*/apply', async (route) => {
+    await heldHandoff;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Apply selected' }).click();
+  const stagedHandoff = page.locator('.handoff-row').filter({
+    hasText: 'Adds a concrete synthetic user problem.',
+  });
+  await expect(stagedHandoff.getByRole('checkbox')).toBeDisabled();
+  await expect(stagedHandoff.locator('textarea')).toBeDisabled();
+  await expect(stagedHandoff.getByRole('button', { name: 'Apply selected' })).toBeDisabled();
+  await expect(stagedHandoff.getByRole('button', { name: 'Delete handoff' })).toBeDisabled();
+  releaseHandoff();
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Working product managers',
   );
+  await page.unroute('**/api/projects/*/chatgpt-handoffs/*/apply');
   await expect(page.getByText('Revision 1', { exact: true })).toBeVisible();
 
   page.once('dialog', (dialog) => dialog.accept());

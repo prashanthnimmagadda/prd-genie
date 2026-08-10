@@ -205,10 +205,50 @@ describe('Repository', () => {
     expect(repository.listFindings(project.id)[0]?.status).toBe('dismissed');
     expect(repository.getLocation(sourceId, locationId).content).toBe('Evidence');
 
-    repository.savePrd(project.id, 0, prd.sections, 'Make findings stale');
+    const revisionOne = repository.savePrd(project.id, 0, prd.sections, 'Close finding revision');
     expect(() => repository.setFindingStatus(project.id, finding.id, 'accepted')).toThrow(
       'no longer open',
     );
+    const lateRunId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: revisionOne.revision,
+    });
+    repository.savePrd(
+      project.id,
+      revisionOne.revision,
+      revisionOne.sections
+        .filter((section) => section.id !== finding.targetSectionId)
+        .map((section, position) => ({ ...section, position })),
+      'Remove reviewed section',
+    );
+    const lateFinding = repository.storeFinding({
+      aiRunId: lateRunId,
+      projectId: project.id,
+      category: 'clarity',
+      severity: 'info',
+      targetSectionId: finding.targetSectionId,
+      rationale: 'A review completed after its target was removed.',
+      citationIds: [],
+      proposedPatch: {
+        sectionId: finding.targetSectionId,
+        beforeMarkdown: revisionOne.sections[0]!.body,
+        afterMarkdown: 'Historical proposal.',
+      },
+      sourceRevision: revisionOne.revision,
+    });
+    expect(repository.listFindings(project.id)[0]).toMatchObject({
+      id: finding.id,
+      targetSectionId: finding.targetSectionId,
+      status: 'dismissed',
+    });
+    expect(repository.listFindings(project.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: lateFinding.id, status: 'stale' })]),
+    );
+    repository.completeAiRun(lateRunId, undefined, 'Historical review completed.');
     repository.completeAiRun(runId, 'provider_unavailable');
   });
 

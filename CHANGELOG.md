@@ -39,4 +39,6 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Rejected portable archives with invalid typed state, divergent snapshots, or impossible AI revision provenance.
 - Bound restored AI and review applications to their exact revision reason and resulting snapshot.
 - Rejected duplicate section identities in editor saves and historical archive snapshots.
+- Preserved review history after section deletion and cross-checked restored citation snapshots.
+- Froze in-flight proposal controls and restored immutable proposal provenance from AI history.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.

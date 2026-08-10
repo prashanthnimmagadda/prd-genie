@@ -172,9 +172,7 @@ export const reviewFindings = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     category: text('category').notNull(),
     severity: text('severity').notNull(),
-    targetSectionId: text('target_section_id')
-      .notNull()
-      .references(() => prdSections.id, { onDelete: 'cascade' }),
+    targetSectionId: text('target_section_id').notNull(),
     rationale: text('rationale').notNull(),
     citationIdsJson: text('citation_ids_json').notNull(),
     proposedPatchJson: text('proposed_patch_json'),

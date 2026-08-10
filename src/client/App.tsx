@@ -61,6 +61,16 @@ import { ProviderDialog } from '@/components/ProviderDialog';
 
 type PanelTab = 'assist' | 'review' | 'evidence' | 'history';
 
+interface ProposalContext {
+  runId: string | null;
+  sourceRevision: number;
+  action: AiAction;
+  scope: ActionScope;
+  provider: AiRunProposal['provider'];
+  model: string;
+  appliedRevision: number | null;
+}
+
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -273,8 +283,7 @@ function Workbench({
   const [action, setAction] = useState<AiAction>('ask');
   const [scope, setScope] = useState<ActionScope>('section');
   const [output, setOutput] = useState('');
-  const [proposalRunId, setProposalRunId] = useState<string | null>(null);
-  const [proposalSourceRevision, setProposalSourceRevision] = useState<number | null>(null);
+  const [proposalContext, setProposalContext] = useState<ProposalContext | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -417,8 +426,19 @@ function Workbench({
     setBusy(true);
     setError('');
     setOutput('');
-    setProposalRunId(null);
-    setProposalSourceRevision(null);
+    setProposalContext(
+      requestedAction === 'draft' || requestedAction === 'rewrite'
+        ? {
+            runId: null,
+            sourceRevision: current.revision,
+            action: requestedAction,
+            scope: requestedScope,
+            provider: project.selectedProvider,
+            model: project.selectedModel,
+            appliedRevision: null,
+          }
+        : null,
+    );
     setCitations([]);
     if (requestedAction === 'review') setFindings([]);
     const controller = new AbortController();
@@ -445,8 +465,17 @@ function Workbench({
           onFinding: (finding) => setFindings((value) => [...value, finding]),
           onStatus: (next) => setStatus(next.detail),
           onCompletion: (completion) => {
-            setProposalRunId(completion.runId);
-            setProposalSourceRevision(completion.revision);
+            if (requestedAction === 'draft' || requestedAction === 'rewrite') {
+              setProposalContext({
+                runId: completion.runId,
+                sourceRevision: completion.revision,
+                action: requestedAction,
+                scope: requestedScope,
+                provider: project.selectedProvider!,
+                model: project.selectedModel!,
+                appliedRevision: null,
+              });
+            }
             void api.aiRuns(project.id).then((result) => setAiRuns(result.runs));
           },
         },
@@ -467,24 +496,24 @@ function Workbench({
   async function applyOutput() {
     if (
       !prd ||
-      !proposalRunId ||
-      proposalSourceRevision !== prd.revision ||
+      !proposalContext?.runId ||
+      (proposalContext.action !== 'draft' && proposalContext.action !== 'rewrite') ||
+      proposalContext.sourceRevision !== prd.revision ||
       !output.trim() ||
       dirty ||
       documentMutationRef.current
     )
       return;
-    const sourceRevision = proposalSourceRevision;
+    const { runId, sourceRevision } = proposalContext;
     const saved = await runDocumentMutation(() =>
-      api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim()),
+      api.applyAiRun(project.id, runId, sourceRevision, output.trim()),
     );
     if (!saved) return;
     setUndoRevision(sourceRevision);
     setPrd(saved);
     setSavedPrd(saved);
     setOutput('');
-    setProposalRunId(null);
-    setProposalSourceRevision(null);
+    setProposalContext(null);
     setFindings((current) =>
       current.map((finding) =>
         finding.status === 'open' ? { ...finding, status: 'stale' } : finding,
@@ -1137,7 +1166,10 @@ function Workbench({
                 <span>Action</span>
                 <select
                   value={action}
-                  onChange={(event) => setAction(event.target.value as AiAction)}
+                  disabled={documentMutationBusy}
+                  onChange={(event) => {
+                    if (!documentMutationRef.current) setAction(event.target.value as AiAction);
+                  }}
                 >
                   <option value="ask">Ask</option>
                   <option value="rewrite">Rewrite</option>
@@ -1149,7 +1181,10 @@ function Workbench({
                 <span>Scope</span>
                 <select
                   value={scope}
-                  onChange={(event) => setScope(event.target.value as ActionScope)}
+                  disabled={documentMutationBusy}
+                  onChange={(event) => {
+                    if (!documentMutationRef.current) setScope(event.target.value as ActionScope);
+                  }}
                 >
                   <option value="section">Section</option>
                   <option value="selection" disabled={!selection}>
@@ -1199,11 +1234,12 @@ function Workbench({
                         </SourcesContent>
                       </Sources>
                     )}
-                    {output && action !== 'ask' && (
+                    {output && proposalContext && (
                       <>
                         <p className="proposal-provenance">
-                          Proposal from {project.selectedProvider} / {project.selectedModel},
-                          revision {proposalSourceRevision ?? prd.revision}, {scope} scope
+                          Proposal from {proposalContext.provider} / {proposalContext.model},
+                          revision {proposalContext.sourceRevision}, {proposalContext.action} on{' '}
+                          {proposalContext.scope} scope
                         </p>
                         {!busy && (
                           <details className="proposal-revision">
@@ -1211,17 +1247,20 @@ function Workbench({
                             <textarea
                               aria-label="Revised AI proposal"
                               value={output}
-                              onChange={(event) => setOutput(event.target.value)}
+                              disabled={documentMutationBusy}
+                              onChange={(event) => {
+                                if (!documentMutationRef.current) setOutput(event.target.value);
+                              }}
                             />
                           </details>
                         )}
                         <MessageActions>
                           <MessageAction
-                            label={`Apply to ${scope}`}
+                            label={`Apply to ${proposalContext.scope}`}
                             tooltip="Creates a revision bound to this AI run"
                             disabled={
-                              !proposalRunId ||
-                              proposalSourceRevision !== prd.revision ||
+                              !proposalContext.runId ||
+                              proposalContext.sourceRevision !== prd.revision ||
                               busy ||
                               dirty ||
                               documentMutationBusy
@@ -1238,10 +1277,11 @@ function Workbench({
                           <MessageAction
                             label="Dismiss proposal"
                             tooltip="Leaves the PRD unchanged"
+                            disabled={documentMutationBusy}
                             onClick={() => {
+                              if (documentMutationRef.current) return;
                               setOutput('');
-                              setProposalRunId(null);
-                              setProposalSourceRevision(null);
+                              setProposalContext(null);
                             }}
                           >
                             <X aria-hidden="true" />
@@ -1275,6 +1315,7 @@ function Workbench({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    disabled={documentMutationBusy}
                     onClick={() => setProviderOpen(true)}
                   >
                     <KeyRound aria-hidden="true" />
@@ -1354,12 +1395,14 @@ function Workbench({
                           <span>Revise before accepting</span>
                           <textarea
                             value={findingDrafts[finding.id] ?? finding.proposedPatch.afterMarkdown}
-                            onChange={(event) =>
+                            disabled={documentMutationBusy}
+                            onChange={(event) => {
+                              if (documentMutationRef.current) return;
                               setFindingDrafts((current) => ({
                                 ...current,
                                 [finding.id]: event.target.value,
-                              }))
-                            }
+                              }));
+                            }}
                           />
                         </label>
                       )}
@@ -1400,7 +1443,9 @@ function Workbench({
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() =>
+                        disabled={documentMutationBusy}
+                        onClick={() => {
+                          if (documentMutationRef.current) return;
                           void api
                             .dismissFinding(project.id, finding.id)
                             .then(() =>
@@ -1410,8 +1455,8 @@ function Workbench({
                                 ),
                               ),
                             )
-                            .catch((reason: unknown) => setError(messageFrom(reason)))
-                        }
+                            .catch((reason: unknown) => setError(messageFrom(reason)));
+                        }}
                       >
                         Dismiss
                       </Button>
@@ -1483,7 +1528,10 @@ function Workbench({
                   <span>Instruction</span>
                   <textarea
                     value={handoffInstruction}
-                    onChange={(event) => setHandoffInstruction(event.target.value)}
+                    disabled={documentMutationBusy}
+                    onChange={(event) => {
+                      if (!documentMutationRef.current) setHandoffInstruction(event.target.value);
+                    }}
                     placeholder="Describe the draft, review, or rewrite you want ChatGPT to propose."
                     maxLength={10_000}
                   />
@@ -1496,13 +1544,15 @@ function Workbench({
                         <input
                           type="checkbox"
                           checked={handoffCitationIds.includes(citation.id)}
-                          onChange={(event) =>
+                          disabled={documentMutationBusy}
+                          onChange={(event) => {
+                            if (documentMutationRef.current) return;
                             setHandoffCitationIds((current) =>
                               event.target.checked
                                 ? [...current, citation.id]
                                 : current.filter((id) => id !== citation.id),
-                            )
-                          }
+                            );
+                          }}
                         />
                         <span>
                           {citation.sourceName}, {citation.locator}: {citation.excerpt}
@@ -1581,7 +1631,9 @@ function Workbench({
                               <input
                                 type="checkbox"
                                 checked={enabled}
-                                onChange={(event) =>
+                                disabled={documentMutationBusy || handoff.status !== 'staged'}
+                                onChange={(event) => {
+                                  if (documentMutationRef.current) return;
                                   setHandoffDrafts((current) => ({
                                     ...current,
                                     [handoff.id]: {
@@ -1590,23 +1642,26 @@ function Workbench({
                                         ? patch.afterMarkdown
                                         : null,
                                     },
-                                  }))
-                                }
+                                  }));
+                                }}
                               />
                               Apply to {sectionTitle}
                             </span>
                             <textarea
-                              disabled={!enabled || handoff.status !== 'staged'}
+                              disabled={
+                                documentMutationBusy || !enabled || handoff.status !== 'staged'
+                              }
                               value={configured ?? patch.afterMarkdown}
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                if (documentMutationRef.current) return;
                                 setHandoffDrafts((current) => ({
                                   ...current,
                                   [handoff.id]: {
                                     ...current[handoff.id],
                                     [patch.sectionId]: event.target.value,
                                   },
-                                }))
-                              }
+                                }));
+                              }}
                             />
                           </label>
                         );
@@ -1641,7 +1696,9 @@ function Workbench({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() =>
+                      disabled={documentMutationBusy}
+                      onClick={() => {
+                        if (documentMutationRef.current) return;
                         void api
                           .dismissChatGptHandoff(project.id, handoff.id)
                           .then(() =>
@@ -1649,8 +1706,8 @@ function Workbench({
                               current.filter((item) => item.id !== handoff.id),
                             ),
                           )
-                          .catch((reason: unknown) => setError(messageFrom(reason)))
-                      }
+                          .catch((reason: unknown) => setError(messageFrom(reason)));
+                      }}
                     >
                       Delete handoff
                     </Button>
@@ -1722,19 +1779,31 @@ function Workbench({
                         variant="ghost"
                         size="sm"
                         onClick={() => {
+                          if (documentMutationRef.current) return;
                           setAction(run.action);
                           setScope(run.scope);
                           setOutput(run.outputText ?? '');
                           setCitations(run.citations);
-                          setProposalRunId(
-                            run.action !== 'ask' &&
-                              run.appliedRevision === null &&
-                              run.sourceRevision === prd.revision
-                              ? run.id
+                          setProposalContext(
+                            run.action === 'draft' || run.action === 'rewrite'
+                              ? {
+                                  runId:
+                                    run.appliedRevision === null &&
+                                    run.sourceRevision === prd.revision
+                                      ? run.id
+                                      : null,
+                                  sourceRevision: run.sourceRevision,
+                                  action: run.action,
+                                  scope: run.scope,
+                                  provider: run.provider,
+                                  model: run.model,
+                                  appliedRevision: run.appliedRevision,
+                                }
                               : null,
                           );
                           setTab('assist');
                         }}
+                        disabled={documentMutationBusy}
                       >
                         Inspect
                       </Button>

@@ -89,9 +89,9 @@ const citationSchema = z.object({
   sourceId: id.nullable(),
   locationId: id.nullable(),
   chunkId: id.nullable(),
-  sourceName: z.string().max(1024),
-  locator: z.string().max(500),
-  excerpt: z.string().max(100_000),
+  sourceName: z.string().min(1).max(1024),
+  locator: z.string().min(1).max(500),
+  excerpt: z.string().min(1).max(100_000),
   evidenceStatus: z.enum(evidenceStatuses),
   available: z.boolean(),
   unavailabilityReason: z.literal('source_deleted').nullable(),
@@ -680,13 +680,11 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     invalidReferences();
   }
   if (manifest.prd.projectId !== manifest.project.id) invalidReferences();
-  const currentSections = new Set(manifest.prd.sections.map((row) => row.id));
   const sources = new Set(manifest.sources.map((row) => row.id));
+  const sourcesById = new Map(manifest.sources.map((row) => [row.id, row]));
   const sourceHashes = new Map(manifest.sources.map((row) => [row.id, row.hash]));
-  const locations = new Map(manifest.locations.map((row) => [row.id, row.sourceId]));
-  const chunks = new Map(
-    manifest.chunks.map((row) => [row.id, { sourceId: row.sourceId, locationId: row.locationId }]),
-  );
+  const locations = new Map(manifest.locations.map((row) => [row.id, row]));
+  const chunks = new Map(manifest.chunks.map((row) => [row.id, row]));
   const validRevisions = new Set(revisionNumbers);
   const revisionSections = new Map(
     manifest.revisions.map((revision) => [
@@ -698,6 +696,7 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     manifest.revisions.map((revision) => [revision.revision, revision]),
   );
   const runs = new Map(manifest.aiRuns.map((row) => [row.id, row]));
+  const findingsById = new Map(manifest.findings.map((row) => [row.id, row]));
   const citationRuns = new Map(manifest.citations.map((row) => [row.id, row.aiRunId]));
   const citations = new Set(manifest.citations.map((row) => row.id));
   const appliedRevisions = new Set<number>();
@@ -734,6 +733,27 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     appliedRevisions.add(row.appliedRevision);
     return false;
   });
+  const invalidApplicationReason = manifest.revisions.some((revision) => {
+    if (revision.reason.startsWith('AI run ')) {
+      const match = revision.reason.match(
+        /^AI run ([0-9a-f-]{36}) (accepted|revised and accepted)$/i,
+      );
+      const run = match?.[1] ? runs.get(match[1]) : undefined;
+      return !run || run.appliedRevision !== revision.revision;
+    }
+    if (revision.reason.startsWith('Review finding ')) {
+      const match = revision.reason.match(
+        /^Review finding ([0-9a-f-]{36}) (accepted|revised and accepted)$/i,
+      );
+      const finding = match?.[1] ? findingsById.get(match[1]) : undefined;
+      return (
+        !finding ||
+        finding.status !== 'accepted' ||
+        finding.sourceRevision + 1 !== revision.revision
+      );
+    }
+    return false;
+  });
   if (
     manifest.prd.sections.some((row) => row.projectId !== manifest.project.id) ||
     manifest.revisions.some(
@@ -747,21 +767,35 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
       (row) =>
         row.projectId !== manifest.project.id ||
         !sources.has(row.sourceId) ||
-        locations.get(row.locationId) !== row.sourceId ||
+        locations.get(row.locationId)?.sourceId !== row.sourceId ||
         sourceHashes.get(row.sourceId) !== row.documentHash,
     ) ||
     invalidRun ||
+    invalidApplicationReason ||
     manifest.citations.some((row) => {
       const chunk = row.chunkId === null ? undefined : chunks.get(row.chunkId);
-      const linkedSource = row.sourceId === null ? undefined : row.sourceId;
+      const source = row.sourceId === null ? undefined : sourcesById.get(row.sourceId);
+      const location = row.locationId === null ? undefined : locations.get(row.locationId);
       return (
         !runs.has(row.aiRunId) ||
-        (row.available &&
-          (row.sourceId === null || row.locationId === null || row.chunkId === null)) ||
-        (row.sourceId !== null && !sources.has(row.sourceId)) ||
-        (row.locationId !== null && locations.get(row.locationId) !== linkedSource) ||
-        (row.chunkId !== null &&
-          (!chunk || chunk.sourceId !== linkedSource || chunk.locationId !== row.locationId))
+        (row.available
+          ? row.sourceId === null ||
+            row.locationId === null ||
+            row.chunkId === null ||
+            row.unavailabilityReason !== null ||
+            !source ||
+            !location ||
+            !chunk ||
+            location.sourceId !== row.sourceId ||
+            chunk.sourceId !== row.sourceId ||
+            chunk.locationId !== row.locationId ||
+            row.sourceName !== source.name ||
+            row.locator !== location.locator ||
+            row.excerpt !== chunk.content
+          : row.sourceId !== null ||
+            row.locationId !== null ||
+            row.chunkId !== null ||
+            row.unavailabilityReason !== 'source_deleted')
       );
     }) ||
     manifest.findings.some((row) => {
@@ -775,13 +809,11 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
         !validRevisions.has(row.sourceRevision) ||
         row.sourceRevision !== run.sourceRevision ||
         !sourceSection ||
-        !currentSections.has(row.targetSectionId) ||
         row.citationIds.some(
           (citation) => !citations.has(citation) || citationRuns.get(citation) !== row.aiRunId,
         ) ||
         (row.proposedPatch !== null &&
           (row.proposedPatch.sectionId !== row.targetSectionId ||
-            !currentSections.has(row.proposedPatch.sectionId) ||
             row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||
         (row.status === 'accepted' &&
           (!row.proposedPatch ||
