@@ -52,4 +52,6 @@ The trusted-machine command above is the only release source of truth and refuse
 
 The release owner runs the gate locally on available supported platforms. A recorded successful container build and smoke test verifies the Linux container runtime only. It does not verify a Linux desktop package. A recorded native Windows run is required before claiming Windows release verification; configured workflow labels are not execution evidence.
 
+Before public promotion, generate local-only provenance with `npm run provenance`. After explicit approval for the exact SHA and artifacts, regenerate it with `PRD_GENIE_SOURCE_VISIBILITY=public-github PRD_GENIE_PUBLIC_PROMOTION_APPROVED=true npm run provenance`. The generator rejects public visibility unless that approval flag is explicit.
+
 Changing the runner policy is a governance decision. It requires explicit maintainer approval and must not introduce GitHub Actions billing.

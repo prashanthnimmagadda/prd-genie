@@ -45,4 +45,5 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Made evidence deletion serialize with review creation and acceptance.
 - Added durable, path-confined retry for source and project binary cleanup.
 - Initialised fresh container volumes before dropping to the unprivileged application user.
+- Required explicit approval when provenance records public GitHub promotion.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.
