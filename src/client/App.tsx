@@ -278,6 +278,7 @@ function Workbench({
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [documentMutationBusy, setDocumentMutationBusy] = useState(false);
   const [error, setError] = useState('');
   const [offline, setOffline] = useState(!navigator.onLine);
   const [evidenceDetail, setEvidenceDetail] = useState<{
@@ -292,6 +293,7 @@ function Workbench({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const handoffInputRef = useRef<HTMLInputElement | null>(null);
+  const documentMutationRef = useRef(false);
 
   useEffect(() => {
     const onOnline = () => setOffline(false);
@@ -345,14 +347,40 @@ function Workbench({
       ),
     [prd, savedPrd],
   );
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [dirty]);
+
   const selectedSection = prd?.sections.find((section) => section.id === selectedSectionId);
 
+  async function runDocumentMutation<T>(operation: () => Promise<T>): Promise<T | undefined> {
+    if (documentMutationRef.current) return undefined;
+    documentMutationRef.current = true;
+    setDocumentMutationBusy(true);
+    try {
+      return await operation();
+    } finally {
+      documentMutationRef.current = false;
+      setDocumentMutationBusy(false);
+    }
+  }
+
   async function save(reason = 'Manual edit'): Promise<PrdDocument | null> {
-    if (!prd) return null;
+    if (!prd || documentMutationRef.current) return null;
     setSaveBusy(true);
     setError('');
     try {
-      const saved = await api.savePrd(project.id, prd.revision, prd.sections, reason);
+      const saved = await runDocumentMutation(() =>
+        api.savePrd(project.id, prd.revision, prd.sections, reason),
+      );
+      if (!saved) return null;
       setPrd(saved);
       setSavedPrd(saved);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
@@ -432,9 +460,12 @@ function Workbench({
   }
 
   async function applyOutput() {
-    if (!prd || !proposalRunId || !output.trim() || dirty) return;
+    if (!prd || !proposalRunId || !output.trim() || dirty || documentMutationRef.current) return;
     const sourceRevision = prd.revision;
-    const saved = await api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim());
+    const saved = await runDocumentMutation(() =>
+      api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim()),
+    );
+    if (!saved) return;
     setUndoRevision(sourceRevision);
     setPrd(saved);
     setSavedPrd(saved);
@@ -454,17 +485,26 @@ function Workbench({
   }
 
   async function acceptFinding(finding: ReviewFinding) {
-    if (!prd || !finding.proposedPatch || finding.sourceRevision !== prd.revision || dirty) return;
+    if (
+      !prd ||
+      !finding.proposedPatch ||
+      finding.sourceRevision !== prd.revision ||
+      dirty ||
+      documentMutationRef.current
+    )
+      return;
     const sourceRevision = prd.revision;
+    const proposedPatch = finding.proposedPatch;
     const revised = findingDrafts[finding.id];
-    const saved = await api.acceptFinding(
-      project.id,
-      finding.id,
-      sourceRevision,
-      revised === undefined || revised === finding.proposedPatch.afterMarkdown
-        ? undefined
-        : revised,
+    const saved = await runDocumentMutation(() =>
+      api.acceptFinding(
+        project.id,
+        finding.id,
+        sourceRevision,
+        revised === undefined || revised === proposedPatch.afterMarkdown ? undefined : revised,
+      ),
     );
+    if (!saved) return;
     setUndoRevision(sourceRevision);
     setPrd(saved);
     setSavedPrd(saved);
@@ -486,8 +526,11 @@ function Workbench({
   }
 
   async function undoAccepted() {
-    if (!prd || undoRevision === null) return;
-    const restored = await api.restoreRevision(project.id, undoRevision, prd.revision);
+    if (!prd || undoRevision === null || dirty || documentMutationRef.current) return;
+    const restored = await runDocumentMutation(() =>
+      api.restoreRevision(project.id, undoRevision, prd.revision),
+    );
+    if (!restored) return;
     setPrd(restored);
     setSavedPrd(restored);
     setUndoRevision(null);
@@ -561,7 +604,7 @@ function Workbench({
   }
 
   async function applyChatGptHandoff(handoff: ChatGptHandoffSummary) {
-    if (!prd || !handoff.response) return;
+    if (!prd || !handoff.response || dirty || documentMutationRef.current) return;
     const configured = handoffDrafts[handoff.id] ?? {};
     const patches = handoff.response.patches.flatMap((patch) => {
       const revised = configured[patch.sectionId];
@@ -573,7 +616,10 @@ function Workbench({
       return;
     }
     const restoredRevision = prd.revision;
-    const saved = await api.applyChatGptHandoff(project.id, handoff.id, prd.revision, patches);
+    const saved = await runDocumentMutation(() =>
+      api.applyChatGptHandoff(project.id, handoff.id, prd.revision, patches),
+    );
+    if (!saved) return;
     setUndoRevision(restoredRevision);
     setPrd(saved);
     setSavedPrd(saved);
@@ -630,7 +676,7 @@ function Workbench({
             <KeyRound aria-hidden="true" />
             <span className="label-wide">{project.selectedModel ?? 'Configure model'}</span>
           </Button>
-          <Button disabled={!dirty || saveBusy} onClick={() => void save()}>
+          <Button disabled={!dirty || saveBusy || documentMutationBusy} onClick={() => void save()}>
             <Save aria-hidden="true" />
             <span className="label-wide">{saveBusy ? 'Saving' : 'Save'}</span>
           </Button>
@@ -668,9 +714,18 @@ function Workbench({
               variant="ghost"
               size="icon-sm"
               aria-label="Create project"
+              disabled={documentMutationBusy}
               onClick={() => {
+                if (documentMutationRef.current) return;
+                if (dirty && !window.confirm('Discard unsaved changes and create a project?')) {
+                  return;
+                }
                 const name = window.prompt('Project name');
-                if (name?.trim()) void onProjectCreate(name.trim());
+                if (name?.trim()) {
+                  void runDocumentMutation(() => onProjectCreate(name.trim())).catch(
+                    (reason: unknown) => setError(messageFrom(reason)),
+                  );
+                }
               }}
             >
               <Plus aria-hidden="true" />
@@ -680,7 +735,9 @@ function Workbench({
             <button
               key={item.id}
               className={item.id === project.id ? 'rail-item selected' : 'rail-item'}
+              disabled={documentMutationBusy}
               onClick={() => {
+                if (documentMutationRef.current) return;
                 if (!dirty || window.confirm('Discard unsaved changes and switch projects?')) {
                   onProjectSelect(item.id);
                   setRailOpen(false);
@@ -691,7 +748,12 @@ function Workbench({
               <span>{item.name}</span>
             </button>
           ))}
-          <Button variant="ghost" size="sm" onClick={() => archiveInputRef.current?.click()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={documentMutationBusy}
+            onClick={() => archiveInputRef.current?.click()}
+          >
             <Upload aria-hidden="true" />
             Restore archive
           </Button>
@@ -701,10 +763,15 @@ function Workbench({
             type="file"
             accept=".prdgenie.zip"
             aria-label="Restore PRD Genie project archive"
+            disabled={documentMutationBusy}
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) {
-                void onProjectImport(file).catch((reason: unknown) =>
+              if (
+                file &&
+                !documentMutationRef.current &&
+                (!dirty || window.confirm('Discard unsaved changes and restore this archive?'))
+              ) {
+                void runDocumentMutation(() => onProjectImport(file)).catch((reason: unknown) =>
                   setError(messageFrom(reason)),
                 );
               }
@@ -812,21 +879,31 @@ function Workbench({
           )}
         </section>
         <section className="project-lifecycle" aria-label="Project data">
-          <a href={`/api/projects/${project.id}/export?format=archive`}>
+          <a
+            href={`/api/projects/${project.id}/export?format=archive`}
+            aria-disabled={documentMutationBusy}
+            onClick={(event) => {
+              if (documentMutationBusy) event.preventDefault();
+            }}
+          >
             <Download aria-hidden="true" />
             Export archive
           </a>
           <Button
             variant="ghost"
             size="sm"
+            disabled={documentMutationBusy}
             onClick={() => {
+              if (documentMutationRef.current) return;
               if (
                 !window.confirm(
-                  `Delete ${project.name}? Export an archive first if you may need this project later.`,
+                  dirty
+                    ? `Delete ${project.name} and discard unsaved changes? Export an archive first if you may need this project later.`
+                    : `Delete ${project.name}? Export an archive first if you may need this project later.`,
                 )
               )
                 return;
-              void onProjectDelete(project.id).catch((reason: unknown) =>
+              void runDocumentMutation(() => onProjectDelete(project.id)).catch((reason: unknown) =>
                 setError(messageFrom(reason)),
               );
             }}
@@ -841,7 +918,12 @@ function Workbench({
         {undoRevision !== null && (
           <div className="undo-banner" role="status">
             <span>A proposal changed the current revision.</span>
-            <Button variant="ghost" size="sm" onClick={() => void undoAccepted()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={dirty || documentMutationBusy}
+              onClick={() => void undoAccepted()}
+            >
               <RotateCcw aria-hidden="true" />
               Undo
             </Button>
@@ -877,9 +959,11 @@ function Workbench({
                 <span className="section-number">{String(index + 1).padStart(2, '0')}</span>
                 <input
                   aria-label="Section title"
+                  disabled={documentMutationBusy}
                   value={section.title}
                   onFocus={() => setSelectedSectionId(section.id)}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    if (documentMutationRef.current) return;
                     setPrd((current) =>
                       current
                         ? {
@@ -891,16 +975,18 @@ function Workbench({
                             ),
                           }
                         : current,
-                    )
-                  }
+                    );
+                  }}
                 />
                 <div className="section-controls">
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Move ${section.title} up`}
-                    disabled={index === 0}
-                    onClick={() => setPrd(reorder(prd, index, index - 1))}
+                    disabled={documentMutationBusy || index === 0}
+                    onClick={() => {
+                      if (!documentMutationRef.current) setPrd(reorder(prd, index, index - 1));
+                    }}
                   >
                     <ArrowUp aria-hidden="true" />
                   </Button>
@@ -908,8 +994,10 @@ function Workbench({
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Move ${section.title} down`}
-                    disabled={index === prd.sections.length - 1}
-                    onClick={() => setPrd(reorder(prd, index, index + 1))}
+                    disabled={documentMutationBusy || index === prd.sections.length - 1}
+                    onClick={() => {
+                      if (!documentMutationRef.current) setPrd(reorder(prd, index, index + 1));
+                    }}
                   >
                     <ArrowDown aria-hidden="true" />
                   </Button>
@@ -917,8 +1005,9 @@ function Workbench({
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Remove ${section.title}`}
-                    disabled={prd.sections.length === 1}
+                    disabled={documentMutationBusy || prd.sections.length === 1}
                     onClick={() => {
+                      if (documentMutationRef.current) return;
                       if (!window.confirm(`Remove the ${section.title} section?`)) return;
                       setPrd({
                         ...prd,
@@ -935,9 +1024,11 @@ function Workbench({
               <SectionEditor
                 sectionId={section.id}
                 value={section.body}
+                disabled={documentMutationBusy}
                 onFocus={() => setSelectedSectionId(section.id)}
                 onSelectionChange={setSelection}
-                onChange={(body) =>
+                onChange={(body) => {
+                  if (documentMutationRef.current) return;
                   setPrd((current) =>
                     current
                       ? {
@@ -947,15 +1038,17 @@ function Workbench({
                           ),
                         }
                       : current,
-                  )
-                }
+                  );
+                }}
               />
             </section>
           ))}
           <Button
             variant="outline"
             className="add-section"
-            onClick={() =>
+            disabled={documentMutationBusy}
+            onClick={() => {
+              if (documentMutationRef.current) return;
               setPrd({
                 ...prd,
                 sections: [
@@ -969,8 +1062,8 @@ function Workbench({
                     updatedAt: new Date().toISOString(),
                   },
                 ],
-              })
-            }
+              });
+            }}
           >
             <Plus aria-hidden="true" />
             Add section
@@ -1097,7 +1190,7 @@ function Workbench({
                           <MessageAction
                             label={`Apply to ${scope}`}
                             tooltip="Creates a revision bound to this AI run"
-                            disabled={!proposalRunId || busy || dirty}
+                            disabled={!proposalRunId || busy || dirty || documentMutationBusy}
                             onClick={() =>
                               void applyOutput().catch((reason: unknown) =>
                                 setError(messageFrom(reason)),
@@ -1249,7 +1342,10 @@ function Workbench({
                       <Button
                         size="sm"
                         disabled={
-                          !finding.proposedPatch || finding.sourceRevision !== prd.revision || dirty
+                          !finding.proposedPatch ||
+                          finding.sourceRevision !== prd.revision ||
+                          dirty ||
+                          documentMutationBusy
                         }
                         onClick={() =>
                           void acceptFinding(finding).catch((reason: unknown) =>
@@ -1485,7 +1581,9 @@ function Workbench({
                     {handoff.status === 'staged' && (
                       <Button
                         size="sm"
-                        disabled={handoff.sourceRevision !== prd.revision || dirty}
+                        disabled={
+                          handoff.sourceRevision !== prd.revision || dirty || documentMutationBusy
+                        }
                         onClick={() =>
                           void applyChatGptHandoff(handoff).catch((reason: unknown) =>
                             setError(messageFrom(reason)),
@@ -1528,20 +1626,22 @@ function Workbench({
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={revision.revision === prd.revision || dirty}
+                    disabled={revision.revision === prd.revision || dirty || documentMutationBusy}
                     onClick={() => {
                       if (
                         !window.confirm(`Restore revision ${revision.revision} as a new revision?`)
                       )
                         return;
-                      void api
-                        .restoreRevision(project.id, revision.revision, prd.revision)
-                        .then(async (restored) => {
-                          setPrd(restored);
-                          setSavedPrd(restored);
-                          setRevisions((await api.revisions(project.id)).revisions);
-                        })
-                        .catch((reason: unknown) => setError(messageFrom(reason)));
+                      void runDocumentMutation(async () => {
+                        const restored = await api.restoreRevision(
+                          project.id,
+                          revision.revision,
+                          prd.revision,
+                        );
+                        setPrd(restored);
+                        setSavedPrd(restored);
+                        setRevisions((await api.revisions(project.id)).revisions);
+                      }).catch((reason: unknown) => setError(messageFrom(reason)));
                     }}
                   >
                     <RotateCcw aria-hidden="true" />

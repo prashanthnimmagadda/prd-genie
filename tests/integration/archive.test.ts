@@ -106,6 +106,61 @@ describe('portable project archive restore', () => {
     expect(snapshots.some((row) => row.snapshotJson.includes(removed.title))).toBe(true);
   });
 
+  it('round trips retained citation evidence after its source is deleted', async () => {
+    const project = repository.createProject('Deleted source history', '');
+    const prd = repository.getPrd(project.id);
+    const { sourceId, locationId, chunkId } = addSource(
+      project.id,
+      'temporary-evidence.txt',
+      'Synthetic evidence retained for audit history.',
+    );
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    const citationId = repository.storeCitation({
+      aiRunId: runId,
+      sourceId,
+      locationId,
+      chunkId,
+      sourceName: 'temporary-evidence.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Synthetic evidence retained for audit history.',
+      evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
+    });
+    repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: prd.sections[0]!.id,
+      rationale: 'Keep a durable evidence snapshot.',
+      citationIds: [citationId],
+      proposedPatch: null,
+      sourceRevision: 0,
+    });
+    repository.completeAiRun(runId, undefined, 'Synthetic review complete.');
+    repository.deleteSource(project.id, sourceId);
+
+    const archive = await exporter.create(project.id, 'archive');
+    const restored = await exporter.restoreArchive(archive.body);
+    expect(repository.listSources(restored.id)).toEqual([]);
+    expect(repository.listFindings(restored.id)[0]?.citations).toEqual([
+      expect.objectContaining({
+        sourceName: 'temporary-evidence.txt',
+        excerpt: 'Synthetic evidence retained for audit history.',
+        available: false,
+        unavailabilityReason: 'source_deleted',
+      }),
+    ]);
+  });
+
   it('rejects unknown archive files and inconsistent chunk linkages', async () => {
     const project = repository.createProject('Strict archive', '');
     addSource(project.id, 'first.txt', 'First synthetic source.');
@@ -157,6 +212,219 @@ describe('portable project archive restore', () => {
     divergent.file('project.json', JSON.stringify(divergentManifest));
     await expect(
       exporter.restoreArchive(await divergent.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
+  it('rejects AI runs and findings that reference impossible revisions', async () => {
+    const project = repository.createProject('Revision-bound archive', '');
+    const prd = repository.getPrd(project.id);
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    repository.completeAiRun(runId, undefined, 'Synthetic review summary.');
+    repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: prd.sections[0]!.id,
+      rationale: 'The synthetic claim needs evidence.',
+      citationIds: [],
+      proposedPatch: {
+        sectionId: prd.sections[0]!.id,
+        beforeMarkdown: prd.sections[0]!.body,
+        afterMarkdown: 'A revised synthetic claim.',
+      },
+      sourceRevision: 0,
+    });
+    const archive = await exporter.create(project.id, 'archive');
+
+    const impossibleRun = await JSZip.loadAsync(archive.body);
+    const runManifest = JSON.parse(await impossibleRun.file('project.json')!.async('string')) as {
+      aiRuns: Array<{ sourceRevision: number; appliedRevision: number | null }>;
+    };
+    runManifest.aiRuns[0]!.sourceRevision = 999;
+    impossibleRun.file('project.json', JSON.stringify(runManifest));
+    await expect(
+      exporter.restoreArchive(await impossibleRun.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const impossibleFinding = await JSZip.loadAsync(archive.body);
+    const findingManifest = JSON.parse(
+      await impossibleFinding.file('project.json')!.async('string'),
+    ) as { findings: Array<{ sourceRevision: number }> };
+    findingManifest.findings[0]!.sourceRevision = 999;
+    impossibleFinding.file('project.json', JSON.stringify(findingManifest));
+    await expect(
+      exporter.restoreArchive(await impossibleFinding.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const impossibleApplication = await JSZip.loadAsync(archive.body);
+    const applicationManifest = JSON.parse(
+      await impossibleApplication.file('project.json')!.async('string'),
+    ) as { aiRuns: Array<{ appliedRevision: number | null }> };
+    applicationManifest.aiRuns[0]!.appliedRevision = 0;
+    impossibleApplication.file('project.json', JSON.stringify(applicationManifest));
+    await expect(
+      exporter.restoreArchive(await impossibleApplication.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const mismatchedPreimage = await JSZip.loadAsync(archive.body);
+    const preimageManifest = JSON.parse(
+      await mismatchedPreimage.file('project.json')!.async('string'),
+    ) as { findings: Array<{ proposedPatch: { beforeMarkdown: string } | null }> };
+    preimageManifest.findings[0]!.proposedPatch!.beforeMarkdown = 'Forged preimage.';
+    mismatchedPreimage.file('project.json', JSON.stringify(preimageManifest));
+    await expect(
+      exporter.restoreArchive(await mismatchedPreimage.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
+  it('round trips an applied rewrite and can restore its restored archive again', async () => {
+    const { archive } = await createAppliedRewriteArchive('Applied rewrite');
+    const restored = await exporter.restoreArchive(archive.body);
+    expect(repository.listAiRuns(restored.id)[0]).toMatchObject({
+      action: 'rewrite',
+      status: 'completed',
+      sourceRevision: 0,
+      appliedRevision: 1,
+    });
+    const reexported = await exporter.create(restored.id, 'archive');
+    const restoredAgain = await exporter.restoreArchive(reexported.body);
+    expect(repository.getPrd(restoredAgain.id).revision).toBe(1);
+    expect(repository.listAiRuns(restoredAgain.id)[0]?.appliedRevision).toBe(1);
+  });
+
+  it('round trips a stale historical finding and rejects a forged earlier source snapshot', async () => {
+    const project = repository.createProject('Historical finding', '');
+    const initial = repository.getPrd(project.id);
+    const addedSection = {
+      id: crypto.randomUUID(),
+      projectId: project.id,
+      title: 'Synthetic later section',
+      body: 'This section was introduced in revision one.',
+      position: initial.sections.length,
+      updatedAt: new Date().toISOString(),
+    };
+    const revisionOne = repository.savePrd(
+      project.id,
+      0,
+      [...initial.sections, addedSection],
+      'Add later section',
+    );
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 1,
+    });
+    repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'clarity',
+      severity: 'info',
+      targetSectionId: addedSection.id,
+      rationale: 'Clarify the synthetic later section.',
+      citationIds: [],
+      proposedPatch: {
+        sectionId: addedSection.id,
+        beforeMarkdown: addedSection.body,
+        afterMarkdown: 'This section was clearly introduced in revision one.',
+      },
+      sourceRevision: 1,
+    });
+    repository.completeAiRun(runId, undefined, 'Synthetic historical review.');
+    repository.savePrd(
+      project.id,
+      revisionOne.revision,
+      revisionOne.sections.map((section, index) =>
+        index === 0 ? { ...section, body: 'A later unrelated manual change.' } : section,
+      ),
+      'Make review historical',
+    );
+    const archive = await exporter.create(project.id, 'archive');
+    const restored = await exporter.restoreArchive(archive.body);
+    const restoredFinding = repository.listFindings(restored.id)[0]!;
+    expect(restoredFinding).toMatchObject({
+      status: 'stale',
+      sourceRevision: 1,
+    });
+    expect(restoredFinding.targetSectionId).not.toBe(addedSection.id);
+
+    const forged = await JSZip.loadAsync(archive.body);
+    const manifest = JSON.parse(await forged.file('project.json')!.async('string')) as {
+      aiRuns: Array<{ sourceRevision: number }>;
+      findings: Array<{ sourceRevision: number }>;
+    };
+    manifest.aiRuns[0]!.sourceRevision = 0;
+    manifest.findings[0]!.sourceRevision = 0;
+    forged.file('project.json', JSON.stringify(manifest));
+    await expect(
+      exporter.restoreArchive(await forged.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
+  it('rejects forged applied runs, duplicate applications, and invalid scoped targets', async () => {
+    const { archive } = await createAppliedRewriteArchive('Applied validation');
+
+    for (const mutation of [
+      (run: Record<string, unknown>) => {
+        run.status = 'failed';
+      },
+      (run: Record<string, unknown>) => {
+        run.action = 'ask';
+      },
+      (run: Record<string, unknown>) => {
+        run.outputText = null;
+      },
+    ]) {
+      const zip = await JSZip.loadAsync(archive.body);
+      const manifest = JSON.parse(await zip.file('project.json')!.async('string')) as {
+        aiRuns: Array<Record<string, unknown>>;
+      };
+      mutation(manifest.aiRuns[0]!);
+      zip.file('project.json', JSON.stringify(manifest));
+      await expect(
+        exporter.restoreArchive(await zip.generateAsync({ type: 'nodebuffer' })),
+      ).rejects.toMatchObject({ code: 'invalid_archive' });
+    }
+
+    const duplicate = await JSZip.loadAsync(archive.body);
+    const duplicateManifest = JSON.parse(await duplicate.file('project.json')!.async('string')) as {
+      aiRuns: Array<Record<string, unknown>>;
+    };
+    duplicateManifest.aiRuns.push({ ...duplicateManifest.aiRuns[0], id: crypto.randomUUID() });
+    duplicate.file('project.json', JSON.stringify(duplicateManifest));
+    await expect(
+      exporter.restoreArchive(await duplicate.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const missingTarget = await JSZip.loadAsync(archive.body);
+    const missingTargetManifest = JSON.parse(
+      await missingTarget.file('project.json')!.async('string'),
+    ) as { aiRuns: Array<{ targetSectionId: string | null }> };
+    missingTargetManifest.aiRuns[0]!.targetSectionId = null;
+    missingTarget.file('project.json', JSON.stringify(missingTargetManifest));
+    await expect(
+      exporter.restoreArchive(await missingTarget.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const invalidSelection = await JSZip.loadAsync(archive.body);
+    const selectionManifest = JSON.parse(
+      await invalidSelection.file('project.json')!.async('string'),
+    ) as { aiRuns: Array<{ scope: string; selectionText: string | null }> };
+    selectionManifest.aiRuns[0]!.scope = 'selection';
+    selectionManifest.aiRuns[0]!.selectionText = 'Text absent from the source snapshot.';
+    invalidSelection.file('project.json', JSON.stringify(selectionManifest));
+    await expect(
+      exporter.restoreArchive(await invalidSelection.generateAsync({ type: 'nodebuffer' })),
     ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
@@ -254,7 +522,41 @@ describe('portable project archive restore', () => {
     ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
-  function addSource(projectId: string, name: string, content: string): void {
+  async function createAppliedRewriteArchive(name: string) {
+    const project = repository.createProject(name, '');
+    const prd = repository.getPrd(project.id);
+    const target = prd.sections[0]!;
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: target.id,
+    });
+    repository.completeAiRun(runId, undefined, 'A reviewed synthetic rewrite.');
+    const saved = repository.savePrd(
+      project.id,
+      0,
+      prd.sections.map((section) =>
+        section.id === target.id ? { ...section, body: 'A reviewed synthetic rewrite.' } : section,
+      ),
+      'Apply synthetic rewrite',
+    );
+    repository.markAiRunApplied(project.id, runId, saved.revision);
+    return { project, archive: await exporter.create(project.id, 'archive') };
+  }
+
+  function addSource(
+    projectId: string,
+    name: string,
+    content: string,
+  ): {
+    sourceId: string;
+    locationId: string;
+    chunkId: string;
+  } {
     const binary = Buffer.from(content);
     const hash = createHash('sha256').update(binary).digest('hex');
     const binaryPath = path.join(directory, `${hash}.txt`);
@@ -289,10 +591,11 @@ describe('portable project archive restore', () => {
         endOffset: content.length,
       })
       .run();
+    const chunkId = crypto.randomUUID();
     database.db
       .insert(chunks)
       .values({
-        id: crypto.randomUUID(),
+        id: chunkId,
         projectId,
         sourceId,
         locationId,
@@ -304,5 +607,6 @@ describe('portable project archive restore', () => {
         documentHash: hash,
       })
       .run();
+    return { sourceId, locationId, chunkId };
   }
 });

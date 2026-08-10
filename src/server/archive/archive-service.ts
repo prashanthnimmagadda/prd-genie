@@ -674,19 +674,54 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
   }
   if (manifest.prd.projectId !== manifest.project.id) invalidReferences();
   const currentSections = new Set(manifest.prd.sections.map((row) => row.id));
-  const historicalSections = new Set([
-    ...currentSections,
-    ...manifest.revisions.flatMap((revision) => revision.snapshot.map((section) => section.id)),
-  ]);
   const sources = new Set(manifest.sources.map((row) => row.id));
   const sourceHashes = new Map(manifest.sources.map((row) => [row.id, row.hash]));
   const locations = new Map(manifest.locations.map((row) => [row.id, row.sourceId]));
   const chunks = new Map(
     manifest.chunks.map((row) => [row.id, { sourceId: row.sourceId, locationId: row.locationId }]),
   );
-  const runs = new Set(manifest.aiRuns.map((row) => row.id));
+  const validRevisions = new Set(revisionNumbers);
+  const revisionSections = new Map(
+    manifest.revisions.map((revision) => [
+      revision.revision,
+      new Map(revision.snapshot.map((section) => [section.id, section])),
+    ]),
+  );
+  const runs = new Map(manifest.aiRuns.map((row) => [row.id, row]));
   const citationRuns = new Map(manifest.citations.map((row) => [row.id, row.aiRunId]));
   const citations = new Set(manifest.citations.map((row) => row.id));
+  const appliedRevisions = new Set<number>();
+  const invalidRun = manifest.aiRuns.some((row) => {
+    const sourceSections = revisionSections.get(row.sourceRevision);
+    const target =
+      row.targetSectionId === null ? undefined : sourceSections?.get(row.targetSectionId);
+    if (
+      row.projectId !== manifest.project.id ||
+      !sourceSections ||
+      (row.scope !== 'document' && row.targetSectionId === null) ||
+      (row.targetSectionId !== null && !target) ||
+      (row.scope === 'selection'
+        ? row.selectionText === null ||
+          !row.selectionText.trim() ||
+          !target?.body.includes(row.selectionText)
+        : row.selectionText !== null)
+    ) {
+      return true;
+    }
+    if (row.appliedRevision === null) return false;
+    if (
+      !validRevisions.has(row.appliedRevision) ||
+      row.appliedRevision !== row.sourceRevision + 1 ||
+      row.status !== 'completed' ||
+      (row.action !== 'draft' && row.action !== 'rewrite') ||
+      !row.outputText?.trim() ||
+      appliedRevisions.has(row.appliedRevision)
+    ) {
+      return true;
+    }
+    appliedRevisions.add(row.appliedRevision);
+    return false;
+  });
   if (
     manifest.prd.sections.some((row) => row.projectId !== manifest.project.id) ||
     manifest.revisions.some(
@@ -703,11 +738,7 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
         locations.get(row.locationId) !== row.sourceId ||
         sourceHashes.get(row.sourceId) !== row.documentHash,
     ) ||
-    manifest.aiRuns.some(
-      (row) =>
-        row.projectId !== manifest.project.id ||
-        (row.targetSectionId !== null && !historicalSections.has(row.targetSectionId)),
-    ) ||
+    invalidRun ||
     manifest.citations.some((row) => {
       const chunk = row.chunkId === null ? undefined : chunks.get(row.chunkId);
       const linkedSource = row.sourceId === null ? undefined : row.sourceId;
@@ -721,16 +752,27 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
           (!chunk || chunk.sourceId !== linkedSource || chunk.locationId !== row.locationId))
       );
     }) ||
-    manifest.findings.some(
-      (row) =>
+    manifest.findings.some((row) => {
+      const run = runs.get(row.aiRunId);
+      const sourceSection = revisionSections.get(row.sourceRevision)?.get(row.targetSectionId);
+      return (
         row.projectId !== manifest.project.id ||
-        !runs.has(row.aiRunId) ||
+        !run ||
+        run.action !== 'review' ||
+        !validRevisions.has(row.sourceRevision) ||
+        row.sourceRevision !== run.sourceRevision ||
+        !sourceSection ||
         !currentSections.has(row.targetSectionId) ||
         row.citationIds.some(
           (citation) => !citations.has(citation) || citationRuns.get(citation) !== row.aiRunId,
         ) ||
-        (row.proposedPatch !== null && !currentSections.has(row.proposedPatch.sectionId)),
-    )
+        (row.proposedPatch !== null &&
+          (row.proposedPatch.sectionId !== row.targetSectionId ||
+            !currentSections.has(row.proposedPatch.sectionId) ||
+            row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||
+        (row.status === 'accepted' && !validRevisions.has(row.sourceRevision + 1))
+      );
+    })
   ) {
     invalidReferences();
   }

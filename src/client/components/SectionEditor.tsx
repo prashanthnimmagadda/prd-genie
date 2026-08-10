@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 interface SectionEditorProps {
   sectionId: string;
   value: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
   onFocus: () => void;
   onSelectionChange: (value: string) => void;
@@ -17,6 +18,7 @@ interface SectionEditorProps {
 export function SectionEditor({
   sectionId,
   value,
+  disabled = false,
   onChange,
   onFocus,
   onSelectionChange,
@@ -29,6 +31,7 @@ export function SectionEditor({
     ],
     content: value,
     contentType: 'markdown',
+    editable: !disabled,
     editorProps: {
       attributes: {
         class: 'section-prose',
@@ -51,6 +54,10 @@ export function SectionEditor({
       editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
     }
   }, [editor, value]);
+
+  useLayoutEffect(() => {
+    editor?.setEditable(!disabled, false);
+  }, [disabled, editor]);
 
   if (!editor) return <div className="editor-loading" aria-label="Loading editor" />;
 
@@ -92,6 +99,7 @@ export function SectionEditor({
             size="icon-sm"
             aria-label={label}
             aria-pressed={active}
+            disabled={disabled}
             onClick={action}
           >
             <Icon aria-hidden="true" />
@@ -103,7 +111,7 @@ export function SectionEditor({
           variant="ghost"
           size="icon-sm"
           aria-label="Undo editor change"
-          disabled={!editor.can().undo()}
+          disabled={disabled || !editor.can().undo()}
           onClick={() => editor.chain().focus().undo().run()}
         >
           <Undo2 aria-hidden="true" />
@@ -113,7 +121,7 @@ export function SectionEditor({
           variant="ghost"
           size="icon-sm"
           aria-label="Redo editor change"
-          disabled={!editor.can().redo()}
+          disabled={disabled || !editor.can().redo()}
           onClick={() => editor.chain().focus().redo().run()}
         >
           <Redo2 aria-hidden="true" />

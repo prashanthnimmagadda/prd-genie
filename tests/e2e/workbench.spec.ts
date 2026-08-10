@@ -52,7 +52,13 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   const created = await request.post('/api/projects', {
     data: { name: projectName, description: 'Synthetic end-to-end fixture' },
   });
-  expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
+  const project = (await created.json()) as { id: string };
+  expect(created.ok(), `${created.status()} ${JSON.stringify(project)}`).toBe(true);
+  const alternateName = `Alternate project ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const alternate = await request.post('/api/projects', {
+    data: { name: alternateName, description: 'Synthetic switch target' },
+  });
+  expect(alternate.ok(), `${alternate.status()} ${await alternate.text()}`).toBe(true);
 
   await page.goto('/');
   await page.getByRole('button', { name: projectName, exact: true }).click();
@@ -84,13 +90,75 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
   await page.getByLabel('Section content').first().fill('Unsaved local edit must be preserved.');
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeDisabled();
-  await page.getByLabel('Section content').first().fill('');
+  await page.getByLabel('Undo editor change').first().click();
   await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  let releaseApply!: () => void;
+  const heldApply = new Promise<void>((resolve) => {
+    releaseApply = resolve;
+  });
+  await page.route('**/api/projects/*/ai-runs/*/apply', async (route) => {
+    await heldApply;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Apply to section' }).click();
+  await expect(page.getByLabel('Section content').first()).toHaveAttribute(
+    'contenteditable',
+    'false',
+  );
+  await expect(page.getByLabel('Section title').first()).toBeDisabled();
+  releaseApply();
   await expect(page.getByRole('status')).toContainText('proposal changed');
+  await page.unroute('**/api/projects/*/ai-runs/*/apply');
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Product managers lose unsaved PRD work',
   );
+  const persisted = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
+    sections: Array<{ body: string }>;
+  };
+  const appliedBody = persisted.sections[0]!.body;
+  await page
+    .getByLabel('Section content')
+    .first()
+    .fill(`${appliedBody}\n\nUnsaved local work must survive revision controls.`);
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+  expect(
+    await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      return window.dispatchEvent(event);
+    }),
+  ).toBe(false);
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('confirm');
+    void dialog.dismiss();
+  });
+  await page.getByLabel('Create project').click();
+  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('confirm');
+    expect(dialog.message().toLowerCase()).toContain('discard unsaved changes');
+    void dialog.dismiss();
+  });
+  await page.getByRole('button', { name: alternateName, exact: true }).click();
+  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('confirm');
+    void dialog.dismiss();
+  });
+  await page.getByLabel('Restore PRD Genie project archive').setInputFiles({
+    name: 'cancelled.prdgenie.zip',
+    mimeType: 'application/zip',
+    buffer: Buffer.from('not imported'),
+  });
+  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('confirm');
+    expect(dialog.message().toLowerCase()).toContain('discard unsaved changes');
+    void dialog.dismiss();
+  });
+  await page.getByRole('button', { name: 'Delete project' }).click();
+  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByLabel('Section content').first()).not.toContainText(
     'Product managers lose unsaved PRD work',
@@ -102,7 +170,15 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByText('Inspect proposed diff').click();
   await page.getByLabel('Section content').first().fill('Unsaved review edit must be preserved.');
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
-  await page.getByLabel('Section content').first().fill('');
+  const unloadDialog = page.waitForEvent('dialog');
+  const reload = page.reload();
+  const dialog = await unloadDialog;
+  expect(dialog.type()).toBe('beforeunload');
+  await dialog.accept();
+  await reload;
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByRole('tab', { name: 'review' }).click();
+  await page.getByText('Inspect proposed diff').click();
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Accept', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('proposal changed');
