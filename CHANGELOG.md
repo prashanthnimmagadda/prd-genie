@@ -33,7 +33,10 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Blocked DNS-rebinding hosts and non-loopback browser origins at the server boundary.
 - Removed project source text from FTS and prevented late embedding writes after deletion.
 - Protected unsaved editor changes across AI acceptance, undo, project changes, archive restore, and page reload.
+- Limited proposal undo to the immediately applied revision and blocked revision-bound work during document mutations.
 - Limited section-scoped provider prompts to the selected section metadata.
 - Made ChatGPT handoff deletion remove its retained request and response payloads.
 - Rejected portable archives with invalid typed state, divergent snapshots, or impossible AI revision provenance.
+- Bound restored AI and review applications to their exact revision reason and resulting snapshot.
+- Rejected duplicate section identities in editor saves and historical archive snapshots.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.

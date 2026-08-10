@@ -178,6 +178,10 @@ export class Repository {
         'The PRD changed since this edit began. Refresh before applying it.',
       );
     }
+    const sectionIds = new Set(updatedSections.map((section) => section.id));
+    if (sectionIds.size !== updatedSections.length) {
+      throw new ApiError(400, 'duplicate_section', 'Each section needs a unique ID.');
+    }
     const existingIds = new Set(current.sections.map((section) => section.id));
     for (const section of updatedSections) {
       if (existingIds.has(section.id)) continue;
@@ -192,9 +196,12 @@ export class Repository {
     if (positions.size !== updatedSections.length) {
       throw new ApiError(400, 'duplicate_position', 'Each section needs a unique position.');
     }
+    if (updatedSections.some((_, position) => !positions.has(position))) {
+      throw new ApiError(400, 'invalid_position', 'Section positions must be continuous.');
+    }
     const timestamp = now();
     const nextRevision = expectedRevision + 1;
-    const snapshot = updatedSections
+    const snapshot = [...updatedSections]
       .sort((left, right) => left.position - right.position)
       .map((section) => ({ ...section, projectId, updatedAt: timestamp }));
     this.database.sqlite.transaction(() => {

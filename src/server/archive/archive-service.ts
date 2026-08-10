@@ -16,6 +16,7 @@ import { ApiError } from '../../shared/api.js';
 import { config } from '../config.js';
 import type { AppDatabase } from '../db/client.js';
 import type { Repository } from '../db/repository.js';
+import { parseDocumentProposal } from '../providers/proposal-service.js';
 
 const id = z.string().uuid();
 const timestamp = z.string().datetime();
@@ -517,7 +518,7 @@ export class ArchiveService {
             crypto.randomUUID(),
             projectId,
             revision.revision,
-            revision.reason,
+            remapRevisionReason(revision.reason, runIds, findingIds),
             JSON.stringify(
               revision.snapshot.map((section) => ({
                 ...section,
@@ -546,7 +547,7 @@ export class ArchiveService {
             run.sourceRevision,
             run.targetSectionId ? sectionIds.get(run.targetSectionId) : null,
             run.selectionText,
-            run.outputText,
+            remapRunOutput(run, sectionIds),
             run.appliedRevision,
             run.status,
             run.errorCode,
@@ -662,6 +663,12 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     manifest.findings.map((row) => row.id),
     'finding',
   );
+  for (const revision of manifest.revisions) {
+    unique(
+      revision.snapshot.map((section) => section.id),
+      `revision ${revision.revision} section`,
+    );
+  }
   const revisionNumbers = manifest.revisions.map((row) => row.revision);
   if (
     revisionNumbers.length !== manifest.prd.revision + 1 ||
@@ -687,6 +694,9 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
       new Map(revision.snapshot.map((section) => [section.id, section])),
     ]),
   );
+  const revisionsByNumber = new Map(
+    manifest.revisions.map((revision) => [revision.revision, revision]),
+  );
   const runs = new Map(manifest.aiRuns.map((row) => [row.id, row]));
   const citationRuns = new Map(manifest.citations.map((row) => [row.id, row.aiRunId]));
   const citations = new Set(manifest.citations.map((row) => row.id));
@@ -709,13 +719,15 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
       return true;
     }
     if (row.appliedRevision === null) return false;
+    const appliedRevision = revisionsByNumber.get(row.appliedRevision);
     if (
-      !validRevisions.has(row.appliedRevision) ||
+      !appliedRevision ||
       row.appliedRevision !== row.sourceRevision + 1 ||
       row.status !== 'completed' ||
       (row.action !== 'draft' && row.action !== 'rewrite') ||
       !row.outputText?.trim() ||
-      appliedRevisions.has(row.appliedRevision)
+      appliedRevisions.has(row.appliedRevision) ||
+      !validAiApplication(row, revisionsByNumber.get(row.sourceRevision)!.snapshot, appliedRevision)
     ) {
       return true;
     }
@@ -755,6 +767,7 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     manifest.findings.some((row) => {
       const run = runs.get(row.aiRunId);
       const sourceSection = revisionSections.get(row.sourceRevision)?.get(row.targetSectionId);
+      const acceptedRevision = revisionsByNumber.get(row.sourceRevision + 1);
       return (
         row.projectId !== manifest.project.id ||
         !run ||
@@ -770,12 +783,153 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
           (row.proposedPatch.sectionId !== row.targetSectionId ||
             !currentSections.has(row.proposedPatch.sectionId) ||
             row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||
-        (row.status === 'accepted' && !validRevisions.has(row.sourceRevision + 1))
+        (row.status === 'accepted' &&
+          (!row.proposedPatch ||
+            !acceptedRevision ||
+            !validFindingApplication(
+              row,
+              revisionsByNumber.get(row.sourceRevision)!.snapshot,
+              acceptedRevision,
+            )))
       );
     })
   ) {
     invalidReferences();
   }
+}
+
+function validAiApplication(
+  run: ArchiveManifest['aiRuns'][number],
+  source: ArchiveManifest['prd']['sections'],
+  applied: ArchiveManifest['revisions'][number],
+): boolean {
+  const acceptedReason = `AI run ${run.id} accepted`;
+  const revisedReason = `AI run ${run.id} revised and accepted`;
+  const revised = applied.reason === revisedReason;
+  if (applied.reason !== acceptedReason && !revised) return false;
+  if (!sameSectionShape(source, applied.snapshot)) return false;
+  if (run.scope === 'document') {
+    try {
+      const expected = parseDocumentProposal(run.outputText!, source);
+      return revised || sameSectionBodies(expected, applied.snapshot);
+    } catch {
+      return false;
+    }
+  }
+  if (!run.targetSectionId) return false;
+  const sourceTarget = source.find((section) => section.id === run.targetSectionId);
+  const appliedTarget = applied.snapshot.find((section) => section.id === run.targetSectionId);
+  if (
+    !sourceTarget ||
+    !appliedTarget ||
+    !sameUntargetedBodies(source, applied.snapshot, run.targetSectionId)
+  ) {
+    return false;
+  }
+  if (run.scope === 'section') {
+    return revised || appliedTarget.body === run.outputText;
+  }
+  if (!run.selectionText) return false;
+  const first = sourceTarget.body.indexOf(run.selectionText);
+  if (first < 0 || first !== sourceTarget.body.lastIndexOf(run.selectionText)) return false;
+  const prefix = sourceTarget.body.slice(0, first);
+  const suffix = sourceTarget.body.slice(first + run.selectionText.length);
+  return revised
+    ? appliedTarget.body.startsWith(prefix) && appliedTarget.body.endsWith(suffix)
+    : appliedTarget.body === `${prefix}${run.outputText!}${suffix}`;
+}
+
+function validFindingApplication(
+  finding: ArchiveManifest['findings'][number],
+  source: ArchiveManifest['prd']['sections'],
+  applied: ArchiveManifest['revisions'][number],
+): boolean {
+  const acceptedReason = `Review finding ${finding.id} accepted`;
+  const revisedReason = `Review finding ${finding.id} revised and accepted`;
+  const revised = applied.reason === revisedReason;
+  if (applied.reason !== acceptedReason && !revised) return false;
+  if (
+    !sameSectionShape(source, applied.snapshot) ||
+    !sameUntargetedBodies(source, applied.snapshot, finding.targetSectionId)
+  ) {
+    return false;
+  }
+  if (revised) return true;
+  return (
+    applied.snapshot.find((section) => section.id === finding.targetSectionId)?.body ===
+    finding.proposedPatch?.afterMarkdown
+  );
+}
+
+function sameSectionShape(
+  left: ArchiveManifest['prd']['sections'],
+  right: ArchiveManifest['prd']['sections'],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((section, index) => {
+      const candidate = right[index];
+      return (
+        candidate !== undefined &&
+        section.id === candidate.id &&
+        section.projectId === candidate.projectId &&
+        section.title === candidate.title &&
+        section.position === candidate.position
+      );
+    })
+  );
+}
+
+function sameSectionBodies(
+  left: ArchiveManifest['prd']['sections'],
+  right: ArchiveManifest['prd']['sections'],
+): boolean {
+  return (
+    sameSectionShape(left, right) &&
+    left.every((section, index) => section.body === right[index]!.body)
+  );
+}
+
+function sameUntargetedBodies(
+  left: ArchiveManifest['prd']['sections'],
+  right: ArchiveManifest['prd']['sections'],
+  targetSectionId: string,
+): boolean {
+  return left.every(
+    (section, index) => section.id === targetSectionId || section.body === right[index]?.body,
+  );
+}
+
+function remapRevisionReason(
+  reason: string,
+  runIds: Map<string, string>,
+  findingIds: Map<string, string>,
+): string {
+  const run = reason.match(/^AI run ([0-9a-f-]{36}) (accepted|revised and accepted)$/i);
+  if (run?.[1]) {
+    const mapped = runIds.get(run[1]);
+    if (mapped) return `AI run ${mapped} ${run[2]}`;
+  }
+  const finding = reason.match(/^Review finding ([0-9a-f-]{36}) (accepted|revised and accepted)$/i);
+  if (finding?.[1]) {
+    const mapped = findingIds.get(finding[1]);
+    if (mapped) return `Review finding ${mapped} ${finding[2]}`;
+  }
+  return reason;
+}
+
+function remapRunOutput(
+  run: ArchiveManifest['aiRuns'][number],
+  sectionIds: Map<string, string>,
+): string | null {
+  if (run.scope !== 'document' || !run.outputText) return run.outputText;
+  return run.outputText.replace(
+    /(<!--\s*section:)([0-9a-f-]{36})(\s*-->)/gi,
+    (marker, prefix: string, sectionId: string, suffix: string) => {
+      const mapped = sectionIds.get(sectionId);
+      return mapped ? `${prefix}${mapped}${suffix}` : marker;
+    },
+  );
 }
 
 function validSectionOrder(sections: ArchiveManifest['prd']['sections']): boolean {

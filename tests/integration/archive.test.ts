@@ -104,6 +104,19 @@ describe('portable project archive restore', () => {
       .prepare('SELECT snapshot_json AS snapshotJson FROM revisions WHERE project_id = ?')
       .all(restored.id) as Array<{ snapshotJson: string }>;
     expect(snapshots.some((row) => row.snapshotJson.includes(removed.title))).toBe(true);
+
+    const duplicateHistoricalSection = await JSZip.loadAsync(archive.body);
+    const duplicateManifest = JSON.parse(
+      await duplicateHistoricalSection.file('project.json')!.async('string'),
+    ) as { revisions: Array<{ revision: number; snapshot: Array<{ position: number }> }> };
+    const historical = duplicateManifest.revisions.find((revision) => revision.revision === 0)!;
+    historical.snapshot.push({ ...historical.snapshot[0]!, position: historical.snapshot.length });
+    duplicateHistoricalSection.file('project.json', JSON.stringify(duplicateManifest));
+    await expect(
+      exporter.restoreArchive(
+        await duplicateHistoricalSection.generateAsync({ type: 'nodebuffer' }),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
   it('round trips retained citation evidence after its source is deleted', async () => {
@@ -298,6 +311,52 @@ describe('portable project archive restore', () => {
     const restoredAgain = await exporter.restoreArchive(reexported.body);
     expect(repository.getPrd(restoredAgain.id).revision).toBe(1);
     expect(repository.listAiRuns(restoredAgain.id)[0]?.appliedRevision).toBe(1);
+
+    const revised = await createAppliedRewriteArchive('Revised applied rewrite', true);
+    const revisedRestored = await exporter.restoreArchive(revised.archive.body);
+    expect(repository.getPrd(revisedRestored.id).sections[0]?.body).toBe(
+      'A user-revised synthetic rewrite.',
+    );
+  });
+
+  it('remaps document proposal markers across repeated archive restores', async () => {
+    const project = repository.createProject('Document marker remap', '');
+    const prd = repository.getPrd(project.id);
+    const output = prd.sections
+      .map(
+        (section, index) =>
+          `<!-- section:${section.id} -->\n## ${section.title}\nRewritten document body ${index + 1}.`,
+      )
+      .join('\n\n');
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    repository.completeAiRun(runId, undefined, output);
+    const saved = repository.savePrd(
+      project.id,
+      0,
+      prd.sections.map((section, index) => ({
+        ...section,
+        body: `Rewritten document body ${index + 1}.`,
+      })),
+      `AI run ${runId} accepted`,
+    );
+    repository.markAiRunApplied(project.id, runId, saved.revision);
+
+    const firstRestore = await exporter.restoreArchive(
+      (await exporter.create(project.id, 'archive')).body,
+    );
+    const secondRestore = await exporter.restoreArchive(
+      (await exporter.create(firstRestore.id, 'archive')).body,
+    );
+    expect(repository.getPrd(secondRestore.id).sections[0]?.body).toBe(
+      'Rewritten document body 1.',
+    );
   });
 
   it('round trips a stale historical finding and rejects a forged earlier source snapshot', async () => {
@@ -371,6 +430,57 @@ describe('portable project archive restore', () => {
     ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
+  it('round trips an accepted finding and rejects unrelated application provenance', async () => {
+    const project = repository.createProject('Accepted finding', '');
+    const prd = repository.getPrd(project.id);
+    const target = prd.sections[0]!;
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    const finding = repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'clarity',
+      severity: 'warning',
+      targetSectionId: target.id,
+      rationale: 'Apply a traceable synthetic review patch.',
+      citationIds: [],
+      proposedPatch: {
+        sectionId: target.id,
+        beforeMarkdown: target.body,
+        afterMarkdown: 'A traceable synthetic review patch.',
+      },
+      sourceRevision: 0,
+    });
+    repository.completeAiRun(runId, undefined, 'Synthetic review complete.');
+    repository.acceptFinding(project.id, finding.id, 0);
+    const archive = await exporter.create(project.id, 'archive');
+    const restored = await exporter.restoreArchive(archive.body);
+    expect(repository.listFindings(restored.id)[0]?.status).toBe('accepted');
+    expect(repository.getPrd(restored.id).sections[0]?.body).toBe(
+      'A traceable synthetic review patch.',
+    );
+    const restoredAgain = await exporter.restoreArchive(
+      (await exporter.create(restored.id, 'archive')).body,
+    );
+    expect(repository.listFindings(restoredAgain.id)[0]?.status).toBe('accepted');
+
+    const unrelated = await JSZip.loadAsync(archive.body);
+    const unrelatedManifest = JSON.parse(await unrelated.file('project.json')!.async('string')) as {
+      revisions: Array<{ revision: number; reason: string }>;
+    };
+    unrelatedManifest.revisions.find((revision) => revision.revision === 1)!.reason = 'Manual edit';
+    unrelated.file('project.json', JSON.stringify(unrelatedManifest));
+    await expect(
+      exporter.restoreArchive(await unrelated.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
   it('rejects forged applied runs, duplicate applications, and invalid scoped targets', async () => {
     const { archive } = await createAppliedRewriteArchive('Applied validation');
 
@@ -395,6 +505,33 @@ describe('portable project archive restore', () => {
         exporter.restoreArchive(await zip.generateAsync({ type: 'nodebuffer' })),
       ).rejects.toMatchObject({ code: 'invalid_archive' });
     }
+
+    const unrelatedRevision = await JSZip.loadAsync(archive.body);
+    const unrelatedRevisionManifest = JSON.parse(
+      await unrelatedRevision.file('project.json')!.async('string'),
+    ) as {
+      revisions: Array<{ revision: number; reason: string; snapshot: Array<{ body: string }> }>;
+    };
+    const appliedRevision = unrelatedRevisionManifest.revisions.find(
+      (revision) => revision.revision === 1,
+    )!;
+    appliedRevision.reason = 'Manual edit';
+    unrelatedRevision.file('project.json', JSON.stringify(unrelatedRevisionManifest));
+    await expect(
+      exporter.restoreArchive(await unrelatedRevision.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+
+    const unrelatedSnapshot = await JSZip.loadAsync(archive.body);
+    const unrelatedSnapshotManifest = JSON.parse(
+      await unrelatedSnapshot.file('project.json')!.async('string'),
+    ) as { revisions: Array<{ revision: number; snapshot: Array<{ body: string }> }> };
+    unrelatedSnapshotManifest.revisions.find(
+      (revision) => revision.revision === 1,
+    )!.snapshot[0]!.body = 'An unrelated manual result.';
+    unrelatedSnapshot.file('project.json', JSON.stringify(unrelatedSnapshotManifest));
+    await expect(
+      exporter.restoreArchive(await unrelatedSnapshot.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
 
     const duplicate = await JSZip.loadAsync(archive.body);
     const duplicateManifest = JSON.parse(await duplicate.file('project.json')!.async('string')) as {
@@ -522,7 +659,7 @@ describe('portable project archive restore', () => {
     ).rejects.toMatchObject({ code: 'invalid_archive' });
   });
 
-  async function createAppliedRewriteArchive(name: string) {
+  async function createAppliedRewriteArchive(name: string, revised = false) {
     const project = repository.createProject(name, '');
     const prd = repository.getPrd(project.id);
     const target = prd.sections[0]!;
@@ -536,13 +673,16 @@ describe('portable project archive restore', () => {
       targetSectionId: target.id,
     });
     repository.completeAiRun(runId, undefined, 'A reviewed synthetic rewrite.');
+    const appliedBody = revised
+      ? 'A user-revised synthetic rewrite.'
+      : 'A reviewed synthetic rewrite.';
     const saved = repository.savePrd(
       project.id,
       0,
       prd.sections.map((section) =>
-        section.id === target.id ? { ...section, body: 'A reviewed synthetic rewrite.' } : section,
+        section.id === target.id ? { ...section, body: appliedBody } : section,
       ),
-      'Apply synthetic rewrite',
+      `AI run ${runId} ${revised ? 'revised and accepted' : 'accepted'}`,
     );
     repository.markAiRunApplied(project.id, runId, saved.revision);
     return { project, archive: await exporter.create(project.id, 'archive') };

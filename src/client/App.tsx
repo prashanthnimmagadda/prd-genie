@@ -274,6 +274,7 @@ function Workbench({
   const [scope, setScope] = useState<ActionScope>('section');
   const [output, setOutput] = useState('');
   const [proposalRunId, setProposalRunId] = useState<string | null>(null);
+  const [proposalSourceRevision, setProposalSourceRevision] = useState<number | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -383,6 +384,7 @@ function Workbench({
       if (!saved) return null;
       setPrd(saved);
       setSavedPrd(saved);
+      setUndoRevision(null);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
       void api.revisions(project.id).then((result) => setRevisions(result.revisions));
       return saved;
@@ -398,6 +400,7 @@ function Workbench({
     instruction: string,
     override?: { action: AiAction; scope: ActionScope },
   ) {
+    if (documentMutationRef.current) return;
     if (!prd || !project.selectedProvider || !project.selectedModel) {
       setProviderOpen(true);
       return;
@@ -415,6 +418,7 @@ function Workbench({
     setError('');
     setOutput('');
     setProposalRunId(null);
+    setProposalSourceRevision(null);
     setCitations([]);
     if (requestedAction === 'review') setFindings([]);
     const controller = new AbortController();
@@ -442,6 +446,7 @@ function Workbench({
           onStatus: (next) => setStatus(next.detail),
           onCompletion: (completion) => {
             setProposalRunId(completion.runId);
+            setProposalSourceRevision(completion.revision);
             void api.aiRuns(project.id).then((result) => setAiRuns(result.runs));
           },
         },
@@ -460,8 +465,16 @@ function Workbench({
   }
 
   async function applyOutput() {
-    if (!prd || !proposalRunId || !output.trim() || dirty || documentMutationRef.current) return;
-    const sourceRevision = prd.revision;
+    if (
+      !prd ||
+      !proposalRunId ||
+      proposalSourceRevision !== prd.revision ||
+      !output.trim() ||
+      dirty ||
+      documentMutationRef.current
+    )
+      return;
+    const sourceRevision = proposalSourceRevision;
     const saved = await runDocumentMutation(() =>
       api.applyAiRun(project.id, proposalRunId, sourceRevision, output.trim()),
     );
@@ -471,6 +484,7 @@ function Workbench({
     setSavedPrd(saved);
     setOutput('');
     setProposalRunId(null);
+    setProposalSourceRevision(null);
     setFindings((current) =>
       current.map((finding) =>
         finding.status === 'open' ? { ...finding, status: 'stale' } : finding,
@@ -526,7 +540,14 @@ function Workbench({
   }
 
   async function undoAccepted() {
-    if (!prd || undoRevision === null || dirty || documentMutationRef.current) return;
+    if (
+      !prd ||
+      undoRevision === null ||
+      prd.revision !== undoRevision + 1 ||
+      dirty ||
+      documentMutationRef.current
+    )
+      return;
     const restored = await runDocumentMutation(() =>
       api.restoreRevision(project.id, undoRevision, prd.revision),
     );
@@ -573,7 +594,14 @@ function Workbench({
   }
 
   async function createChatGptHandoff() {
-    if (!prd || !selectedSectionId || !handoffInstruction.trim()) return;
+    if (
+      !prd ||
+      !selectedSectionId ||
+      !handoffInstruction.trim() ||
+      dirty ||
+      documentMutationRef.current
+    )
+      return;
     const handoffAction = action === 'ask' ? 'rewrite' : action;
     const handoffScope = scope === 'document' ? 'document' : 'section';
     const sectionIds =
@@ -598,6 +626,7 @@ function Workbench({
   }
 
   async function importChatGptHandoff(file: File) {
+    if (documentMutationRef.current) return;
     const handoff = await api.importChatGptHandoff(project.id, file);
     setHandoffs((current) => [handoff, ...current.filter((item) => item.id !== handoff.id)]);
     setTab('history');
@@ -915,7 +944,7 @@ function Workbench({
       </aside>
 
       <main id="prd-editor" className="document-surface">
-        {undoRevision !== null && (
+        {undoRevision !== null && prd.revision === undoRevision + 1 && (
           <div className="undo-banner" role="status">
             <span>A proposal changed the current revision.</span>
             <Button
@@ -1174,7 +1203,7 @@ function Workbench({
                       <>
                         <p className="proposal-provenance">
                           Proposal from {project.selectedProvider} / {project.selectedModel},
-                          revision {prd.revision}, {scope} scope
+                          revision {proposalSourceRevision ?? prd.revision}, {scope} scope
                         </p>
                         {!busy && (
                           <details className="proposal-revision">
@@ -1190,7 +1219,13 @@ function Workbench({
                           <MessageAction
                             label={`Apply to ${scope}`}
                             tooltip="Creates a revision bound to this AI run"
-                            disabled={!proposalRunId || busy || dirty || documentMutationBusy}
+                            disabled={
+                              !proposalRunId ||
+                              proposalSourceRevision !== prd.revision ||
+                              busy ||
+                              dirty ||
+                              documentMutationBusy
+                            }
                             onClick={() =>
                               void applyOutput().catch((reason: unknown) =>
                                 setError(messageFrom(reason)),
@@ -1206,6 +1241,7 @@ function Workbench({
                             onClick={() => {
                               setOutput('');
                               setProposalRunId(null);
+                              setProposalSourceRevision(null);
                             }}
                           >
                             <X aria-hidden="true" />
@@ -1229,7 +1265,9 @@ function Workbench({
                       ? 'How should this be improved?'
                       : 'Ask about this PRD'
                 }
-                disabled={busy || (offline && project.selectedProvider !== 'ollama')}
+                disabled={
+                  busy || documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
+                }
               />
               <PromptInputFooter>
                 <PromptInputTools>
@@ -1245,7 +1283,9 @@ function Workbench({
                 </PromptInputTools>
                 <PromptInputSubmit
                   status={busy ? 'streaming' : 'ready'}
-                  disabled={offline && project.selectedProvider !== 'ollama'}
+                  disabled={
+                    documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
+                  }
                   onClick={(event) => {
                     if (busy) {
                       event.preventDefault();
@@ -1267,7 +1307,9 @@ function Workbench({
               </div>
               <Button
                 size="sm"
-                disabled={busy || (offline && project.selectedProvider !== 'ollama')}
+                disabled={
+                  busy || documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
+                }
                 onClick={() => {
                   setAction('review');
                   setScope('document');
@@ -1472,7 +1514,7 @@ function Workbench({
                 <div className="handoff-actions">
                   <Button
                     size="sm"
-                    disabled={!handoffInstruction.trim() || dirty}
+                    disabled={!handoffInstruction.trim() || dirty || documentMutationBusy}
                     onClick={() =>
                       void createChatGptHandoff().catch((reason: unknown) =>
                         setError(messageFrom(reason)),
@@ -1485,6 +1527,7 @@ function Workbench({
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={documentMutationBusy}
                     onClick={() => handoffInputRef.current?.click()}
                   >
                     <Upload aria-hidden="true" />
@@ -1496,9 +1539,10 @@ function Workbench({
                     type="file"
                     accept="application/json,.json"
                     aria-label="Import ChatGPT handoff response"
+                    disabled={documentMutationBusy}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
-                      if (file) {
+                      if (file && !documentMutationRef.current) {
                         void importChatGptHandoff(file).catch((reason: unknown) =>
                           setError(messageFrom(reason)),
                         );
@@ -1640,6 +1684,7 @@ function Workbench({
                         );
                         setPrd(restored);
                         setSavedPrd(restored);
+                        setUndoRevision(null);
                         setRevisions((await api.revisions(project.id)).revisions);
                       }).catch((reason: unknown) => setError(messageFrom(reason)));
                     }}

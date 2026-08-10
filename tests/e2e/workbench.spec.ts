@@ -106,6 +106,10 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     'false',
   );
   await expect(page.getByLabel('Section title').first()).toBeDisabled();
+  await expect(page.getByPlaceholder('How should this be improved?')).toBeDisabled();
+  await page.getByRole('tab', { name: 'review' }).click();
+  await expect(page.getByRole('button', { name: 'Run review' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'assist' }).click();
   releaseApply();
   await expect(page.getByRole('status')).toContainText('proposal changed');
   await page.unroute('**/api/projects/*/ai-runs/*/apply');
@@ -158,10 +162,9 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('button', { name: 'Delete project' }).click();
   await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await expect(page.getByLabel('Section content').first()).not.toContainText(
-    'Product managers lose unsaved PRD work',
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Unsaved local work must survive revision controls.',
   );
 
   await page.getByRole('tab', { name: 'review' }).click();
@@ -183,6 +186,9 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('button', { name: 'Accept', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('proposal changed');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Unsaved local work must survive revision controls.',
+  );
 
   const download = page.waitForEvent('download');
   await page.getByRole('link', { name: 'markdown' }).click();

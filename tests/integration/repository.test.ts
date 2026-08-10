@@ -70,6 +70,20 @@ describe('Repository', () => {
     expect(() => repository.savePrd(first.id, 0, duplicatePositions, 'Invalid')).toThrow(
       'unique position',
     );
+    const duplicateIds = firstPrd.sections.map((section, index) => ({
+      ...section,
+      id: index === 1 ? firstPrd.sections[0]!.id : section.id,
+    }));
+    expect(() => repository.savePrd(first.id, 0, duplicateIds, 'Duplicate IDs')).toThrow(
+      'unique ID',
+    );
+    const positionGap = firstPrd.sections.map((section) => ({
+      ...section,
+      position: section.position + 1,
+    }));
+    expect(() => repository.savePrd(first.id, 0, positionGap, 'Position gap')).toThrow(
+      'continuous',
+    );
     const foreignId = repository.getPrd(second.id).sections[0]?.id;
     expect(foreignId).toBeTruthy();
     expect(() =>
