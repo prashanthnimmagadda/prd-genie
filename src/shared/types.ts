@@ -215,6 +215,10 @@ export interface HealthResponse {
     revision: string;
     detail: string | null;
   };
+  fileCleanup: {
+    status: 'complete' | 'pending';
+    pending: number;
+  };
 }
 
 export type WorkbenchMessage = UIMessage<

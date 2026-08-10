@@ -698,6 +698,7 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
   const runs = new Map(manifest.aiRuns.map((row) => [row.id, row]));
   const findingsById = new Map(manifest.findings.map((row) => [row.id, row]));
   const citationRuns = new Map(manifest.citations.map((row) => [row.id, row.aiRunId]));
+  const citationAvailability = new Map(manifest.citations.map((row) => [row.id, row.available]));
   const citations = new Set(manifest.citations.map((row) => row.id));
   const appliedRevisions = new Set<number>();
   const invalidRun = manifest.aiRuns.some((row) => {
@@ -812,6 +813,8 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
         row.citationIds.some(
           (citation) => !citations.has(citation) || citationRuns.get(citation) !== row.aiRunId,
         ) ||
+        (row.status === 'open' &&
+          row.citationIds.some((citation) => !citationAvailability.get(citation))) ||
         (row.proposedPatch !== null &&
           (row.proposedPatch.sectionId !== row.targetSectionId ||
             row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||

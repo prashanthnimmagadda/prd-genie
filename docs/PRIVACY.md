@@ -45,4 +45,6 @@ The application ships with no telemetry, advertising, tracking pixels, third-par
 
 ## Deletion
 
-Deleting a source removes its extracted locations, chunks, vectors, and local binary when no other project references the same content hash. Historical citations keep their exact excerpt, source name, and locator, marked unavailable. Deleting a project removes its database records, handoff records, and unreferenced local binaries.
+Deleting a source immediately removes its extracted locations, chunks, vectors, and database record. Historical citations keep their exact excerpt, source name, and locator, marked unavailable. Deleting a project immediately removes its database records and handoff records.
+
+Unreferenced source binaries are removed after the database transaction commits. If the filesystem rejects removal, PRD Genie records a durable cleanup job and retries it at startup. A new source reference cancels a pending removal before any file is deleted. Cleanup is restricted to the configured source directory, and `/api/health` reports only the aggregate pending count, never file paths.

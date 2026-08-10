@@ -147,6 +147,11 @@ describe('database migrations', () => {
       ).toBeTruthy();
       expect(
         upgraded.sqlite
+          .prepare("SELECT name FROM app_migrations WHERE name = '0005_file_deletion_outbox'")
+          .get(),
+      ).toBeTruthy();
+      expect(
+        upgraded.sqlite
           .prepare(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'findings_project_idx'",
           )

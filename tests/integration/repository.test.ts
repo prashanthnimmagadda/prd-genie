@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AppDatabase } from '../../src/server/db/client.js';
 import { createDatabase } from '../../src/server/db/client.js';
 import { Repository } from '../../src/server/db/repository.js';
+import { drainPendingFileDeletions } from '../../src/server/db/file-deletion.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sources, sourceLocations, chunks } from '../../src/server/db/schema.js';
 import type { ChatGptHandoffResponse } from '../../src/shared/types.js';
+import { config } from '../../src/server/config.js';
 
 describe('Repository', () => {
   let database: AppDatabase;
@@ -172,6 +174,42 @@ describe('Repository', () => {
       available: true,
       unavailabilityReason: null,
     });
+    const foreignRunId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    });
+    const foreignCitationId = repository.storeCitation({
+      aiRunId: foreignRunId,
+      sourceId,
+      locationId,
+      chunkId,
+      sourceName: 'synthetic.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Evidence',
+      evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
+    });
+    for (const invalidCitationId of [crypto.randomUUID(), foreignCitationId]) {
+      expect(() =>
+        repository.storeFinding({
+          aiRunId: runId,
+          projectId: project.id,
+          category: 'evidence',
+          severity: 'warning',
+          targetSectionId: prd.sections[0]!.id,
+          rationale: 'Reject an invalid citation relationship.',
+          citationIds: [invalidCitationId],
+          proposedPatch: null,
+          sourceRevision: 0,
+        }),
+      ).toThrow('not bound to its source');
+      expect(repository.listFindings(project.id)).toEqual([]);
+    }
     const finding = repository.storeFinding({
       aiRunId: runId,
       projectId: project.id,
@@ -409,7 +447,7 @@ describe('Repository', () => {
       .run();
     const runId = repository.createAiRun({
       projectId: project.id,
-      action: 'ask',
+      action: 'review',
       scope: 'document',
       provider: 'ollama',
       model: 'synthetic',
@@ -428,6 +466,22 @@ describe('Repository', () => {
       unavailabilityReason: null,
     });
     repository.completeAiRun(runId, undefined, 'Historical answer');
+    const openFinding = repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: repository.getPrd(project.id).sections[0]!.id,
+      rationale: 'This review initially has available evidence.',
+      citationIds: [citationId],
+      proposedPatch: {
+        sectionId: repository.getPrd(project.id).sections[0]!.id,
+        beforeMarkdown: repository.getPrd(project.id).sections[0]!.body,
+        afterMarkdown: 'Evidence-backed proposal.',
+      },
+      sourceRevision: 0,
+    });
+    expect(openFinding.status).toBe('open');
     repository.deleteSource(project.id, sourceId);
     expect(repository.listAiRuns(project.id)[0]?.citations[0]).toMatchObject({
       sourceId: null,
@@ -438,6 +492,37 @@ describe('Repository', () => {
       available: false,
       unavailabilityReason: 'source_deleted',
     });
+    expect(repository.listFindings(project.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: openFinding.id, status: 'stale' })]),
+    );
+    database.sqlite
+      .prepare("UPDATE review_findings SET status = 'open' WHERE id = ?")
+      .run(openFinding.id);
+    expect(() => repository.acceptFinding(project.id, openFinding.id, 0)).toThrow(
+      'evidence that is no longer available',
+    );
+    expect(repository.listFindings(project.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: openFinding.id, status: 'stale' })]),
+    );
+    const delayedFinding = repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: repository.getPrd(project.id).sections[0]!.id,
+      rationale: 'This review completed after its source was deleted.',
+      citationIds: [citationId],
+      proposedPatch: {
+        sectionId: repository.getPrd(project.id).sections[0]!.id,
+        beforeMarkdown: repository.getPrd(project.id).sections[0]!.body,
+        afterMarkdown: 'Do not accept a proposal whose evidence was deleted.',
+      },
+      sourceRevision: 0,
+    });
+    expect(delayedFinding.status).toBe('stale');
+    expect(() => repository.acceptFinding(project.id, delayedFinding.id, 0)).toThrow(
+      'older PRD revision',
+    );
     expect(() =>
       repository.createChatGptHandoff({
         projectId: project.id,
@@ -451,10 +536,14 @@ describe('Repository', () => {
     ).toThrow('no longer available');
   });
 
-  it('surfaces unexpected filesystem errors after source records are deleted', () => {
+  it('retains unexpected filesystem cleanup failures for deterministic retry', () => {
     const project = repository.createProject('Filesystem failure', '');
     const sourceId = crypto.randomUUID();
-    const binaryPath = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-delete-error-'));
+    const sourceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-delete-error-'));
+    const binaryPath = path.join(sourceDirectory, 'unexpected-directory');
+    const originalSourceDir = config.sourceDir;
+    Object.assign(config, { sourceDir: sourceDirectory });
+    fs.mkdirSync(binaryPath);
     database.db
       .insert(sources)
       .values({
@@ -471,10 +560,16 @@ describe('Repository', () => {
       })
       .run();
     try {
-      expect(() => repository.deleteSource(project.id, sourceId)).toThrow();
+      repository.deleteSource(project.id, sourceId);
       expect(repository.listSources(project.id)).toHaveLength(0);
-    } finally {
+      expect(database.sqlite.prepare('SELECT attempts FROM pending_file_deletions').get()).toEqual({
+        attempts: 1,
+      });
       fs.rmSync(binaryPath, { recursive: true, force: true });
+      expect(drainPendingFileDeletions(database)).toBe(0);
+    } finally {
+      Object.assign(config, { sourceDir: originalSourceDir });
+      fs.rmSync(sourceDirectory, { recursive: true, force: true });
     }
   });
 });

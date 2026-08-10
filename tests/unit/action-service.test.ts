@@ -300,6 +300,48 @@ describe('ActionService', () => {
     );
   });
 
+  it('streams the repository evidence state when a review completes after deletion', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The evidence was removed while the review was running.',
+        findings: {
+          finding1: {
+            category: 'evidence',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The cited evidence is no longer locally available.',
+            citationChunkIds: ['chunk-id'],
+            proposedMarkdown: null,
+          },
+          finding2: null,
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
+      },
+    });
+    repository.storeFinding.mockReturnValueOnce({
+      id: 'finding-id',
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: sectionId,
+      rationale: 'The cited evidence is no longer locally available.',
+      citations: [{ ...evidence, available: false, unavailabilityReason: 'source_deleted' }],
+      proposedPatch: null,
+      sourceRevision: 2,
+      status: 'stale',
+    } as never);
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    expect(body).toContain('"status":"stale"');
+    expect(body).toContain('"available":false');
+    expect(body).toContain('"unavailabilityReason":"source_deleted"');
+  });
+
   it('resolves a unique section title and supports findings without patches', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {

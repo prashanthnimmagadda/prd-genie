@@ -161,6 +161,7 @@ The authoritative release gate runs outside GitHub Actions. Repository Actions r
 ## Limitations
 
 - Single-user local self-hosting only.
+- Run one PRD Genie server process per application data directory. Sharing one data directory across concurrent processes is unsupported.
 - No authentication, remote hosting, multi-user collaboration, or cloud sync.
 - English-first retrieval.
 - Semantic retrieval downloads a pinned local model on first use.
@@ -174,7 +175,7 @@ The authoritative release gate runs outside GitHub Actions. Repository Actions r
 
 **The health endpoint is degraded**
 
-The embedding model is not initialised or could not load. Lexical retrieval remains available. Check model-cache permissions and outbound access to the model host.
+Inspect the structured `/api/health` response. If retrieval is degraded, the embedding model is not initialised or could not load and lexical retrieval remains available. Check model-cache permissions and outbound access to the model host. If `fileCleanup.status` is `pending`, a source binary could not be removed. Correct the application data directory permissions and restart PRD Genie to retry the durable cleanup job.
 
 **A provider returns missing credentials**
 

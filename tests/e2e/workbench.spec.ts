@@ -87,7 +87,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     .getByPlaceholder('How should this be improved?')
     .fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
-  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.reload();
   await page.getByRole('button', { name: projectName, exact: true }).click();
   await page.getByRole('tab', { name: 'history' }).click();
@@ -100,19 +100,33 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(
     page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
   ).toContainText('revision 0, rewrite on section scope');
-  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.locator('.action-context select').first().selectOption('ask');
   await page.locator('.action-context select').nth(1).selectOption('document');
   await expect(
     page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
   ).toContainText('rewrite on section scope');
-  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.locator('.action-context select').first().selectOption('rewrite');
   await page.locator('.action-context select').nth(1).selectOption('section');
-  await page.getByLabel('Section content').first().fill('Unsaved local edit must be preserved.');
-  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeDisabled();
-  await page.getByLabel('Undo editor change').first().click();
-  await expect(page.getByRole('button', { name: 'Apply to section' })).toBeEnabled();
+  const beforeTargetSwitch = (await (
+    await request.get(`/api/projects/${project.id}/prd`)
+  ).json()) as { sections: Array<{ id: string; title: string; body: string }> };
+  const contextSection = beforeTargetSwitch.sections.find(
+    (section) => section.title === 'Context',
+  )!;
+  const contextBefore = contextSection.body;
+  const contextEditor = page.locator(`#section-${contextSection.id}`);
+  await page
+    .getByRole('navigation', { name: 'Document outline' })
+    .getByRole('link', { name: /Context$/ })
+    .click();
+  await expect(page.locator('.scope-caption')).toContainText('Proposal target: Problem');
+  await expect(page.getByText(/^Target: Problem \[/)).toBeVisible();
+  await contextEditor.getByLabel('Section content').fill('Unsaved local edit must be preserved.');
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeDisabled();
+  await contextEditor.getByLabel('Undo editor change').click();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   let releaseApply!: () => void;
   const heldApply = new Promise<void>((resolve) => {
     releaseApply = resolve;
@@ -122,7 +136,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     await route.continue();
   });
   await page.getByText('Revise proposal before applying').click();
-  await page.getByRole('button', { name: 'Apply to section' }).click();
+  await page.getByRole('button', { name: 'Apply to Problem' }).click();
   await expect(page.getByLabel('Section content').first()).toHaveAttribute(
     'contenteditable',
     'false',
@@ -141,8 +155,11 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     'Product managers lose unsaved PRD work',
   );
   const persisted = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
-    sections: Array<{ body: string }>;
+    sections: Array<{ title: string; body: string }>;
   };
+  expect(persisted.sections.find((section) => section.title === 'Context')?.body).toBe(
+    contextBefore,
+  );
   const appliedBody = persisted.sections[0]!.body;
   await page
     .getByLabel('Section content')
@@ -236,6 +253,16 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
   );
+
+  await page.getByRole('button', { name: 'Run review' }).click();
+  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeVisible();
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Delete research.md' }).click();
+  await expect(page.getByText('research.md', { exact: true })).toHaveCount(0);
+  const staleFinding = page.locator('article.finding').filter({ hasText: 'Status: stale' }).first();
+  await expect(staleFinding).toBeVisible();
+  await staleFinding.getByRole('button', { name: /research\.md/ }).click();
+  await expect(page.getByText('Historical snapshot, source deleted')).toBeVisible();
 
   const download = page.waitForEvent('download');
   await page.getByRole('link', { name: 'markdown' }).click();

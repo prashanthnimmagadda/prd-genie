@@ -32,7 +32,7 @@ import type {
   RevisionSummary,
   SourceSummary,
 } from '@shared/types';
-import { api, runAction } from '@/lib/api';
+import { api, ClientApiError, runAction } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
@@ -69,6 +69,8 @@ interface ProposalContext {
   provider: AiRunProposal['provider'];
   model: string;
   appliedRevision: number | null;
+  targetSectionId: string | null;
+  selectionText: string | null;
 }
 
 export default function App() {
@@ -416,6 +418,17 @@ function Workbench({
     }
     const requestedAction = override?.action ?? action;
     const requestedScope = override?.scope ?? scope;
+    const requestedTargetSectionId =
+      requestedScope === 'document' ? null : selectedSectionId || null;
+    const requestedSelectionText = requestedScope === 'selection' ? selection : null;
+    if (!requestedTargetSectionId && requestedScope !== 'document') {
+      setError('Choose a target section before running this action.');
+      return;
+    }
+    if (requestedScope === 'selection' && !requestedSelectionText?.trim()) {
+      setError('Select document text before running a selection action.');
+      return;
+    }
     if (offline && project.selectedProvider !== 'ollama') {
       setError('This provider requires a network connection. Local Ollama remains available.');
       return;
@@ -436,6 +449,8 @@ function Workbench({
             provider: project.selectedProvider,
             model: project.selectedModel,
             appliedRevision: null,
+            targetSectionId: requestedTargetSectionId,
+            selectionText: requestedSelectionText,
           }
         : null,
     );
@@ -452,8 +467,8 @@ function Workbench({
           scope: requestedScope,
           provider: project.selectedProvider,
           model: project.selectedModel,
-          ...(selectedSectionId ? { targetSectionId: selectedSectionId } : {}),
-          ...(requestedScope === 'selection' ? { selection } : {}),
+          ...(requestedTargetSectionId ? { targetSectionId: requestedTargetSectionId } : {}),
+          ...(requestedSelectionText ? { selection: requestedSelectionText } : {}),
           ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
         },
         {
@@ -474,6 +489,8 @@ function Workbench({
                 provider: project.selectedProvider!,
                 model: project.selectedModel!,
                 appliedRevision: null,
+                targetSectionId: requestedTargetSectionId,
+                selectionText: requestedSelectionText,
               });
             }
             void api.aiRuns(project.id).then((result) => setAiRuns(result.runs));
@@ -568,6 +585,16 @@ function Workbench({
     );
   }
 
+  async function handleFindingError(reason: unknown) {
+    setError(messageFrom(reason));
+    if (!(reason instanceof ClientApiError) || reason.code !== 'stale_finding') return;
+    try {
+      setFindings((await api.findings(project.id)).findings);
+    } catch {
+      setError('The finding became stale, but review state could not refresh. Reload the project.');
+    }
+  }
+
   async function undoAccepted() {
     if (
       !prd ||
@@ -594,6 +621,37 @@ function Workbench({
       setSources((current) => [...current, source]);
     } catch (reason) {
       setError(messageFrom(reason));
+    }
+  }
+
+  async function removeSource(source: SourceSummary) {
+    setError('');
+    try {
+      await api.deleteSource(project.id, source.id);
+    } catch (reason) {
+      setError(messageFrom(reason));
+      return;
+    }
+    setSources((current) => current.filter((item) => item.id !== source.id));
+    setEvidenceDetail(null);
+    try {
+      const [findingResult, runResult] = await Promise.all([
+        api.findings(project.id),
+        api.aiRuns(project.id),
+      ]);
+      const refreshedCitations = new Map(
+        runResult.runs.flatMap((run) => run.citations.map((citation) => [citation.id, citation])),
+      );
+      setFindings(findingResult.findings);
+      setAiRuns(runResult.runs);
+      setCitations((current) =>
+        current.map((citation) => refreshedCitations.get(citation.id) ?? citation),
+      );
+      setHandoffCitationIds((current) =>
+        current.filter((id) => refreshedCitations.get(id)?.available),
+      );
+    } catch {
+      setError('The source was deleted, but evidence state could not refresh. Reload the project.');
     }
   }
 
@@ -697,6 +755,24 @@ function Workbench({
       </main>
     );
   }
+
+  const proposalTargetSection = proposalContext?.targetSectionId
+    ? prd.sections.find((section) => section.id === proposalContext.targetSectionId)
+    : undefined;
+  const proposalTargetLabel =
+    proposalContext?.scope === 'document'
+      ? 'Complete document'
+      : proposalTargetSection
+        ? `${proposalTargetSection.title} [${proposalTargetSection.id.slice(0, 8)}]`
+        : proposalContext?.targetSectionId
+          ? `Archived section [${proposalContext.targetSectionId.slice(0, 8)}]`
+          : 'Unknown target';
+  const proposalApplyLabel =
+    proposalContext?.scope === 'document'
+      ? 'Apply to document'
+      : proposalContext?.scope === 'selection'
+        ? `Apply to selection in ${proposalTargetSection?.title ?? 'section'}`
+        : `Apply to ${proposalTargetSection?.title ?? 'section'}`;
 
   return (
     <div className="workbench">
@@ -922,12 +998,7 @@ function Workbench({
                   aria-label={`Delete ${source.name}`}
                   onClick={() => {
                     if (!window.confirm(`Delete ${source.name} and its index?`)) return;
-                    void api
-                      .deleteSource(project.id, source.id)
-                      .then(() =>
-                        setSources((current) => current.filter((item) => item.id !== source.id)),
-                      )
-                      .catch((reason: unknown) => setError(messageFrom(reason)));
+                    void removeSource(source);
                   }}
                 >
                   <Trash2 aria-hidden="true" />
@@ -1195,11 +1266,13 @@ function Workbench({
               </label>
             </div>
             <p className="scope-caption">
-              {scope === 'section'
-                ? (selectedSection?.title ?? 'Choose a section')
-                : scope === 'selection'
-                  ? `${selection.length} selected characters`
-                  : `${prd.sections.length} sections`}
+              {proposalContext
+                ? `Proposal target: ${proposalTargetLabel}`
+                : scope === 'section'
+                  ? (selectedSection?.title ?? 'Choose a section')
+                  : scope === 'selection'
+                    ? `${selection.length} selected characters`
+                    : `${prd.sections.length} sections`}
             </p>
 
             <Conversation className="assist-conversation">
@@ -1241,6 +1314,12 @@ function Workbench({
                           revision {proposalContext.sourceRevision}, {proposalContext.action} on{' '}
                           {proposalContext.scope} scope
                         </p>
+                        <p className="proposal-provenance">
+                          Target: {proposalTargetLabel}
+                          {proposalContext.selectionText
+                            ? `. Selected text: "${truncateText(proposalContext.selectionText)}"`
+                            : ''}
+                        </p>
                         {!busy && (
                           <details className="proposal-revision">
                             <summary>Revise proposal before applying</summary>
@@ -1256,7 +1335,7 @@ function Workbench({
                         )}
                         <MessageActions>
                           <MessageAction
-                            label={`Apply to ${proposalContext.scope}`}
+                            label={proposalApplyLabel}
                             tooltip="Creates a revision bound to this AI run"
                             disabled={
                               !proposalContext.runId ||
@@ -1433,8 +1512,8 @@ function Workbench({
                           documentMutationBusy
                         }
                         onClick={() =>
-                          void acceptFinding(finding).catch((reason: unknown) =>
-                            setError(messageFrom(reason)),
+                          void acceptFinding(finding).catch(
+                            (reason: unknown) => void handleFindingError(reason),
                           )
                         }
                       >
@@ -1798,6 +1877,8 @@ function Workbench({
                                   provider: run.provider,
                                   model: run.model,
                                   appliedRevision: run.appliedRevision,
+                                  targetSectionId: run.targetSectionId,
+                                  selectionText: run.selectionText,
                                 }
                               : null,
                           );
@@ -1857,6 +1938,11 @@ function reorder(prd: PrdDocument, from: number, to: number): PrdDocument {
     ...prd,
     sections: sections.map((section, position) => ({ ...section, position })),
   };
+}
+
+function truncateText(value: string, limit = 160): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length <= limit ? compact : `${compact.slice(0, limit - 3)}...`;
 }
 
 function messageFrom(error: unknown): string {

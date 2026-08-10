@@ -7,6 +7,7 @@ import { buildApp } from '../../src/server/app.js';
 import { config } from '../../src/server/config.js';
 import type { EmbeddingService } from '../../src/server/retrieval/embedding-service.js';
 import type { AppDatabase } from '../../src/server/db/client.js';
+import { enqueueFileDeletion } from '../../src/server/db/file-deletion.js';
 import type { Repository } from '../../src/server/db/repository.js';
 
 describe('API', () => {
@@ -82,7 +83,21 @@ describe('API', () => {
       status: 'degraded',
       version: '0.1.0-rc.2',
       retrieval: { mode: 'lexical' },
+      fileCleanup: { status: 'complete', pending: 0 },
     });
+  });
+
+  it('reports pending binary cleanup without exposing its path', async () => {
+    const binaryPath = path.join(sourceDir, 'private-source.txt');
+    enqueueFileDeletion(database, binaryPath);
+
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'degraded',
+      fileCleanup: { status: 'pending', pending: 1 },
+    });
+    expect(response.body).not.toContain(binaryPath);
   });
 
   it('keeps session credentials opaque and clearable', async () => {

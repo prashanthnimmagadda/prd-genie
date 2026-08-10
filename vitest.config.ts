@@ -55,6 +55,12 @@ export default defineConfig({
           functions: 90,
           lines: 90,
         },
+        'src/server/db/patch-application.ts': {
+          statements: 90,
+          branches: 90,
+          functions: 90,
+          lines: 90,
+        },
       },
       exclude: ['src/client/main.tsx', 'src/server/index.ts', '**/*.d.ts'],
     },

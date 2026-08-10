@@ -41,4 +41,7 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Rejected duplicate section identities in editor saves and historical archive snapshots.
 - Preserved review history after section deletion and cross-checked restored citation snapshots.
 - Froze in-flight proposal controls and restored immutable proposal provenance from AI history.
+- Kept proposal targets explicit when editor focus changes or a historical run is inspected.
+- Made evidence deletion serialize with review creation and acceptance.
+- Added durable, path-confined retry for source and project binary cleanup.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.

@@ -58,10 +58,15 @@ export function registerApi(app: FastifyInstance, services: Services): void {
   });
   app.get('/api/health', () => {
     const retrieval = services.embeddings.getStatus();
+    const pendingFileDeletions = services.repository.pendingFileDeletionCount();
     return {
-      status: retrieval.mode === 'hybrid' ? 'ok' : 'degraded',
+      status: retrieval.mode === 'hybrid' && pendingFileDeletions === 0 ? 'ok' : 'degraded',
       version: config.version,
       retrieval,
+      fileCleanup: {
+        status: pendingFileDeletions === 0 ? 'complete' : 'pending',
+        pending: pendingFileDeletions,
+      },
     };
   });
 

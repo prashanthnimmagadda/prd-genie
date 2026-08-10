@@ -16,6 +16,10 @@ PRD Genie is a single-user local browser application served from a local Node.js
 
 SQLite owns projects, PRD sections, revisions, sources, extracted locations, chunks, embeddings, AI runs, citations, review findings, and ChatGPT handoff records. Source binaries are stored by SHA-256 content hash outside SQLite.
 
+Source and project deletion commits logical cleanup and an unreferenced-binary deletion job in one SQLite transaction. A path-confined worker drains those durable jobs after commit and at startup. Failed filesystem removals remain retryable without retaining live source records or exposing local paths through the API.
+
+The persistence model assumes one server process owns an application data directory. Concurrent processes against the same SQLite database and source directory are unsupported. Rolling back to a binary that predates the deletion outbox leaves queued cleanup jobs untouched; upgrading again resumes cleanup.
+
 Each PRD is an ordered list of stable-ID sections. A save creates a monotonically increasing project revision and an immutable JSON snapshot. AI findings and handoffs target a section ID and source revision. A later save marks open findings and outstanding handoffs stale.
 
 Portable archive format version 2 contains project metadata, the current PRD, revision snapshots, source metadata and binaries, extracted locations, chunks, AI runs, durable citation snapshots, and review findings. Session credentials, embeddings, and open ChatGPT handoffs are omitted. Restore validates paths, entry counts, expanded byte limits, hashes, reference integrity, and schema before an atomic identifier-remapped insert. Embeddings are regenerated locally after restore.
@@ -37,7 +41,7 @@ FTS5 remains available when semantic indexing is unavailable. Each source expose
 
 Provider credentials live only in a server memory map keyed by an opaque browser-session cookie. Environment variables are fallback inputs. The selected provider and model are safe project preferences and may be persisted.
 
-Every AI run records provider, model, action, scope, project, and source revision. Citations preserve source name, locator, and excerpt snapshots even if the local source is later deleted. Generated text is a proposal until a user explicitly accepts it.
+Every AI run records provider, model, action, scope, project, source revision, and immutable section or selection target. Citations preserve source name, locator, and excerpt snapshots even if the local source is later deleted. Finding creation and acceptance revalidate citation ownership and availability inside the same SQLite transaction as the review state change. Generated text is a proposal until a user explicitly accepts it.
 
 The ChatGPT path is a separate manual handoff, not provider API access. A handoff contains only user-selected sections and evidence. Imported responses are validated against the request digest, revision, section preimage hashes, evidence allowlist, and replay state, then staged for inspection. Handoff findings remain in their separate handoff record rather than entering the direct-provider review queue.
 

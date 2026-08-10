@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { config } from '../config.js';
 import { embeddingModel } from '../config.js';
+import { drainPendingFileDeletions } from './file-deletion.js';
 import * as schema from './schema.js';
 
 function findMigrationPath(): string {
@@ -75,12 +76,14 @@ export function createDatabase(databasePath = config.databasePath) {
     vectorAvailable = false;
   }
 
-  return {
+  const database = {
     sqlite,
     db: drizzle(sqlite, { schema }),
     vectorAvailable,
     close: () => sqlite.close(),
   };
+  drainPendingFileDeletions(database);
+  return database;
 }
 
 export type AppDatabase = ReturnType<typeof createDatabase>;

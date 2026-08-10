@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type {
@@ -29,6 +28,8 @@ import {
   sources,
 } from './schema.js';
 import { deleteSourceData } from './source-deletion.js';
+import { drainPendingFileDeletions, enqueueFileDeletion } from './file-deletion.js';
+import { buildFindingApplication, buildHandoffApplication } from './patch-application.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -48,6 +49,16 @@ export class Repository {
       .orderBy(projects.updatedAt)
       .all()
       .reverse() as ProjectSummary[];
+  }
+
+  pendingFileDeletionCount(): number {
+    return (
+      this.database.sqlite
+        .prepare('SELECT count(*) AS count FROM pending_file_deletions')
+        .get() as {
+        count: number;
+      }
+    ).count;
   }
 
   getProject(id: string): ProjectSummary {
@@ -125,6 +136,16 @@ export class Repository {
       .from(sources)
       .where(eq(sources.projectId, id))
       .all();
+    const unsharedPaths = [...new Set(binaries.map((row) => row.binaryPath))].filter(
+      (binaryPath) => {
+        const outsideProject = this.database.sqlite
+          .prepare(
+            'SELECT count(*) AS count FROM sources WHERE binary_path = ? AND project_id != ?',
+          )
+          .get(binaryPath, id) as { count: number };
+        return outsideProject.count === 0;
+      },
+    );
     this.database.sqlite.transaction(() => {
       if (this.database.vectorAvailable) {
         const deleteVector = this.database.sqlite.prepare(
@@ -134,18 +155,9 @@ export class Repository {
       }
       this.database.sqlite.prepare('DELETE FROM chunks_fts WHERE project_id = ?').run(id);
       this.database.db.delete(projects).where(eq(projects.id, id)).run();
+      for (const binaryPath of unsharedPaths) enqueueFileDeletion(this.database, binaryPath);
     })();
-    for (const { binaryPath } of binaries) {
-      const remaining = this.database.sqlite
-        .prepare('SELECT count(*) AS count FROM sources WHERE binary_path = ?')
-        .get(binaryPath) as { count: number };
-      if (remaining.count > 0) continue;
-      try {
-        fs.unlinkSync(binaryPath);
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
-    }
+    drainPendingFileDeletions(this.database);
   }
 
   getPrd(projectId: string): PrdDocument {
@@ -599,38 +611,15 @@ export class Repository {
     if (current.revision !== expectedRevision) {
       throw new ApiError(409, 'stale_revision', 'The PRD changed after this handoff was imported.');
     }
-    const responsePatchById = new Map(
-      handoff.response.patches.map((patch) => [patch.sectionId, patch]),
-    );
-    const selectedIds = new Set<string>();
-    for (const patch of selectedPatches) {
-      if (selectedIds.has(patch.sectionId) || !responsePatchById.has(patch.sectionId)) {
-        throw new ApiError(400, 'invalid_patch', 'A selected handoff patch is invalid.');
-      }
-      selectedIds.add(patch.sectionId);
-    }
-    const sectionById = new Map(current.sections.map((section) => [section.id, section]));
-    for (const patch of selectedPatches) {
-      const currentSection = sectionById.get(patch.sectionId);
-      const responsePatch = responsePatchById.get(patch.sectionId);
-      if (
-        !currentSection ||
-        !responsePatch ||
-        sha256(currentSection.body) !== responsePatch.preimageHash
-      ) {
-        throw new ApiError(409, 'stale_handoff', 'A handoff target changed before acceptance.');
-      }
-    }
-    const selectedById = new Map(
-      selectedPatches.map((patch) => [patch.sectionId, patch.afterMarkdown]),
+    const appliedSections = buildHandoffApplication(
+      current.sections,
+      handoff.response.patches,
+      selectedPatches,
     );
     const saved = this.savePrd(
       projectId,
       expectedRevision,
-      current.sections.map((section) => ({
-        ...section,
-        body: selectedById.get(section.id) ?? section.body,
-      })),
+      appliedSections,
       `ChatGPT handoff ${id} accepted`,
     );
     this.database.db
@@ -733,63 +722,74 @@ export class Repository {
     proposedPatch: ReviewFinding['proposedPatch'];
     sourceRevision: number;
   }): ReviewFinding {
-    const run = this.getAiRun(input.projectId, input.aiRunId);
-    const revision = this.database.sqlite
-      .prepare(
-        `SELECT snapshot_json AS snapshotJson
-         FROM revisions WHERE project_id = ? AND revision = ?`,
-      )
-      .get(input.projectId, input.sourceRevision) as { snapshotJson: string } | undefined;
-    const sourceSections = revision ? (JSON.parse(revision.snapshotJson) as PrdSection[]) : [];
-    const sourceTarget = sourceSections.find((section) => section.id === input.targetSectionId);
-    const runCitationIds = new Set(this.listCitationsForRun(input.aiRunId).map((row) => row.id));
-    if (
-      run.action !== 'review' ||
-      run.sourceRevision !== input.sourceRevision ||
-      !sourceTarget ||
-      input.citationIds.some((citationId) => !runCitationIds.has(citationId)) ||
-      (input.proposedPatch !== null &&
-        (input.proposedPatch.sectionId !== input.targetSectionId ||
-          input.proposedPatch.beforeMarkdown !== sourceTarget.body))
-    ) {
-      throw new ApiError(400, 'invalid_finding', 'The review finding is not bound to its source.');
-    }
-    const current = this.getPrd(input.projectId);
-    const findingStatus: ReviewFinding['status'] =
-      current.revision === input.sourceRevision &&
-      current.sections.some((section) => section.id === input.targetSectionId)
-        ? 'open'
-        : 'stale';
-    const id = crypto.randomUUID();
-    const finding: ReviewFinding = {
-      id,
-      category: input.category,
-      severity: input.severity,
-      targetSectionId: input.targetSectionId,
-      rationale: input.rationale,
-      citations: [],
-      proposedPatch: input.proposedPatch,
-      sourceRevision: input.sourceRevision,
-      status: findingStatus,
-    };
-    this.database.db
-      .insert(reviewFindings)
-      .values({
+    let stored: ReviewFinding | undefined;
+    this.database.sqlite.transaction(() => {
+      const run = this.getAiRun(input.projectId, input.aiRunId);
+      const revision = this.database.sqlite
+        .prepare(
+          `SELECT snapshot_json AS snapshotJson
+           FROM revisions WHERE project_id = ? AND revision = ?`,
+        )
+        .get(input.projectId, input.sourceRevision) as { snapshotJson: string } | undefined;
+      const sourceSections = revision ? (JSON.parse(revision.snapshotJson) as PrdSection[]) : [];
+      const sourceTarget = sourceSections.find((section) => section.id === input.targetSectionId);
+      const runCitations = new Map(
+        this.listCitationsForRun(input.aiRunId).map((row) => [row.id, row]),
+      );
+      if (
+        run.action !== 'review' ||
+        run.sourceRevision !== input.sourceRevision ||
+        !sourceTarget ||
+        input.citationIds.some((citationId) => !runCitations.has(citationId)) ||
+        (input.proposedPatch !== null &&
+          (input.proposedPatch.sectionId !== input.targetSectionId ||
+            input.proposedPatch.beforeMarkdown !== sourceTarget.body))
+      ) {
+        throw new ApiError(
+          400,
+          'invalid_finding',
+          'The review finding is not bound to its source.',
+        );
+      }
+      const current = this.getPrd(input.projectId);
+      const findingStatus: ReviewFinding['status'] =
+        current.revision === input.sourceRevision &&
+        current.sections.some((section) => section.id === input.targetSectionId) &&
+        input.citationIds.every((citationId) => runCitations.get(citationId)?.available)
+          ? 'open'
+          : 'stale';
+      const id = crypto.randomUUID();
+      stored = {
         id,
-        aiRunId: input.aiRunId,
-        projectId: input.projectId,
         category: input.category,
         severity: input.severity,
         targetSectionId: input.targetSectionId,
         rationale: input.rationale,
-        citationIdsJson: JSON.stringify(input.citationIds),
-        proposedPatchJson: input.proposedPatch ? JSON.stringify(input.proposedPatch) : null,
+        citations: input.citationIds.map((citationId) => runCitations.get(citationId)!),
+        proposedPatch: input.proposedPatch,
         sourceRevision: input.sourceRevision,
         status: findingStatus,
-        createdAt: now(),
-      })
-      .run();
-    return finding;
+      };
+      this.database.db
+        .insert(reviewFindings)
+        .values({
+          id,
+          aiRunId: input.aiRunId,
+          projectId: input.projectId,
+          category: input.category,
+          severity: input.severity,
+          targetSectionId: input.targetSectionId,
+          rationale: input.rationale,
+          citationIdsJson: JSON.stringify(input.citationIds),
+          proposedPatchJson: input.proposedPatch ? JSON.stringify(input.proposedPatch) : null,
+          sourceRevision: input.sourceRevision,
+          status: findingStatus,
+          createdAt: now(),
+        })
+        .run();
+    })();
+    if (!stored) throw new ApiError(500, 'finding_store_failed', 'Review finding was not stored.');
+    return stored;
   }
 
   setFindingStatus(projectId: string, findingId: string, status: 'accepted' | 'dismissed'): void {
@@ -818,6 +818,7 @@ export class Repository {
     proposedMarkdown?: string,
   ): PrdDocument {
     let result: PrdDocument | undefined;
+    let rejection: ApiError | undefined;
     this.database.sqlite.transaction(() => {
       const finding = this.database.db
         .select()
@@ -829,6 +830,29 @@ export class Repository {
       }
       if (finding.status !== 'open' || finding.sourceRevision !== expectedRevision) {
         throw new ApiError(409, 'stale_finding', 'This finding targets an older PRD revision.');
+      }
+      const unavailableEvidence = this.database.sqlite
+        .prepare(
+          `SELECT 1
+           FROM json_each(?) AS linked
+           LEFT JOIN citations
+             ON citations.id = linked.value AND citations.ai_run_id = ?
+           WHERE citations.id IS NULL OR citations.available != 1
+           LIMIT 1`,
+        )
+        .get(finding.citationIdsJson, finding.aiRunId);
+      if (unavailableEvidence) {
+        this.database.db
+          .update(reviewFindings)
+          .set({ status: 'stale' })
+          .where(eq(reviewFindings.id, findingId))
+          .run();
+        rejection = new ApiError(
+          409,
+          'stale_finding',
+          'This finding depends on evidence that is no longer available.',
+        );
+        return;
       }
       const patch = finding.proposedPatchJson
         ? (JSON.parse(finding.proposedPatchJson) as NonNullable<ReviewFinding['proposedPatch']>)
@@ -848,10 +872,7 @@ export class Repository {
           'The PRD changed after this finding was created.',
         );
       }
-      const target = current.sections.find((section) => section.id === patch.sectionId);
-      if (!target || target.body !== patch.beforeMarkdown) {
-        throw new ApiError(409, 'stale_finding', 'The target section changed after this review.');
-      }
+      const appliedSections = buildFindingApplication(current.sections, patch, proposedMarkdown);
       this.database.db
         .update(reviewFindings)
         .set({ status: 'accepted' })
@@ -860,16 +881,13 @@ export class Repository {
       result = this.savePrd(
         projectId,
         expectedRevision,
-        current.sections.map((section) =>
-          section.id === patch.sectionId
-            ? { ...section, body: proposedMarkdown ?? patch.afterMarkdown }
-            : section,
-        ),
+        appliedSections,
         proposedMarkdown === undefined
           ? `Review finding ${findingId} accepted`
           : `Review finding ${findingId} revised and accepted`,
       );
     })();
+    if (rejection) throw rejection;
     if (!result) throw new ApiError(500, 'apply_failed', 'The finding could not be applied.');
     return result;
   }

@@ -37,6 +37,8 @@ The setup command creates `prd-genie-qwen3-4b-instruct:latest` with an 8,192-tok
 - Stable section targeting and revision binding.
 - Proposal application and restart persistence.
 
+Coverage has a 90% per-module gate for retrieval, credential handling, provider normalization, source deletion, and proposal application. Proposal application includes both direct provider output in `proposal-service.ts` and review or ChatGPT patch acceptance in `patch-application.ts`.
+
 The generated report is written to `reports/model-evaluation.json`. No current real-model pass is claimed until that command succeeds for the exact release candidate.
 
 ## What this does not prove

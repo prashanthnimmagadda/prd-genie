@@ -144,14 +144,10 @@ export class ActionService {
                 proposedPatch: patch,
                 sourceRevision: request.revision,
               });
-              const findingCitations = item.citationChunkIds.flatMap((id) => {
-                const citation = evidence.find((candidate) => candidate.chunkId === id);
-                return citation ? [citation] : [];
-              });
               writer.write({
                 type: 'data-finding',
                 id: finding.id,
-                data: { ...finding, citations: findingCitations },
+                data: finding,
               });
             }
             writer.write({ type: 'text-start', id: runId });
