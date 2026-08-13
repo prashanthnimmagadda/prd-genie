@@ -2,36 +2,59 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import {
+  collectArtifactPaths,
+  publicProductName,
+  publicReleaseTarget,
+  validateEvidenceReports,
+  validatePublicApproval,
+} from './provenance-policy.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const hashFile = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const sourceVisibility = process.env.PRD_GENIE_SOURCE_VISIBILITY ?? 'local-only';
-const publicPromotionApproved = process.env.PRD_GENIE_PUBLIC_PROMOTION_APPROVED === 'true';
 if (!['local-only', 'private-github', 'public-github'].includes(sourceVisibility)) {
   throw new Error(
     'PRD_GENIE_SOURCE_VISIBILITY must be local-only, private-github, or public-github.',
   );
 }
-if (sourceVisibility === 'public-github' && !publicPromotionApproved) {
-  throw new Error('Public GitHub provenance requires explicit promotion approval.');
+
+const gitSha = git(['rev-parse', 'HEAD']);
+const clean = git(['status', '--porcelain=v1']).length === 0;
+const artifacts = collectArtifactPaths(root).map((relative) => ({
+  path: relative,
+  sha256: hashFile(path.join(root, relative)),
+}));
+validateEvidenceReports(root, gitSha);
+
+let releaseTag = null;
+let publicPromotionApproved = false;
+let publicApproval = null;
+if (sourceVisibility === 'public-github') {
+  const approvalPath = process.env.PRD_GENIE_PUBLIC_APPROVAL_FILE;
+  if (!approvalPath) throw new Error('Public GitHub provenance requires an approval file.');
+  const approval = JSON.parse(fs.readFileSync(path.resolve(approvalPath), 'utf8'));
+  const tag = typeof approval?.tag === 'string' ? approval.tag : '';
+  const tagSha = (() => {
+    try {
+      return git(['rev-list', '-n', '1', tag]);
+    } catch {
+      throw new Error('The approved release tag does not exist.');
+    }
+  })();
+  validatePublicApproval({ approval, artifacts, gitSha, clean, tagSha });
+  releaseTag = tag;
+  publicPromotionApproved = true;
+  publicApproval = approval;
 }
-const artifacts = [
-  'package-lock.json',
-  'reports/licenses.json',
-  'reports/sbom.cdx.json',
-  'dist/client/index.html',
-  'dist/server/server/index.js',
-]
-  .filter((relative) => fs.existsSync(path.join(root, relative)))
-  .map((relative) => ({ path: relative, sha256: hashFile(path.join(root, relative)) }));
 
 const report = {
   generatedAt: new Date().toISOString(),
   git: {
-    sha: git(['rev-parse', 'HEAD']),
+    sha: gitSha,
     branch: git(['branch', '--show-current']),
-    clean: git(['status', '--porcelain=v1']).length === 0,
+    clean,
   },
   runtime: {
     node: process.version,
@@ -43,6 +66,13 @@ const report = {
     sourceVisibility,
     employerEraInputsCopied: false,
     publicPromotionApproved,
+    releaseTag,
+    publicTarget: publicPromotionApproved ? publicReleaseTarget : null,
+    publicName: publicPromotionApproved ? publicProductName : null,
+    rightsConfirmed: publicApproval?.rightsConfirmed === true,
+    validationStatus: publicApproval?.validationStatus ?? null,
+    knownLimitations: publicApproval?.knownLimitations ?? [],
+    unresolvedIssues: publicApproval?.unresolvedIssues ?? [],
   },
 };
 

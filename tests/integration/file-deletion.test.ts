@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../../src/server/config.js';
 import { createDatabase, type AppDatabase } from '../../src/server/db/client.js';
-import { drainPendingFileDeletions } from '../../src/server/db/file-deletion.js';
+import { drainPendingFileDeletions, safeErrorCode } from '../../src/server/db/file-deletion.js';
 import { Repository } from '../../src/server/db/repository.js';
 import { sources } from '../../src/server/db/schema.js';
 
@@ -105,6 +105,26 @@ describe('durable file deletion outbox', () => {
     expect(drainPendingFileDeletions(database)).toBe(1);
     expect(fs.readFileSync(unsafePath, 'utf8')).toBe('private');
     expect(pendingJobs()).toEqual([{ attempts: 1, lastErrorCode: 'unsafe_path' }]);
+  });
+
+  it('redacts malformed and nonstandard filesystem failures', () => {
+    const malformedPath = path.join(sourceDirectory, 'malformed.txt');
+    const unknownPath = path.join(sourceDirectory, 'unknown.txt');
+    insertPending(malformedPath);
+    insertPending(unknownPath);
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw Object.assign(new Error('private filesystem detail'), { code: 'bad-code!' });
+    });
+    try {
+      expect(drainPendingFileDeletions(database)).toBe(2);
+      expect(pendingJobs()).toEqual([
+        { attempts: 1, lastErrorCode: 'filesystem_error' },
+        { attempts: 1, lastErrorCode: 'filesystem_error' },
+      ]);
+      expect(safeErrorCode('private non-error detail')).toBe('filesystem_error');
+    } finally {
+      unlink.mockRestore();
+    }
   });
 
   function insertSource(projectId: string, binaryPath: string, hashPrefix: string): string {

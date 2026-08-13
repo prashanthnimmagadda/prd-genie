@@ -32,6 +32,7 @@
     "licenses": "node scripts/license-report.mjs",
     "sbom": "node scripts/sbom.mjs",
     "provenance": "node scripts/provenance.mjs",
+    "container:record-smoke": "node scripts/record-container-smoke.mjs",
     "eval:model:setup": "node scripts/setup-eval-model.mjs",
     "eval:model": "tsx scripts/evaluate-prd.ts",
     "ci:offline": "node scripts/offline-ci.mjs",

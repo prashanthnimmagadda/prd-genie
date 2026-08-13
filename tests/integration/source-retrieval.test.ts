@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { config } from '../../src/server/config.js';
 import type { AppDatabase } from '../../src/server/db/client.js';
@@ -79,6 +80,27 @@ describe('source lifecycle and retrieval fallback', () => {
     expect(repository.listSources(project.id)).toHaveLength(0);
     expect(fs.readdirSync(directory)).toHaveLength(0);
     expect(() => repository.deleteSource(project.id, source.id)).toThrow('Source not found');
+  });
+
+  it('cancels pending binary cleanup when the same content is uploaded again', async () => {
+    const project = repository.createProject('Cleanup cancellation', '');
+    const service = new SourceService(database, unavailableEmbeddings);
+    const content = Buffer.from('Reusable evidence remains referenced after a cleanup retry.');
+    const hash = createHash('sha256').update(content).digest('hex');
+    const binaryPath = path.join(directory, `${hash}.txt`);
+    fs.writeFileSync(binaryPath, content);
+    database.sqlite
+      .prepare(
+        `INSERT INTO pending_file_deletions
+         (binary_path, created_at, attempts, last_error_code, last_attempt_at)
+         VALUES (?, ?, 1, 'EPERM', ?)`,
+      )
+      .run(binaryPath, new Date().toISOString(), new Date().toISOString());
+
+    await service.add(project.id, 'reused.txt', content);
+
+    expect(repository.pendingFileDeletionCount()).toBe(0);
+    expect(fs.existsSync(binaryPath)).toBe(true);
   });
 
   it('rejects empty and oversized source buffers before writing', async () => {

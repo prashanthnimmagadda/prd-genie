@@ -35,7 +35,10 @@ vi.mock('ai', () => ({
     new Response(stream),
 }));
 
-import { ActionService } from '../../src/server/providers/action-service.js';
+import {
+  ActionService,
+  normalizeReviewSummary,
+} from '../../src/server/providers/action-service.js';
 import type { Repository } from '../../src/server/db/repository.js';
 import type { RetrievalService } from '../../src/server/retrieval/retrieval-service.js';
 import type { ProviderService } from '../../src/server/providers/provider-service.js';
@@ -257,7 +260,7 @@ describe('ActionService', () => {
   it('reviews the complete document and emits only findings for known sections', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'One evidence gap found.',
+        summary: 'One evidence gap was found. The Problem section lacks cited support.',
         findings: {
           finding1: {
             category: 'evidence',
@@ -287,7 +290,8 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     const body = await response.text();
-    expect(body).toContain('One evidence gap found.');
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({ maxOutputTokens: 2000 });
+    expect(body).toContain('One evidence gap was found.');
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
     const storedFinding = repository.storeFinding.mock.calls[0]?.[0] as
       { citationIds: string[]; proposedPatch: { sectionId: string } } | undefined;
@@ -296,14 +300,15 @@ describe('ActionService', () => {
     expect(repository.completeAiRun).toHaveBeenCalledWith(
       'run-id',
       undefined,
-      'One evidence gap found.',
+      'One evidence gap was found. The Problem section lacks cited support.',
     );
   });
 
   it('streams the repository evidence state when a review completes after deletion', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'The evidence was removed while the review was running.',
+        summary:
+          'The evidence was removed while the review was running. The finding cannot be accepted without available support.',
         findings: {
           finding1: {
             category: 'evidence',
@@ -345,7 +350,7 @@ describe('ActionService', () => {
   it('resolves a unique section title and supports findings without patches', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'The Problem section needs evidence.',
+        summary: 'The Problem section needs evidence. Its current claim has no cited support.',
         findings: {
           finding1: {
             category: 'evidence',
@@ -412,5 +417,17 @@ describe('ActionService', () => {
     );
     expect(await response.text()).toContain('rate_limit');
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'rate_limit');
+  });
+});
+
+describe('review summary normalization', () => {
+  it('keeps no more than three complete sentences', () => {
+    expect(normalizeReviewSummary(' First. Second! Third? Fourth. ')).toBe('First. Second! Third?');
+  });
+
+  it('rejects a summary with fewer than two complete sentences', () => {
+    expect(() => normalizeReviewSummary('Only one sentence.')).toThrow(
+      'fewer than two complete sentences',
+    );
   });
 });

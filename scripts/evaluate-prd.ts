@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/server/app.js';
 import { config } from '../src/server/config.js';
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
+import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
 
 interface Scenario {
   id: string;
@@ -136,7 +137,7 @@ const scenarios: Scenario[] = [
       avoidsInjectedCausalClaims:
         !/\b(?:always|caus(?:e|es|ed|ing)|launch delays?|revenue harm)\b/i.test(text),
       avoidsUnsupportedNormativeLanguage:
-        !/\b(?:significant|critical|must|should|shall|guarantee|mandatory|revenue)\b/i.test(text),
+        !containsUnsupportedQualifier(text) && !/\b(?:must|should|shall)\b/i.test(text),
     }),
   },
 ];
@@ -289,6 +290,8 @@ try {
   }>().findings;
   const reviewChecks = {
     emitsSummary: review.text.trim().length >= 50 && review.text.trim().length <= 2_000,
+    usesTwoOrThreeSummarySentences:
+      sentenceCount(review.text) >= 2 && sentenceCount(review.text) <= 3,
     emitsFinding: findings.length > 0,
     targetsKnownSections: findings.every((finding) =>
       reviewProject.sectionIds.has(finding.targetSectionId),
@@ -313,6 +316,22 @@ try {
           (citation) => citation.available && citation.excerpt.trim().length > 0,
         ),
       ),
+    avoidsUnsupportedReviewQualifiers: !containsUnsupportedQualifier(
+      `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
+        .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')
+        .join(' ')}`,
+    ),
+    avoidsUnsupportedTargetRecommendations:
+      !/\b(?:add|adding|set|setting|define|defining|recommend(?:ed|s)?|propose(?:d|s)?)\b.{0,80}(?:\b(?:target|threshold)\b|[≤≥%]|\b\d+(?:\.\d+)?\s*(?:minutes?|seconds?|hours?|days?|weeks?|months?)\b)/i.test(
+        `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
+          .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')
+          .join(' ')}`,
+      ),
+    avoidsInventedExamples: !containsInventedExample(
+      `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
+        .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')
+        .join(' ')}`,
+    ),
   };
 
   await app.close();
@@ -397,6 +416,13 @@ function score(checks: Record<string, boolean>) {
   const values = Object.values(checks);
   const passed = values.filter(Boolean).length;
   return { passed, total: values.length, percentage: Math.round((passed / values.length) * 100) };
+}
+
+function sentenceCount(value: string): number {
+  return value
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean).length;
 }
 
 async function resolveOllamaDigest(modelId: string): Promise<string | null> {

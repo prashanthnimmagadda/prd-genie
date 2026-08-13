@@ -11,6 +11,8 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 FROM node:${NODE_VERSION}-trixie-slim AS runtime
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GIT_REVISION
 ENV NODE_ENV=production
 ENV PRD_GENIE_DATA_DIR=/data
 ENV PRD_GENIE_MODEL_CACHE_DIR=/models
@@ -25,4 +27,4 @@ COPY --chmod=755 scripts/container-entrypoint.sh /usr/local/bin/prd-genie-entryp
 RUN mkdir -p /data /models && chown -R node:node /app /data /models
 EXPOSE 3210
 ENTRYPOINT ["prd-genie-entrypoint"]
-CMD ["npm", "start"]
+CMD ["node", "dist/server/server/index.js"]

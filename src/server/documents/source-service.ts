@@ -66,6 +66,9 @@ export class SourceService {
     try {
       this.database.sqlite.transaction(() => {
         this.database.db.insert(sources).values(source).run();
+        this.database.sqlite
+          .prepare('DELETE FROM pending_file_deletions WHERE binary_path = ?')
+          .run(binaryPath);
         this.database.db
           .insert(sourceLocations)
           .values(

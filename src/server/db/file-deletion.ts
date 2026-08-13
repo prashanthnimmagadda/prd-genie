@@ -75,7 +75,7 @@ function isWithinSourceDirectory(binaryPath: string): boolean {
   return path.resolve(binaryPath).startsWith(root);
 }
 
-function safeErrorCode(error: unknown): string {
+export function safeErrorCode(error: unknown): string {
   if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
     return /^[A-Z0-9_]{1,40}$/.test(error.code) ? error.code : 'filesystem_error';
   }

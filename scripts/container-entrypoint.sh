@@ -7,4 +7,4 @@ for directory in /data /models; do
   chmod 700 "$directory"
 done
 
-exec /usr/sbin/runuser -u node -- "$@"
+exec /usr/bin/setpriv --reuid=node --regid=node --init-groups -- "$@"

@@ -46,4 +46,7 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Added durable, path-confined retry for source and project binary cleanup.
 - Initialised fresh container volumes before dropping to the unprivileged application user.
 - Required explicit approval when provenance records public GitHub promotion.
+- Cancelled pending cleanup on matching uploads and tightened container signal handling.
+- Expanded grounding evaluation for unsupported qualifiers and target recommendations.
+- Bound public provenance to the clean SHA, release tag, full runtime tree, and validation bundle.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.

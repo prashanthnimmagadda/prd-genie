@@ -1,0 +1,344 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  collectArtifactPaths,
+  containsInventedExample,
+  containsUnsupportedQualifier,
+  publicProductName,
+  publicReleaseTarget,
+  requiredArtifactDirectories,
+  requiredArtifactFiles,
+  requiredModelScenarioChecks,
+  requiredOfflineSteps,
+  requiredPersistenceChecks,
+  requiredStructuredReviewChecks,
+  validateContainerSmokeReport,
+  validateEvidenceReports,
+  validatePublicApproval,
+} from '../../scripts/provenance-policy.mjs';
+
+const gitSha = 'a'.repeat(40);
+
+describe('release provenance policy', () => {
+  const directories: string[] = [];
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when any required artifact is absent', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-provenance-'));
+    directories.push(root);
+    expect(() => collectArtifactPaths(root)).toThrow('Required artifact is missing');
+  });
+
+  it('recursively inventories the complete artifact tree and rejects unsafe trees', () => {
+    const root = artifactFixture();
+    const artifacts = collectArtifactPaths(root);
+    expect(artifacts).toContain('dist/client/assets/app.js');
+    expect(artifacts).toContain('dist/server/server/index.js');
+    expect(artifacts).toContain('drizzle/0000_initial.sql');
+
+    fs.rmSync(path.join(root, 'dist/server'), { recursive: true });
+    expect(() => collectArtifactPaths(root)).toThrow('Required artifact directory is missing');
+    fs.mkdirSync(path.join(root, 'dist/server'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'package.json'), path.join(root, 'dist/server/link'));
+    expect(() => collectArtifactPaths(root)).toThrow('symbolic link');
+
+    fs.rmSync(path.join(root, 'dist/server'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'dist/client'), path.join(root, 'dist/server'));
+    expect(() => collectArtifactPaths(root)).toThrow('directory is a symbolic link');
+  });
+
+  it('requires the exact successful full offline gate', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    expect(() => validateEvidenceReports(root, gitSha)).not.toThrow();
+
+    const mutations: Array<(report: ReturnType<typeof offlineFixture>) => void> = [
+      (report) => (report.schemaVersion = 2),
+      (report) => (report.mode = 'quick'),
+      (report) => (report.runtime.node = 'v20.0.0'),
+      (report) => (report.git.sha = 'b'.repeat(40)),
+      (report) => (report.git.clean = false),
+      (report) => (report.passed = false),
+      (report) => void report.results.pop(),
+      (report) => (report.results[0]!.name = 'browser'),
+      (report) => (report.results[0]!.status = 'failed'),
+      (report) => (report.results[0]!.exitCode = 1),
+    ];
+    for (const mutate of mutations) {
+      const report = offlineFixture();
+      mutate(report);
+      writeJson(root, 'reports/offline-ci.json', report);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow('Offline CI evidence');
+      writeEvidence(root);
+    }
+  });
+
+  it('recomputes every model-evaluation check instead of trusting its percentage', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    const mutations: Array<(report: ReturnType<typeof modelFixture>) => void> = [
+      (report) => (report.gitSha = 'b'.repeat(40)),
+      (report) => (report.dirtyWorkingTree = true),
+      (report) => (report.model = ''),
+      (report) => (report.modelDigest = 'bad'),
+      (report) => (report.provider = 'openai'),
+      (report) => (report.retrievalMode = 'vector'),
+      (report) => (report.corpusVersion = 1),
+      (report) => (report.scenarios = []),
+      (report) => report.scenarios.push(structuredClone(report.scenarios[0]!)),
+      (report) => (report.scenarios[0]!.id = 'substituted-scenario'),
+      (report) => delete report.scenarios[0]!.checks.mentionsInterviewBase,
+      (report) => (report.scenarios[0]!.checks.substitutedCheck = true),
+      (report) => (report.scenarios[0]!.checks.mentionsInterviewBase = false),
+      (report) => (report.scenarios[0]!.score.total += 1),
+      (report) => delete report.structuredReview.checks.emitsSummary,
+      (report) => (report.structuredReview.checks.substitutedCheck = true),
+      (report) => (report.structuredReview.checks.emitsSummary = false),
+      (report) => (report.structuredReview.score.percentage = 99),
+      (report) => delete report.persistence.allProjectsPersisted,
+      (report) => (report.persistence.substitutedCheck = true),
+      (report) => (report.persistence.allProjectsPersisted = false),
+      (report) => (report.limitations = []),
+      (report) => report.limitations.push(report.limitations[0]!),
+      (report) => (report.score.total = 4),
+    ];
+    for (const mutate of mutations) {
+      const report = modelFixture();
+      mutate(report);
+      writeJson(root, 'reports/model-evaluation.json', report);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow('Model evaluation evidence');
+      writeEvidence(root);
+    }
+  });
+
+  it('requires complete normalized container evidence for the clean SHA', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    const mutations: Array<(report: ReturnType<typeof containerReportFixture>) => void> = [
+      (report) => (report.schemaVersion = 2),
+      (report) => (report.git.sha = 'b'.repeat(40)),
+      (report) => (report.engine.name = ''),
+      (report) => (report.engine.version = ''),
+      (report) => (report.engine.platform = 'linux/amd64'),
+      (report) => (report.image.reference = ''),
+      (report) => (report.image.digest = 'bad'),
+      (report) => (report.image.revision = 'b'.repeat(40)),
+      (report) => (report.resources.containerName = ''),
+      (report) => (report.resources.volumeNames = []),
+      (report) => (report.checks.health = false),
+      (report) => (report.checks.healthStatus = 'failed'),
+      (report) => (report.checks.pendingFileCleanup = 1),
+      (report) => (report.checks.invalidHostStatus = 200),
+      (report) => (report.checks.runtimeUid = 0),
+      (report) => (report.checks.runtimePid = 2),
+      (report) => (report.checks.persistenceAfterRestart = false),
+      (report) => (report.checks.gracefulSigterm = false),
+      (report) => (report.checks.shutdownSignal = 'SIGKILL'),
+      (report) => (report.checks.stopMilliseconds = -1),
+      (report) => (report.checks.shutdownLogSha256 = 'bad'),
+      (report) => (report.checks.cleanupComplete = false),
+    ];
+    for (const mutate of mutations) {
+      const report = containerReportFixture();
+      mutate(report);
+      writeJson(root, 'reports/container-smoke.json', report);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow('Container smoke evidence');
+      writeEvidence(root);
+    }
+    expect(validateContainerSmokeReport(containerReportFixture(), gitSha)).toBe(true);
+    expect(validateContainerSmokeReport(null, gitSha)).toBe(false);
+  });
+
+  it('binds public approval to identity, rights, validation, issues, and artifacts', () => {
+    const artifacts = [
+      { path: 'release.tar.gz', sha256: 'b'.repeat(64) },
+      { path: 'sbom.json', sha256: 'c'.repeat(64) },
+    ];
+    const valid = approvalFixture(artifacts);
+    expect(() =>
+      validatePublicApproval({ approval: valid, artifacts, gitSha, clean: true, tagSha: gitSha }),
+    ).not.toThrow();
+
+    const mutations: Array<(approval: ReturnType<typeof approvalFixture>) => void> = [
+      (approval) => (approval.approved = false),
+      (approval) => (approval.schemaVersion = 2),
+      (approval) => (approval.approvalScope = 'private'),
+      (approval) => (approval.gitSha = 'c'.repeat(40)),
+      (approval) => (approval.tag = 'latest'),
+      (approval) => (approval.publicTarget = 'https://example.com/repo'),
+      (approval) => (approval.publicName = 'Different name'),
+      (approval) => (approval.rightsConfirmed = false),
+      (approval) => (approval.validationStatus = 'failed'),
+      (approval) => (approval.knownLimitations = []),
+      (approval) => approval.knownLimitations.push(approval.knownLimitations[0]!),
+      (approval) => (approval.unresolvedIssues = ['']),
+      (approval) => (approval.artifacts = []),
+      (approval) => (approval.artifacts[0]!.sha256 = 'e'.repeat(64)),
+      (approval) => (approval.artifacts = [artifacts[0]!, artifacts[0]!]),
+      (approval) => (approval.artifacts = [{ path: '../secret', sha256: 'e'.repeat(64) }]),
+      (approval) => (approval.artifacts = [{ path: '/tmp/file', sha256: 'e'.repeat(64) }]),
+      (approval) => (approval.artifacts = [{ path: 'bad\\path', sha256: 'e'.repeat(64) }]),
+    ];
+    for (const mutate of mutations) {
+      const approval = structuredClone(valid);
+      mutate(approval);
+      expect(() =>
+        validatePublicApproval({ approval, artifacts, gitSha, clean: true, tagSha: gitSha }),
+      ).toThrow();
+    }
+    expect(() =>
+      validatePublicApproval({ approval: valid, artifacts, gitSha, clean: false, tagSha: gitSha }),
+    ).toThrow('clean working tree');
+    expect(() =>
+      validatePublicApproval({
+        approval: valid,
+        artifacts,
+        gitSha,
+        clean: true,
+        tagSha: 'd'.repeat(40),
+      }),
+    ).toThrow('does not point');
+  });
+
+  it.each(['consistent', 'significant', 'critical', 'severe', 'urgent', 'always', 'guarantee'])(
+    'detects the unsupported qualifier %s',
+    (qualifier) => expect(containsUnsupportedQualifier(`This is ${qualifier}.`)).toBe(true),
+  );
+
+  it.each(['e.g.', 'for example', 'for instance', 'such as'])(
+    'detects the invented-example phrase %s',
+    (phrase) => expect(containsInventedExample(`Add ${phrase} a synthetic target.`)).toBe(true),
+  );
+
+  function artifactFixture(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-provenance-'));
+    directories.push(root);
+    for (const relative of requiredArtifactFiles) {
+      const absolute = path.join(root, relative);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, '{}');
+    }
+    const files = {
+      'dist/client/assets/app.js': 'client',
+      'dist/client/index.html': 'index',
+      'dist/server/server/index.js': 'server',
+      'drizzle/0000_initial.sql': 'migration',
+    };
+    for (const [relative, content] of Object.entries(files)) {
+      const absolute = path.join(root, relative);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, content);
+    }
+    for (const relative of requiredArtifactDirectories) {
+      fs.mkdirSync(path.join(root, relative), { recursive: true });
+    }
+    return root;
+  }
+
+  function writeEvidence(root: string): void {
+    writeJson(root, 'reports/offline-ci.json', offlineFixture());
+    writeJson(root, 'reports/model-evaluation.json', modelFixture());
+    writeJson(root, 'reports/container-smoke.json', containerReportFixture());
+  }
+});
+
+function offlineFixture() {
+  return {
+    schemaVersion: 1,
+    mode: 'full',
+    runtime: { node: 'v22.23.0' },
+    git: { sha: gitSha, clean: true },
+    passed: true,
+    results: requiredOfflineSteps.map((name) => ({ name, status: 'passed', exitCode: 0 })),
+  };
+}
+
+function modelFixture() {
+  const scenarios = Object.entries(requiredModelScenarioChecks).map(([id, names]) => ({
+    id,
+    checks: trueChecks(names),
+    score: { passed: names.length, total: names.length, percentage: 100 },
+  }));
+  const reviewChecks = trueChecks(requiredStructuredReviewChecks);
+  const persistence = trueChecks(requiredPersistenceChecks);
+  const total =
+    scenarios.reduce((sum, scenario) => sum + scenario.score.total, 0) +
+    requiredStructuredReviewChecks.length +
+    requiredPersistenceChecks.length;
+  return {
+    gitSha,
+    dirtyWorkingTree: false,
+    model: 'test-model',
+    modelDigest: 'd'.repeat(64),
+    provider: 'ollama',
+    retrievalMode: 'lexical',
+    corpusVersion: 2,
+    scenarios,
+    structuredReview: {
+      checks: reviewChecks,
+      score: {
+        passed: requiredStructuredReviewChecks.length,
+        total: requiredStructuredReviewChecks.length,
+        percentage: 100,
+      },
+    },
+    persistence,
+    score: { passed: total, total, percentage: 100 },
+    limitations: ['Synthetic corpus only.'],
+  };
+}
+
+function containerReportFixture() {
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    engine: { name: 'Apple Container', version: '0.9.0', platform: 'linux/arm64' },
+    image: { reference: 'prd-genie:test', digest: `sha256:${'e'.repeat(64)}`, revision: gitSha },
+    resources: { containerName: 'prd-genie-test', volumeNames: ['data-test', 'models-test'] },
+    checks: {
+      health: true,
+      healthStatus: 'ok',
+      pendingFileCleanup: 0,
+      invalidHostStatus: 421,
+      runtimeUid: 1000,
+      runtimePid: 1,
+      persistenceAfterRestart: true,
+      gracefulSigterm: true,
+      shutdownSignal: 'SIGTERM',
+      stopMilliseconds: 500,
+      shutdownLogSha256: 'f'.repeat(64),
+      cleanupComplete: true,
+    },
+  };
+}
+
+function trueChecks(names: string[]): Record<string, boolean> {
+  return Object.fromEntries(names.map((name) => [name, true]));
+}
+
+function approvalFixture(artifacts: Array<{ path: string; sha256: string }>) {
+  return {
+    schemaVersion: 1,
+    approvalScope: 'public-github-release',
+    approved: true,
+    gitSha,
+    tag: 'v0.1.0-rc.2',
+    publicTarget: publicReleaseTarget,
+    publicName: publicProductName,
+    rightsConfirmed: true,
+    validationStatus: 'passed',
+    knownLimitations: ['Native Windows validation is pending.'],
+    unresolvedIssues: ['Native Windows validation is not yet recorded.'],
+    artifacts,
+  };
+}
+
+function writeJson(root: string, relative: string, value: unknown): void {
+  fs.writeFileSync(path.join(root, relative), JSON.stringify(value));
+}
