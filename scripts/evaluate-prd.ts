@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/server/app.js';
 import { config } from '../src/server/config.js';
+import { containsNumericTargetProposal } from '../src/server/providers/action-service.js';
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
 
@@ -290,8 +291,8 @@ try {
   }>().findings;
   const reviewChecks = {
     emitsSummary: review.text.trim().length >= 50 && review.text.trim().length <= 2_000,
-    usesTwoOrThreeSummarySentences:
-      sentenceCount(review.text) >= 2 && sentenceCount(review.text) <= 3,
+    usesOneToThreeSummarySentences:
+      sentenceCount(review.text) >= 1 && sentenceCount(review.text) <= 3,
     emitsFinding: findings.length > 0,
     targetsKnownSections: findings.every((finding) =>
       reviewProject.sectionIds.has(finding.targetSectionId),
@@ -321,12 +322,13 @@ try {
         .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')
         .join(' ')}`,
     ),
-    avoidsUnsupportedTargetRecommendations:
-      !/\b(?:add|adding|set|setting|define|defining|recommend(?:ed|s)?|propose(?:d|s)?)\b.{0,80}(?:\b(?:target|threshold)\b|[≤≥%]|\b\d+(?:\.\d+)?\s*(?:minutes?|seconds?|hours?|days?|weeks?|months?)\b)/i.test(
-        `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
-          .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')
-          .join(' ')}`,
-      ),
+    avoidsUnsupportedTargetRecommendations: [
+      review.text,
+      ...findings.flatMap((finding) => [
+        finding.rationale,
+        finding.proposedPatch?.afterMarkdown ?? '',
+      ]),
+    ].every((value) => !containsNumericTargetProposal(value)),
     avoidsInventedExamples: !containsInventedExample(
       `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
         .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')

@@ -37,6 +37,8 @@ vi.mock('ai', () => ({
 
 import {
   ActionService,
+  containsNewNumericValue,
+  containsNumericTargetProposal,
   normalizeReviewSummary,
 } from '../../src/server/providers/action-service.js';
 import type { Repository } from '../../src/server/db/repository.js';
@@ -388,6 +390,38 @@ describe('ActionService', () => {
     );
   });
 
+  it('drops a review patch that introduces a numeric value absent from trusted context', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary:
+          'The Success measures section lacks an approved target. Reviewers cannot verify success without a grounded measure.',
+        findings: {
+          finding1: {
+            category: 'success-measure',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The current context supplies no approved target.',
+            citationChunkIds: [],
+            proposedMarkdown: 'Reduce recovery time from 23 minutes to under 5 minutes.',
+          },
+          finding2: null,
+          finding3: null,
+          finding4: null,
+          finding5: null,
+        },
+      },
+    });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    await response.text();
+    expect(repository.storeFinding).toHaveBeenCalledWith(
+      expect.objectContaining({ proposedPatch: null }),
+    );
+  });
+
   it('rejects structured reviews that exceed the post-validation contract', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
@@ -431,13 +465,43 @@ describe('review summary normalization', () => {
     expect(normalizeReviewSummary(' First. Second! Third? Fourth. ')).toBe('First. Second! Third?');
   });
 
-  it('adds a neutral navigation sentence when a provider returns one sentence', () => {
-    expect(normalizeReviewSummary('Only one sentence.')).toBe(
-      'Only one sentence. The findings below identify the affected PRD sections and review gaps.',
-    );
+  it('accepts a concise one-sentence summary without adding generated claims', () => {
+    expect(normalizeReviewSummary('Only one sentence.')).toBe('Only one sentence.');
   });
 
   it('rejects an empty review summary', () => {
     expect(() => normalizeReviewSummary('')).toThrow('empty review summary');
+  });
+});
+
+describe('review numeric grounding', () => {
+  it('allows values already present in trusted context', () => {
+    expect(
+      containsNewNumericValue('Keep the 23 minute baseline.', 'The baseline is 23 minutes.'),
+    ).toBe(false);
+  });
+
+  it('detects a newly invented numeric value', () => {
+    expect(
+      containsNewNumericValue(
+        'Reduce the 23 minute baseline to 5 minutes.',
+        'The baseline is 23 minutes.',
+      ),
+    ).toBe(true);
+  });
+
+  it('compares values with their units and ignores ordered-list markers', () => {
+    expect(
+      containsNewNumericValue('Set the target to 23 days.', 'The baseline is 23 minutes.'),
+    ).toBe(true);
+    expect(containsNewNumericValue('1. Preserve the existing behavior.', '')).toBe(false);
+  });
+
+  it('detects explicit numeric targets even when the value exists as a baseline', () => {
+    expect(
+      containsNumericTargetProposal('Reduce the baseline from 23 minutes to 23 minutes.'),
+    ).toBe(true);
+    expect(containsNumericTargetProposal('Success criterion: under 23 minutes.')).toBe(true);
+    expect(containsNumericTargetProposal('The evidence reports a 23 minute baseline.')).toBe(false);
   });
 });

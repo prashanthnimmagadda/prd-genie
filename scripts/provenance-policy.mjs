@@ -80,7 +80,7 @@ export const requiredModelScenarioChecks = {
 };
 export const requiredStructuredReviewChecks = [
   'emitsSummary',
-  'usesTwoOrThreeSummarySentences',
+  'usesOneToThreeSummarySentences',
   'emitsFinding',
   'targetsKnownSections',
   'bindsRevision',
