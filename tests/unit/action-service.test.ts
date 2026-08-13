@@ -263,8 +263,8 @@ describe('ActionService', () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: 'One evidence gap was found. The Problem section lacks cited support.',
-        findings: {
-          finding1: {
+        findings: [
+          {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -272,7 +272,7 @@ describe('ActionService', () => {
             citationChunkIds: ['chunk-id', 'unknown'],
             proposedMarkdown: 'Five participants lost unsaved drafts.',
           },
-          finding2: {
+          {
             category: 'clarity',
             severity: 'info',
             targetSectionId: 'unknown-section',
@@ -280,10 +280,7 @@ describe('ActionService', () => {
             citationChunkIds: [],
             proposedMarkdown: null,
           },
-          finding3: null,
-          finding4: null,
-          finding5: null,
-        },
+        ],
       },
     });
     const response = await service.run(
@@ -294,8 +291,8 @@ describe('ActionService', () => {
     const body = await response.text();
     expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 3000,
-      temperature: 0.7,
     });
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).not.toHaveProperty('temperature');
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'e.g., for example, for instance, or such as',
     );
@@ -317,8 +314,8 @@ describe('ActionService', () => {
       output: {
         summary:
           'The evidence was removed while the review was running. The finding cannot be accepted without available support.',
-        findings: {
-          finding1: {
+        findings: [
+          {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -326,11 +323,7 @@ describe('ActionService', () => {
             citationChunkIds: ['chunk-id'],
             proposedMarkdown: null,
           },
-          finding2: null,
-          finding3: null,
-          finding4: null,
-          finding5: null,
-        },
+        ],
       },
     });
     repository.storeFinding.mockReturnValueOnce({
@@ -359,8 +352,8 @@ describe('ActionService', () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: 'The Problem section needs evidence. Its current claim has no cited support.',
-        findings: {
-          finding1: {
+        findings: [
+          {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: 'Problem',
@@ -368,11 +361,7 @@ describe('ActionService', () => {
             citationChunkIds: ['unknown'],
             proposedMarkdown: null,
           },
-          finding2: null,
-          finding3: null,
-          finding4: null,
-          finding5: null,
-        },
+        ],
       },
     });
     const response = await service.run(
@@ -395,8 +384,8 @@ describe('ActionService', () => {
       output: {
         summary:
           'The Success measures section lacks an approved target. Reviewers cannot verify success without a grounded measure.',
-        findings: {
-          finding1: {
+        findings: [
+          {
             category: 'success-measure',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -404,11 +393,7 @@ describe('ActionService', () => {
             citationChunkIds: [],
             proposedMarkdown: 'Reduce recovery time from 23 minutes to under 5 minutes.',
           },
-          finding2: null,
-          finding3: null,
-          finding4: null,
-          finding5: null,
-        },
+        ],
       },
     });
     const response = await service.run(
@@ -426,13 +411,7 @@ describe('ActionService', () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: '',
-        findings: {
-          finding1: null,
-          finding2: null,
-          finding3: null,
-          finding4: null,
-          finding5: null,
-        },
+        findings: [],
       },
     });
     const response = await service.run(

@@ -22,8 +22,8 @@ const server = createServer(async (request, response) => {
       completion(response, {
         summary:
           'The Problem section lacks a clear consequence for the affected user, which weakens prioritisation. Add the observed review delay without introducing an unsupported business claim.',
-        findings: {
-          finding1: {
+        findings: [
+          {
             category: 'clarity',
             severity: 'warning',
             targetSectionId: sectionId,
@@ -33,9 +33,7 @@ const server = createServer(async (request, response) => {
             proposedMarkdown:
               'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.',
           },
-          finding2: null,
-          finding3: null,
-        },
+        ],
       });
       return;
     }
