@@ -19,6 +19,7 @@ interface Scenario {
 }
 
 const model = process.env.PRD_GENIE_EVAL_MODEL ?? 'prd-genie-qwen3-4b-instruct:latest';
+const reviewModel = process.env.PRD_GENIE_EVAL_REVIEW_MODEL ?? model;
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-model-eval-'));
 const databasePath = path.join(directory, 'evaluation.sqlite');
 const originalSourceDir = config.sourceDir;
@@ -166,6 +167,9 @@ try {
   if (!models.some((item) => item.id === model)) {
     throw new Error(`Evaluation model ${model} is not available.`);
   }
+  if (!models.some((item) => item.id === reviewModel)) {
+    throw new Error(`Review evaluation model ${reviewModel} is not available.`);
+  }
 
   const scenarioReports: Array<Record<string, unknown>> = [];
   let reviewProject:
@@ -275,7 +279,7 @@ try {
     action: 'review',
     scope: 'document',
     provider: 'ollama',
-    model,
+    model: reviewModel,
     instruction:
       'Run a structured review for missing testable requirements, measurable success criteria, risks, and unsupported assumptions.',
   });
@@ -353,6 +357,7 @@ try {
   };
 
   const modelDigest = await resolveOllamaDigest(model);
+  const reviewModelDigest = await resolveOllamaDigest(reviewModel);
   const gitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const dirty = Boolean(
     execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(),
@@ -371,6 +376,8 @@ try {
     dirtyWorkingTree: dirty,
     model,
     modelDigest,
+    reviewModel,
+    reviewModelDigest,
     provider: 'ollama',
     retrievalMode: 'lexical',
     corpusVersion: 2,

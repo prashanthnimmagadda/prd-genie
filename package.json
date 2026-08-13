@@ -34,6 +34,7 @@
     "provenance": "node scripts/provenance.mjs",
     "container:record-smoke": "node scripts/record-container-smoke.mjs",
     "eval:model:setup": "node scripts/setup-eval-model.mjs",
+    "eval:model:setup-review": "ollama create prd-genie-qwen3.5-9b-review:latest -f evaluations/ollama-qwen35-review.Modelfile",
     "eval:model": "tsx scripts/evaluate-prd.ts",
     "ci:offline": "node scripts/offline-ci.mjs",
     "ci:offline:quick": "node scripts/offline-ci.mjs --quick",

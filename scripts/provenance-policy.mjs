@@ -103,6 +103,7 @@ export const requiredArtifactFiles = [
   'scripts/provenance.mjs',
   'scripts/provenance-policy.mjs',
   'scripts/record-container-smoke.mjs',
+  'evaluations/ollama-qwen35-review.Modelfile',
   'reports/container-smoke.json',
   'reports/licenses.json',
   'reports/model-evaluation.json',
@@ -256,6 +257,9 @@ function validModelEvidence(model, gitSha) {
     typeof model.model !== 'string' ||
     !model.model.trim() ||
     !/^[a-f0-9]{64}$/.test(model.modelDigest ?? '') ||
+    typeof model.reviewModel !== 'string' ||
+    !model.reviewModel.trim() ||
+    !/^[a-f0-9]{64}$/.test(model.reviewModelDigest ?? '') ||
     model.provider !== 'ollama' ||
     model.retrievalMode !== 'lexical' ||
     model.corpusVersion !== 2 ||

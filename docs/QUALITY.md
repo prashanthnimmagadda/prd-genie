@@ -17,17 +17,21 @@ Results are release evidence only when they were produced from the exact documen
 
 ## Real-model evaluation
 
-`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is an optional release gate that requires an explicitly installed local model. A report is valid only when it records the exact model, model digest when available, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
+`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is an optional release gate that requires explicitly installed local models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
 
 Prepare the bounded evaluation model before the first run:
 
 ```bash
 ollama pull qwen3:4b-instruct
 npm run eval:model:setup
-npm run eval:model
+ollama pull qwen3.5:9b-q8_0
+npm run eval:model:setup-review
+PRD_GENIE_EVAL_REVIEW_MODEL=prd-genie-qwen3.5-9b-review:latest npm run eval:model
 ```
 
-The setup command creates `prd-genie-qwen3-4b-instruct:latest` with an 8,192-token context. The upstream model advertises a much larger context window that can require impractical local memory. Override the base model, alias, or context with `PRD_GENIE_EVAL_BASE_MODEL`, `PRD_GENIE_EVAL_MODEL`, and `PRD_GENIE_EVAL_CONTEXT_TOKENS` when a recorded evaluation requires a different configuration.
+The setup commands create bounded 8,192-token aliases. The 4B instruct model is evaluated for drafting and section rewrites. The 9B model is evaluated for structured review because it follows that JSON contract more reliably, but it is not accepted as a substitute for the 4B model in the prompt-injection rewrite scenario. This is a recorded evaluation configuration, not automatic model routing in the product. Users choose the provider and model for each action.
+
+The upstream models advertise much larger context windows that can require impractical local memory. Override the drafting model with `PRD_GENIE_EVAL_BASE_MODEL`, `PRD_GENIE_EVAL_MODEL`, and `PRD_GENIE_EVAL_CONTEXT_TOKENS`. Override the review model with `PRD_GENIE_EVAL_REVIEW_MODEL`.
 
 - Required evidence facts and rejection of unsupported business claims.
 - Concise PRD-only output without process narration.
