@@ -539,7 +539,7 @@ function reviewSystemPrompt(): string {
     'Every factual, causal, normative, and qualifying statement must be supported by the scoped PRD or a retrieved source excerpt. Before labeling a claim unsupported, compare it against every supplied excerpt, including exact numbers and measurements. Do not invent metrics, targets, thresholds, risks, assumptions, impact, consistency, or urgency. When content is missing, identify the gap only. Never propose an example, sample value, or numeric target. Do not use the phrases e.g., for example, for instance, or such as unless that exact content is supplied. Avoid words such as consistent, significant, critical, severe, or urgent unless trusted evidence uses that exact qualifier for the same fact.',
     'A proposed change is a preview and must never be described as already applied.',
     'The summary must use one to three complete sentences naming the affected section, its specific defect, and why it matters. Do not use vague labels, examples, or restate the review request.',
-    'Return no more than five findings. Put the highest-priority findings first and do not create more than one finding per category.',
+    'Return no more than three findings. Put the highest-priority findings first and do not create more than one finding per category.',
     'Keep the summary under 120 words and each rationale under 120 words.',
     'A proposed Markdown patch must contain only a concise replacement for its target section. Use null when a safe concise patch is not possible.',
   ].join(' ');
@@ -550,6 +550,6 @@ function ollamaReviewSystemPrompt(): string {
     reviewSystemPrompt(),
     'Return one JSON object only, with no Markdown fence or commentary.',
     'Use this exact shape: {"summary":"one to three sentences","findings":[{"category":"completeness|clarity|testability|evidence|contradiction|risk|assumption|success-measure","severity":"info|warning|blocking","targetSectionId":"supplied section ID","rationale":"grounded rationale","citationChunkIds":["supplied chunk ID"],"proposedMarkdown":null}]}',
-    'The findings array may contain zero to five items. proposedMarkdown may be a Markdown string only when the supplied context supports every claim and numeric value.',
+    'The findings array may contain zero to three items. proposedMarkdown may be a Markdown string only when the supplied context supports every claim and numeric value.',
   ].join(' ');
 }

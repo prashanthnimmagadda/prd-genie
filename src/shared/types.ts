@@ -393,7 +393,7 @@ const reviewGenerationFindingSchema = z.object({
 
 export const reviewGenerationSchema = z.object({
   summary: z.string(),
-  findings: z.array(reviewGenerationFindingSchema).max(5),
+  findings: z.array(reviewGenerationFindingSchema).max(3),
 });
 
 export const DEFAULT_SECTIONS = [
