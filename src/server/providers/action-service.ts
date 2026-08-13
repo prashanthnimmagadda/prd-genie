@@ -5,10 +5,12 @@ import {
   Output,
   streamText,
 } from 'ai';
+import type { z } from 'zod';
 import type {
   AiActionRequest,
   Citation,
   PrdDocument,
+  PrdSection,
   SectionPatch,
   WorkbenchMessage,
 } from '../../shared/types.js';
@@ -18,6 +20,12 @@ import type { Repository } from '../db/repository.js';
 import type { RetrievalService } from '../retrieval/retrieval-service.js';
 import { normalizeProviderError, type ProviderService } from './provider-service.js';
 import { normalizeDocumentProposal, normalizeSectionBody } from './proposal-service.js';
+
+type GeneratedReview = z.infer<typeof reviewOutputSchema>;
+type ResolvedReviewFinding = {
+  item: GeneratedReview['findings'][number];
+  section: PrdSection;
+};
 
 export class ActionService {
   constructor(
@@ -94,87 +102,71 @@ export class ActionService {
               data: { stage: 'review', detail: 'Reviewing the current revision' },
             });
             const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
-            const generatedReview =
-              request.provider === 'ollama'
-                ? reviewGenerationSchema.safeParse(
-                    parseOllamaReviewJson(
-                      (
-                        await generateText({
-                          model,
-                          system: ollamaReviewSystemPrompt(),
-                          prompt,
-                          providerOptions: localProviderOptions(request.provider),
-                          abortSignal: signal,
-                          maxOutputTokens: 3000,
-                          temperature: 0,
-                        })
-                      ).text,
-                    ),
-                  )
-                : reviewGenerationSchema.safeParse(
-                    (
-                      await generateText({
-                        model,
-                        output: Output.object({ schema: reviewGenerationSchema }),
-                        system: reviewSystemPrompt(),
-                        prompt,
-                        providerOptions: localProviderOptions(request.provider),
-                        abortSignal: signal,
-                        maxOutputTokens: 3000,
-                      })
-                    ).output,
-                  );
-            if (!generatedReview.success) {
-              throw new ApiError(
-                502,
-                'malformed_output',
-                'The provider returned an invalid structured review.',
-              );
+            let output: GeneratedReview | undefined;
+            let resolvedFindings: ResolvedReviewFinding[] | undefined;
+            const attempts = request.provider === 'ollama' ? 2 : 1;
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+              try {
+                const generatedReview =
+                  request.provider === 'ollama'
+                    ? reviewGenerationSchema.safeParse(
+                        parseOllamaReviewJson(
+                          (
+                            await generateText({
+                              model,
+                              system: ollamaReviewSystemPrompt(),
+                              prompt:
+                                attempt === 0
+                                  ? prompt
+                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. Use only supplied section IDs and citation chunk IDs.`,
+                              providerOptions: localProviderOptions(request.provider),
+                              abortSignal: signal,
+                              maxOutputTokens: 3000,
+                              temperature: 0,
+                            })
+                          ).text,
+                        ),
+                      )
+                    : reviewGenerationSchema.safeParse(
+                        (
+                          await generateText({
+                            model,
+                            output: Output.object({ schema: reviewGenerationSchema }),
+                            system: reviewSystemPrompt(),
+                            prompt,
+                            providerOptions: localProviderOptions(request.provider),
+                            abortSignal: signal,
+                            maxOutputTokens: 3000,
+                          })
+                        ).output,
+                      );
+                if (!generatedReview.success) invalidStructuredReview();
+                const validated = reviewOutputSchema.safeParse({
+                  summary: normalizeReviewSummary(generatedReview.data.summary),
+                  findings: generatedReview.data.findings,
+                });
+                if (!validated.success) invalidStructuredReview();
+                resolvedFindings = resolveReviewFindings(validated.data, prd, request, citationIds);
+                output = validated.data;
+                break;
+              } catch (error) {
+                if (
+                  request.provider === 'ollama' &&
+                  attempt === 0 &&
+                  error instanceof ApiError &&
+                  error.code === 'malformed_output'
+                ) {
+                  continue;
+                }
+                throw error;
+              }
             }
-            const validated = reviewOutputSchema.safeParse({
-              summary: normalizeReviewSummary(generatedReview.data.summary),
-              findings: generatedReview.data.findings,
-            });
-            if (!validated.success) {
-              throw new ApiError(
-                502,
-                'malformed_output',
-                'The provider returned an invalid structured review.',
-              );
-            }
-            const output = validated.data;
+            if (!output || !resolvedFindings) invalidStructuredReview();
             const trustedReviewContent = [
               scopedContent,
               ...evidence.map((item) => item.excerpt),
             ].join('\n');
-            const sectionById = new Map(prd.sections.map((section) => [section.id, section]));
-            const sectionIdByUniqueTitle = uniqueSectionTitleMap(prd);
-            const allowedSectionIds = new Set(
-              request.scope === 'document'
-                ? prd.sections.map((section) => section.id)
-                : request.targetSectionId
-                  ? [request.targetSectionId]
-                  : [],
-            );
-            for (const item of output.findings) {
-              const resolvedSectionId = sectionById.has(item.targetSectionId)
-                ? item.targetSectionId
-                : sectionIdByUniqueTitle.get(item.targetSectionId.trim().toLowerCase());
-              const section = resolvedSectionId ? sectionById.get(resolvedSectionId) : undefined;
-              if (!section || !allowedSectionIds.has(section.id)) {
-                throw new ApiError(
-                  502,
-                  'malformed_output',
-                  'The provider returned a review finding outside the disclosed PRD scope.',
-                );
-              }
-              if (item.citationChunkIds.some((id) => !citationIds.has(id))) {
-                throw new ApiError(
-                  502,
-                  'malformed_output',
-                  'The provider returned a review citation that was not supplied as evidence.',
-                );
-              }
+            for (const { item, section } of resolvedFindings) {
               const safeProposedMarkdown =
                 item.proposedMarkdown === null ||
                 containsNumericTargetProposal(item.proposedMarkdown) ||
@@ -291,6 +283,52 @@ export function parseOllamaReviewJson(value: string): unknown {
 
 function invalidOllamaReviewJson(): never {
   throw new ApiError(502, 'malformed_output', 'The local model returned invalid review JSON.');
+}
+
+function invalidStructuredReview(): never {
+  throw new ApiError(
+    502,
+    'malformed_output',
+    'The provider returned an invalid structured review.',
+  );
+}
+
+function resolveReviewFindings(
+  output: GeneratedReview,
+  prd: PrdDocument,
+  request: AiActionRequest,
+  citationIds: Map<string, string>,
+): ResolvedReviewFinding[] {
+  const sectionById = new Map(prd.sections.map((section) => [section.id, section]));
+  const sectionIdByUniqueTitle = uniqueSectionTitleMap(prd);
+  const allowedSectionIds = new Set(
+    request.scope === 'document'
+      ? prd.sections.map((section) => section.id)
+      : request.targetSectionId
+        ? [request.targetSectionId]
+        : [],
+  );
+  return output.findings.map((item) => {
+    const resolvedSectionId = sectionById.has(item.targetSectionId)
+      ? item.targetSectionId
+      : sectionIdByUniqueTitle.get(item.targetSectionId.trim().toLowerCase());
+    const section = resolvedSectionId ? sectionById.get(resolvedSectionId) : undefined;
+    if (!section || !allowedSectionIds.has(section.id)) {
+      throw new ApiError(
+        502,
+        'malformed_output',
+        'The provider returned a review finding outside the disclosed PRD scope.',
+      );
+    }
+    if (item.citationChunkIds.some((id) => !citationIds.has(id))) {
+      throw new ApiError(
+        502,
+        'malformed_output',
+        'The provider returned a review citation that was not supplied as evidence.',
+      );
+    }
+    return { item, section };
+  });
 }
 
 export function containsNewNumericValue(generated: string, trustedContent: string): boolean {

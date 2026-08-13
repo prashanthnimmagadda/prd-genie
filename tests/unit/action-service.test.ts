@@ -307,8 +307,8 @@ describe('ActionService', () => {
     );
   });
 
-  it('parses and validates an Ollama review returned as plain JSON text', async () => {
-    aiMocks.generateText.mockResolvedValue({
+  it('retries one malformed Ollama review and persists only valid plain JSON', async () => {
+    aiMocks.generateText.mockResolvedValueOnce({ text: '{"summary":' }).mockResolvedValueOnce({
       text: JSON.stringify({
         summary: 'The Problem section lacks support. Reviewers cannot verify the current claim.',
         findings: [
@@ -329,12 +329,29 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     expect(await response.text()).toContain('The Problem section lacks support.');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
     expect(aiMocks.generateText.mock.calls[0]?.[0]).not.toHaveProperty('output');
     expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 3000,
       temperature: 0,
     });
+    expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
+      'The previous response was invalid.',
+    );
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a local review after two malformed responses without storing findings', async () => {
+    aiMocks.generateText.mockResolvedValue({ text: 'not json' });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect(repository.storeFinding).not.toHaveBeenCalled();
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
   });
 
   it('streams the repository evidence state when a review completes after deletion', async () => {
