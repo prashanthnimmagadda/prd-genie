@@ -293,8 +293,8 @@ describe('ActionService', () => {
     );
     const body = await response.text();
     expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
-      maxOutputTokens: 4000,
-      temperature: 0,
+      maxOutputTokens: 3000,
+      temperature: 0.1,
     });
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'e.g., for example, for instance, or such as',

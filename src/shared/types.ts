@@ -397,8 +397,6 @@ export const reviewGenerationSchema = z.object({
     finding1: reviewGenerationFindingSchema.nullable(),
     finding2: reviewGenerationFindingSchema.nullable(),
     finding3: reviewGenerationFindingSchema.nullable(),
-    finding4: reviewGenerationFindingSchema.nullable(),
-    finding5: reviewGenerationFindingSchema.nullable(),
   }),
 });
 

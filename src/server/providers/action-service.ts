@@ -100,8 +100,8 @@ export class ActionService {
               prompt: buildPrompt(prd, request, scopedContent, evidence, request.instruction),
               providerOptions: localProviderOptions(request.provider),
               abortSignal: signal,
-              maxOutputTokens: 4000,
-              temperature: 0,
+              maxOutputTokens: 3000,
+              temperature: 0.1,
             });
             const validated = reviewOutputSchema.safeParse({
               summary: normalizeReviewSummary(result.output.summary),
@@ -437,7 +437,7 @@ function reviewSystemPrompt(): string {
     'Every factual, causal, normative, and qualifying statement must be supported by the scoped PRD or a retrieved source excerpt. Before labeling a claim unsupported, compare it against every supplied excerpt, including exact numbers and measurements. Do not invent metrics, targets, thresholds, risks, assumptions, impact, consistency, or urgency. When content is missing, identify the gap only. Never propose an example, sample value, or numeric target. Do not use the phrases e.g., for example, for instance, or such as unless that exact content is supplied. Avoid words such as consistent, significant, critical, severe, or urgent unless trusted evidence uses that exact qualifier for the same fact.',
     'A proposed change is a preview and must never be described as already applied.',
     'The summary must use one to three complete sentences naming the affected section, its specific defect, and why it matters. Do not use vague labels, examples, or restate the review request.',
-    'The findings object has five ordered slots. Put the highest-priority findings first and use null for every unused slot. Do not create more than one finding per category.',
+    'The findings object has three ordered slots. Put the highest-priority findings first and use null for every unused slot. Do not create more than one finding per category.',
     'Keep the summary under 120 words and each rationale under 120 words.',
     'A proposed Markdown patch must contain only a concise replacement for its target section. Use null when a safe concise patch is not possible.',
   ].join(' ');

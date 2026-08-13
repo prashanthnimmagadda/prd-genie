@@ -35,8 +35,6 @@ const server = createServer(async (request, response) => {
           },
           finding2: null,
           finding3: null,
-          finding4: null,
-          finding5: null,
         },
       });
       return;
