@@ -37,7 +37,7 @@ The upstream models advertise much larger context windows that can require impra
 - Concise PRD-only output without process narration.
 - Correct section scope.
 - Citation and completion events.
-- Concrete structured review output.
+- Concrete structured review output grounded in available source citations or the exact PRD section state.
 - Stable section targeting and revision binding.
 - Proposal application and restart persistence.
 

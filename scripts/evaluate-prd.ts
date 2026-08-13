@@ -319,12 +319,15 @@ try {
         finding.proposedPatch.beforeMarkdown ===
           reviewProject.sectionBodies.get(finding.targetSectionId),
     ),
-    emitsAvailableGroundedCitation:
-      findings.some((finding) => finding.citations.length > 0) &&
-      findings.every((finding) =>
-        finding.citations.every(
-          (citation) => citation.available && citation.excerpt.trim().length > 0,
-        ),
+    groundsFindingsInSourceOrPrd:
+      findings.length > 0 &&
+      findings.every(
+        (finding) =>
+          finding.citations.every(
+            (citation) => citation.available && citation.excerpt.trim().length > 0,
+          ) &&
+          (finding.citations.length > 0 ||
+            (reviewProject.sectionBodies.get(finding.targetSectionId)?.trim() ?? '') === ''),
       ),
     avoidsUnsupportedReviewQualifiers: !containsUnsupportedQualifier(
       `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
