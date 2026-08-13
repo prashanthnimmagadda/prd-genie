@@ -40,6 +40,7 @@ import {
   containsNewNumericValue,
   containsNumericTargetProposal,
   normalizeReviewSummary,
+  parseOllamaReviewJson,
 } from '../../src/server/providers/action-service.js';
 import type { Repository } from '../../src/server/db/repository.js';
 import type { RetrievalService } from '../../src/server/retrieval/retrieval-service.js';
@@ -259,7 +260,7 @@ describe('ActionService', () => {
     if (overrides.scope === 'document') expect(modelInput?.providerOptions).toBeUndefined();
   });
 
-  it('reviews the complete document and emits only findings for known sections', async () => {
+  it('reviews the complete document and persists grounded findings', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
         summary: 'One evidence gap was found. The Problem section lacks cited support.',
@@ -269,23 +270,20 @@ describe('ActionService', () => {
             severity: 'warning',
             targetSectionId: sectionId,
             rationale: 'Tie the statement to the interview.',
-            citationChunkIds: ['chunk-id', 'unknown'],
+            citationChunkIds: ['chunk-id'],
             proposedMarkdown: 'Five participants lost unsaved drafts.',
-          },
-          {
-            category: 'clarity',
-            severity: 'info',
-            targetSectionId: 'unknown-section',
-            rationale: 'Skipped.',
-            citationChunkIds: [],
-            proposedMarkdown: null,
           },
         ],
       },
     });
     const response = await service.run(
       'session',
-      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
       new AbortController().signal,
     );
     const body = await response.text();
@@ -307,6 +305,36 @@ describe('ActionService', () => {
       undefined,
       'One evidence gap was found. The Problem section lacks cited support.',
     );
+  });
+
+  it('parses and validates an Ollama review returned as plain JSON text', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      text: JSON.stringify({
+        summary: 'The Problem section lacks support. Reviewers cannot verify the current claim.',
+        findings: [
+          {
+            category: 'evidence',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The claim needs the supplied interview evidence.',
+            citationChunkIds: ['chunk-id'],
+            proposedMarkdown: 'Five participants lost unsaved drafts.',
+          },
+        ],
+      }),
+    });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('The Problem section lacks support.');
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).not.toHaveProperty('output');
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 3000,
+      temperature: 0,
+    });
+    expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
   it('streams the repository evidence state when a review completes after deletion', async () => {
@@ -339,7 +367,12 @@ describe('ActionService', () => {
     } as never);
     const response = await service.run(
       'session',
-      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
       new AbortController().signal,
     );
     const body = await response.text();
@@ -358,7 +391,7 @@ describe('ActionService', () => {
             severity: 'warning',
             targetSectionId: 'Problem',
             rationale: 'The claim has no cited support.',
-            citationChunkIds: ['unknown'],
+            citationChunkIds: [],
             proposedMarkdown: null,
           },
         ],
@@ -366,7 +399,12 @@ describe('ActionService', () => {
     });
     const response = await service.run(
       'session',
-      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
       new AbortController().signal,
     );
     await response.text();
@@ -377,6 +415,79 @@ describe('ActionService', () => {
         proposedPatch: null,
       }),
     );
+  });
+
+  it('rejects a review that cites evidence not supplied to the provider', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The Problem section needs evidence. Its current claim has no cited support.',
+        findings: [
+          {
+            category: 'evidence',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The claim needs evidence.',
+            citationChunkIds: ['unknown-chunk'],
+            proposedMarkdown: null,
+          },
+        ],
+      },
+    });
+    const response = await service.run(
+      'session',
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(repository.storeFinding).not.toHaveBeenCalled();
+  });
+
+  it('rejects a review finding outside the disclosed section scope', async () => {
+    const otherSectionId = '33333333-3333-4333-8333-333333333333';
+    repository.getPrd.mockReturnValueOnce({
+      ...prd,
+      sections: [
+        ...prd.sections,
+        {
+          ...prd.sections[0]!,
+          id: otherSectionId,
+          title: 'Goals',
+          position: 1,
+        },
+      ],
+    });
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The Goals section is incomplete. Its desired outcome is not defined.',
+        findings: [
+          {
+            category: 'completeness',
+            severity: 'warning',
+            targetSectionId: otherSectionId,
+            rationale: 'The Goals section has no desired outcome.',
+            citationChunkIds: [],
+            proposedMarkdown: null,
+          },
+        ],
+      },
+    });
+    const response = await service.run(
+      'session',
+      request({
+        action: 'review',
+        scope: 'section',
+        targetSectionId: sectionId,
+        provider: 'openai',
+      }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(repository.storeFinding).not.toHaveBeenCalled();
   });
 
   it('drops a review patch that introduces a numeric value absent from trusted context', async () => {
@@ -398,7 +509,12 @@ describe('ActionService', () => {
     });
     const response = await service.run(
       'session',
-      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
       new AbortController().signal,
     );
     await response.text();
@@ -416,7 +532,12 @@ describe('ActionService', () => {
     });
     const response = await service.run(
       'session',
-      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
       new AbortController().signal,
     );
     expect(await response.text()).toContain('malformed_output');
@@ -450,6 +571,29 @@ describe('review summary normalization', () => {
 
   it('rejects an empty review summary', () => {
     expect(() => normalizeReviewSummary('')).toThrow('empty review summary');
+  });
+});
+
+describe('Ollama review JSON parsing', () => {
+  it('accepts a fenced JSON object and ignores surrounding whitespace', () => {
+    expect(parseOllamaReviewJson('```json\n{"summary":"ok","findings":[]}\n```')).toEqual({
+      summary: 'ok',
+      findings: [],
+    });
+  });
+
+  it('rejects missing or malformed JSON objects', () => {
+    expect(() => parseOllamaReviewJson('not json')).toThrow('invalid review JSON');
+    expect(() => parseOllamaReviewJson('{"summary":')).toThrow('invalid review JSON');
+    expect(() => parseOllamaReviewJson('prefix {"summary":"ok","findings":[]}')).toThrow(
+      'invalid review JSON',
+    );
+    expect(() => parseOllamaReviewJson('{"summary":"ok","findings":[]} suffix')).toThrow(
+      'invalid review JSON',
+    );
+    expect(() =>
+      parseOllamaReviewJson('{"summary":"first","findings":[]} {"summary":"second","findings":[]}'),
+    ).toThrow('invalid review JSON');
   });
 });
 

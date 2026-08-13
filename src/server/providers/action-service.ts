@@ -93,18 +93,47 @@ export class ActionService {
               transient: true,
               data: { stage: 'review', detail: 'Reviewing the current revision' },
             });
-            const result = await generateText({
-              model,
-              output: Output.object({ schema: reviewGenerationSchema }),
-              system: reviewSystemPrompt(),
-              prompt: buildPrompt(prd, request, scopedContent, evidence, request.instruction),
-              providerOptions: localProviderOptions(request.provider),
-              abortSignal: signal,
-              maxOutputTokens: 3000,
-            });
+            const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
+            const generatedReview =
+              request.provider === 'ollama'
+                ? reviewGenerationSchema.safeParse(
+                    parseOllamaReviewJson(
+                      (
+                        await generateText({
+                          model,
+                          system: ollamaReviewSystemPrompt(),
+                          prompt,
+                          providerOptions: localProviderOptions(request.provider),
+                          abortSignal: signal,
+                          maxOutputTokens: 3000,
+                          temperature: 0,
+                        })
+                      ).text,
+                    ),
+                  )
+                : reviewGenerationSchema.safeParse(
+                    (
+                      await generateText({
+                        model,
+                        output: Output.object({ schema: reviewGenerationSchema }),
+                        system: reviewSystemPrompt(),
+                        prompt,
+                        providerOptions: localProviderOptions(request.provider),
+                        abortSignal: signal,
+                        maxOutputTokens: 3000,
+                      })
+                    ).output,
+                  );
+            if (!generatedReview.success) {
+              throw new ApiError(
+                502,
+                'malformed_output',
+                'The provider returned an invalid structured review.',
+              );
+            }
             const validated = reviewOutputSchema.safeParse({
-              summary: normalizeReviewSummary(result.output.summary),
-              findings: result.output.findings,
+              summary: normalizeReviewSummary(generatedReview.data.summary),
+              findings: generatedReview.data.findings,
             });
             if (!validated.success) {
               throw new ApiError(
@@ -120,12 +149,32 @@ export class ActionService {
             ].join('\n');
             const sectionById = new Map(prd.sections.map((section) => [section.id, section]));
             const sectionIdByUniqueTitle = uniqueSectionTitleMap(prd);
+            const allowedSectionIds = new Set(
+              request.scope === 'document'
+                ? prd.sections.map((section) => section.id)
+                : request.targetSectionId
+                  ? [request.targetSectionId]
+                  : [],
+            );
             for (const item of output.findings) {
               const resolvedSectionId = sectionById.has(item.targetSectionId)
                 ? item.targetSectionId
                 : sectionIdByUniqueTitle.get(item.targetSectionId.trim().toLowerCase());
               const section = resolvedSectionId ? sectionById.get(resolvedSectionId) : undefined;
-              if (!section) continue;
+              if (!section || !allowedSectionIds.has(section.id)) {
+                throw new ApiError(
+                  502,
+                  'malformed_output',
+                  'The provider returned a review finding outside the disclosed PRD scope.',
+                );
+              }
+              if (item.citationChunkIds.some((id) => !citationIds.has(id))) {
+                throw new ApiError(
+                  502,
+                  'malformed_output',
+                  'The provider returned a review citation that was not supplied as evidence.',
+                );
+              }
               const safeProposedMarkdown =
                 item.proposedMarkdown === null ||
                 containsNumericTargetProposal(item.proposedMarkdown) ||
@@ -226,6 +275,22 @@ export function normalizeReviewSummary(value: string): string {
     throw new ApiError(502, 'malformed_output', 'The provider returned an empty review summary.');
   }
   return sentences.join(' ');
+}
+
+export function parseOllamaReviewJson(value: string): unknown {
+  const trimmed = value.trim();
+  const fenced = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i);
+  const payload = fenced ? fenced[1]!.trim() : trimmed;
+  if (trimmed.startsWith('```') && !fenced) invalidOllamaReviewJson();
+  try {
+    return JSON.parse(payload);
+  } catch {
+    invalidOllamaReviewJson();
+  }
+}
+
+function invalidOllamaReviewJson(): never {
+  throw new ApiError(502, 'malformed_output', 'The local model returned invalid review JSON.');
 }
 
 export function containsNewNumericValue(generated: string, trustedContent: string): boolean {
@@ -439,5 +504,14 @@ function reviewSystemPrompt(): string {
     'Return no more than five findings. Put the highest-priority findings first and do not create more than one finding per category.',
     'Keep the summary under 120 words and each rationale under 120 words.',
     'A proposed Markdown patch must contain only a concise replacement for its target section. Use null when a safe concise patch is not possible.',
+  ].join(' ');
+}
+
+function ollamaReviewSystemPrompt(): string {
+  return [
+    reviewSystemPrompt(),
+    'Return one JSON object only, with no Markdown fence or commentary.',
+    'Use this exact shape: {"summary":"one to three sentences","findings":[{"category":"completeness|clarity|testability|evidence|contradiction|risk|assumption|success-measure","severity":"info|warning|blocking","targetSectionId":"supplied section ID","rationale":"grounded rationale","citationChunkIds":["supplied chunk ID"],"proposedMarkdown":null}]}',
+    'The findings array may contain zero to five items. proposedMarkdown may be a Markdown string only when the supplied context supports every claim and numeric value.',
   ].join(' ');
 }
