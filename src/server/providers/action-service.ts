@@ -104,7 +104,7 @@ export class ActionService {
             const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
             let output: GeneratedReview | undefined;
             let resolvedFindings: ResolvedReviewFinding[] | undefined;
-            const attempts = request.provider === 'ollama' ? 2 : 1;
+            const attempts = request.provider === 'ollama' ? 3 : 1;
             for (let attempt = 0; attempt < attempts; attempt += 1) {
               try {
                 const generatedReview =
@@ -122,7 +122,7 @@ export class ActionService {
                               providerOptions: localProviderOptions(request.provider),
                               abortSignal: signal,
                               maxOutputTokens: 3000,
-                              temperature: 0,
+                              temperature: attempt * 0.2,
                             })
                           ).text,
                         ),
@@ -152,7 +152,7 @@ export class ActionService {
               } catch (error) {
                 if (
                   request.provider === 'ollama' &&
-                  attempt === 0 &&
+                  attempt < attempts - 1 &&
                   error instanceof ApiError &&
                   error.code === 'malformed_output'
                 ) {

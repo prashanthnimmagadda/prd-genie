@@ -341,7 +341,7 @@ describe('ActionService', () => {
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
-  it('fails a local review after two malformed responses without storing findings', async () => {
+  it('fails a local review after three malformed responses without storing findings', async () => {
     aiMocks.generateText.mockResolvedValue({ text: 'not json' });
     const response = await service.run(
       'session',
@@ -349,7 +349,8 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     expect(await response.text()).toContain('malformed_output');
-    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(3);
+    expect(aiMocks.generateText.mock.calls[2]?.[0]).toMatchObject({ temperature: 0.4 });
     expect(repository.storeFinding).not.toHaveBeenCalled();
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
   });
