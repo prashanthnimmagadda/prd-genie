@@ -233,7 +233,12 @@ try {
       headers: { cookie },
       payload: { revision: 1 },
     });
-    assertStatus(applied.statusCode, applied.body, 200, `apply ${scenario.id}`);
+    assertStatus(
+      applied.statusCode,
+      applied.body,
+      200,
+      `apply ${scenario.id}; generated ${JSON.stringify(action.text.slice(0, 500))}`,
+    );
     const appliedDocument = applied.json<{
       revision: number;
       sections: Array<{ id: string; body: string }>;
