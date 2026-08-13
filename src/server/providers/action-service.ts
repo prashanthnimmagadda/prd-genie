@@ -100,7 +100,7 @@ export class ActionService {
               prompt: buildPrompt(prd, request, scopedContent, evidence, request.instruction),
               providerOptions: localProviderOptions(request.provider),
               abortSignal: signal,
-              maxOutputTokens: 2000,
+              maxOutputTokens: 4000,
               temperature: 0,
             });
             const validated = reviewOutputSchema.safeParse({
