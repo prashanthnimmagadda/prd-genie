@@ -231,6 +231,14 @@ export function containsInventedExample(value) {
   return /(?:\be\.g\.|\b(?:for example|for instance|such as)\b)/i.test(value);
 }
 
+export function parseContainerSystemStatus(stdout) {
+  const parsed = stdout.trim() ? JSON.parse(stdout) : null;
+  if (typeof parsed?.status !== 'string') {
+    throw new Error('Apple Container returned an unreadable service status.');
+  }
+  return parsed.status;
+}
+
 function hasExactPassedSteps(results) {
   if (!Array.isArray(results) || results.length !== requiredOfflineSteps.length) return false;
   const byName = new Map(results.map((result) => [result?.name, result]));

@@ -38,3 +38,4 @@ export function validatePublicApproval(input: {
 export function validateContainerSmokeReport(report: unknown, gitSha: string): boolean;
 export function containsUnsupportedQualifier(value: string): boolean;
 export function containsInventedExample(value: string): boolean;
+export function parseContainerSystemStatus(stdout: string): string;

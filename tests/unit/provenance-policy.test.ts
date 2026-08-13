@@ -6,6 +6,7 @@ import {
   collectArtifactPaths,
   containsInventedExample,
   containsUnsupportedQualifier,
+  parseContainerSystemStatus,
   publicProductName,
   publicReleaseTarget,
   requiredArtifactDirectories,
@@ -215,6 +216,12 @@ describe('release provenance policy', () => {
     'detects the invented-example phrase %s',
     (phrase) => expect(containsInventedExample(`Add ${phrase} a synthetic target.`)).toBe(true),
   );
+
+  it('parses the structured stopped container status even when the CLI exits nonzero', () => {
+    expect(parseContainerSystemStatus('{"status":"unregistered"}')).toBe('unregistered');
+    expect(() => parseContainerSystemStatus('{}')).toThrow('unreadable service status');
+    expect(() => parseContainerSystemStatus('')).toThrow('unreadable service status');
+  });
 
   function artifactFixture(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-provenance-'));

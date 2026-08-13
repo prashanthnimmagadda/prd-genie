@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
-import { validateContainerSmokeReport } from './provenance-policy.mjs';
+import { parseContainerSystemStatus, validateContainerSmokeReport } from './provenance-policy.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -204,7 +204,12 @@ function inspectBuiltImage() {
 }
 
 function systemStatus() {
-  return json(['system', 'status', '--format', 'json'])?.status;
+  const result = spawnSync('container', ['system', 'status', '--format', 'json'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  return parseContainerSystemStatus(result.stdout);
 }
 
 function reserveLoopbackPort() {
