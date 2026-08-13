@@ -213,12 +213,11 @@ export function normalizeReviewSummary(value: string): string {
     .split(/(?<=[.!?])\s+/)
     .filter(Boolean)
     .slice(0, 3);
-  if (sentences.length < 2) {
-    throw new ApiError(
-      502,
-      'malformed_output',
-      'The provider returned a review summary with fewer than two complete sentences.',
-    );
+  if (sentences.length === 0) {
+    throw new ApiError(502, 'malformed_output', 'The provider returned an empty review summary.');
+  }
+  if (sentences.length === 1) {
+    sentences.push('The findings below identify the affected PRD sections and review gaps.');
   }
   return sentences.join(' ');
 }

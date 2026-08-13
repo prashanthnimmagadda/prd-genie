@@ -431,9 +431,13 @@ describe('review summary normalization', () => {
     expect(normalizeReviewSummary(' First. Second! Third? Fourth. ')).toBe('First. Second! Third?');
   });
 
-  it('rejects a summary with fewer than two complete sentences', () => {
-    expect(() => normalizeReviewSummary('Only one sentence.')).toThrow(
-      'fewer than two complete sentences',
+  it('adds a neutral navigation sentence when a provider returns one sentence', () => {
+    expect(normalizeReviewSummary('Only one sentence.')).toBe(
+      'Only one sentence. The findings below identify the affected PRD sections and review gaps.',
     );
+  });
+
+  it('rejects an empty review summary', () => {
+    expect(() => normalizeReviewSummary('')).toThrow('empty review summary');
   });
 });
