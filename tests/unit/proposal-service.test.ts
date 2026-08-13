@@ -215,4 +215,24 @@ describe('ProposalService', () => {
       'The editor must save drafts.',
     );
   });
+
+  it('preserves a level-three subsection heading inside the generated body', () => {
+    const project = repository.createProject('Subsection heading', '');
+    const initial = repository.getPrd(project.id);
+    const section = initial.sections[0]!;
+    const run = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: section.id,
+    });
+    repository.completeAiRun(run, undefined, '### Recovery behavior\nThe editor restores drafts.');
+    const applied = proposals.apply(project.id, run, 0);
+    expect(applied.sections.find((item) => item.id === section.id)?.body).toBe(
+      '### Recovery behavior\nThe editor restores drafts.',
+    );
+  });
 });

@@ -69,7 +69,7 @@ function applyScopedProposal(
 }
 
 export function normalizeSectionBody(output: string, title: string): string {
-  const heading = /^#{1,6}[ \t]+([^\n]+)\n+/;
+  const heading = /^#{1,2}[ \t]+([^\n]+)\n+/;
   const match = output.match(heading);
   if (!match) return output;
   if (!sectionHeadingMatchesTitle(match[1] ?? '', title)) {
