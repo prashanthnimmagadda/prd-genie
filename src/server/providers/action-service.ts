@@ -101,7 +101,7 @@ export class ActionService {
               providerOptions: localProviderOptions(request.provider),
               abortSignal: signal,
               maxOutputTokens: 3000,
-              temperature: 0.1,
+              temperature: 0.7,
             });
             const validated = reviewOutputSchema.safeParse({
               summary: normalizeReviewSummary(result.output.summary),
