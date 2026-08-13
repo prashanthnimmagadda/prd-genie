@@ -193,4 +193,26 @@ describe('ProposalService', () => {
     repository.completeAiRun(wrongHeading, undefined, '## Goals\nWrong section');
     expect(() => proposals.apply(project.id, wrongHeading, 1)).toThrow('different section');
   });
+
+  it('accepts a heading that names one half of a compound target title', () => {
+    const project = repository.createProject('Compound heading', '');
+    const initial = repository.getPrd(project.id);
+    const section = initial.sections.find(
+      (item) => item.title === 'Requirements and acceptance criteria',
+    )!;
+    const run = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: section.id,
+    });
+    repository.completeAiRun(run, undefined, '## Requirements\nThe editor must save drafts.');
+    const applied = proposals.apply(project.id, run, 0);
+    expect(applied.sections.find((item) => item.id === section.id)?.body).toBe(
+      'The editor must save drafts.',
+    );
+  });
 });

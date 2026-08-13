@@ -72,7 +72,7 @@ export function normalizeSectionBody(output: string, title: string): string {
   const heading = /^#{1,6}[ \t]+([^\n]+)\n+/;
   const match = output.match(heading);
   if (!match) return output;
-  if (match[1]?.trim().toLocaleLowerCase() !== title.trim().toLocaleLowerCase()) {
+  if (!sectionHeadingMatchesTitle(match[1] ?? '', title)) {
     throw new ApiError(
       502,
       'malformed_output',
@@ -80,6 +80,22 @@ export function normalizeSectionBody(output: string, title: string): string {
     );
   }
   return output.slice(match[0].length).trim();
+}
+
+function sectionHeadingMatchesTitle(heading: string, title: string): boolean {
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}\s&-]/gu, '')
+      .replace(/\s+/g, ' ');
+  const normalizedHeading = normalize(heading);
+  const normalizedTitle = normalize(title);
+  if (normalizedHeading === normalizedTitle) return true;
+  return normalizedTitle
+    .split(/\s+(?:and|&)\s+/)
+    .filter((part) => part.length >= 4)
+    .includes(normalizedHeading);
 }
 
 export function normalizeDocumentProposal(output: string, sections: PrdSection[]): string {
