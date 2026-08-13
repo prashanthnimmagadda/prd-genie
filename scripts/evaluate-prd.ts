@@ -373,6 +373,11 @@ try {
       score: score(reviewChecks),
       summary: review.text.trim(),
       findingCount: findings.length,
+      findings: findings.map((finding) => ({
+        targetSectionId: finding.targetSectionId,
+        rationale: finding.rationale,
+        proposedMarkdown: finding.proposedPatch?.afterMarkdown ?? null,
+      })),
     },
     persistence: persistenceChecks,
     score: {

@@ -290,7 +290,10 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     const body = await response.text();
-    expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({ maxOutputTokens: 2000 });
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 2000,
+      temperature: 0,
+    });
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'e.g., for example, for instance, or such as',
     );
