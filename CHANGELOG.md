@@ -55,3 +55,4 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Marked exported and staged ChatGPT handoffs stale when selected source evidence is deleted.
 - Made direct AI and ChatGPT handoff application markers atomic with their PRD revisions.
 - Rejected undeclared root and nested fields in structured review output.
+- Updated the production dependency graph to resolve current PDF parsing, URI handling, HTML sanitization, diagram rendering, and expansion advisories.
