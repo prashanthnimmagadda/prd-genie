@@ -28,6 +28,19 @@ export function deleteSourceData(database: AppDatabase, projectId: string, sourc
       .run(projectId, sourceId);
     database.sqlite
       .prepare(
+        `UPDATE chatgpt_handoffs
+           SET status = 'stale'
+           WHERE project_id = ? AND status IN ('exported', 'staged')
+             AND EXISTS (
+               SELECT 1
+               FROM json_each(chatgpt_handoffs.request_json, '$.evidence') AS linked
+               JOIN citations ON citations.id = json_extract(linked.value, '$.id')
+               WHERE citations.source_id = ?
+             )`,
+      )
+      .run(projectId, sourceId);
+    database.sqlite
+      .prepare(
         `UPDATE citations
            SET available = 0, unavailability_reason = 'source_deleted'
            WHERE source_id = ?`,

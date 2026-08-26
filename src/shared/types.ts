@@ -368,33 +368,41 @@ export const applyChatGptHandoffSchema = z.object({
 
 export type AiActionRequest = z.infer<typeof aiActionSchema>;
 
-export const reviewFindingOutputSchema = z.object({
-  category: z.enum(findingCategories),
-  severity: z.enum(severityLevels),
-  targetSectionId: z.string(),
-  rationale: z.string().min(1).max(1200),
-  citationChunkIds: z.array(z.string()).max(8),
-  proposedMarkdown: z.string().max(8000).nullable(),
-});
+export const reviewFindingOutputSchema = z
+  .object({
+    category: z.enum(findingCategories),
+    severity: z.enum(severityLevels),
+    targetSectionId: z.string(),
+    rationale: z.string().min(1).max(1200),
+    citationChunkIds: z.array(z.string()).max(8),
+    proposedMarkdown: z.string().max(8000).nullable(),
+  })
+  .strict();
 
-export const reviewOutputSchema = z.object({
-  summary: z.string().min(1).max(2000),
-  findings: z.array(reviewFindingOutputSchema).max(20),
-});
+export const reviewOutputSchema = z
+  .object({
+    summary: z.string().min(1).max(2000),
+    findings: z.array(reviewFindingOutputSchema).max(20),
+  })
+  .strict();
 
-const reviewGenerationFindingSchema = z.object({
-  category: z.enum(findingCategories),
-  severity: z.enum(severityLevels),
-  targetSectionId: z.string(),
-  rationale: z.string(),
-  citationChunkIds: z.array(z.string()).max(8),
-  proposedMarkdown: z.string().nullable(),
-});
+const reviewGenerationFindingSchema = z
+  .object({
+    category: z.enum(findingCategories),
+    severity: z.enum(severityLevels),
+    targetSectionId: z.string(),
+    rationale: z.string(),
+    citationChunkIds: z.array(z.string()).max(8),
+    proposedMarkdown: z.string().nullable(),
+  })
+  .strict();
 
-export const reviewGenerationSchema = z.object({
-  summary: z.string(),
-  findings: z.array(reviewGenerationFindingSchema).max(3),
-});
+export const reviewGenerationSchema = z
+  .object({
+    summary: z.string(),
+    findings: z.array(reviewGenerationFindingSchema).max(3),
+  })
+  .strict();
 
 export const DEFAULT_SECTIONS = [
   'Problem',

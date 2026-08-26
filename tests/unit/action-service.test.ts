@@ -155,6 +155,8 @@ describe('ActionService', () => {
     const response = await service.run('session', request(), new AbortController().signal);
     const body = await response.text();
     expect(body).toContain('data-citation');
+    expect(body).toContain('"id":"stored-citation"');
+    expect(body).not.toContain('"id":"citation-display"');
     expect(retrieval.retrieve).toHaveBeenCalledWith(
       projectId,
       expect.stringContaining('People lose unsaved drafts.'),
@@ -560,6 +562,44 @@ describe('ActionService', () => {
     );
     expect(await response.text()).toContain('malformed_output');
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
+  });
+
+  it.each([
+    [
+      'root',
+      {
+        summary: 'The Problem section needs a clearer statement.',
+        findings: [],
+        unexpectedRootProperty: true,
+      },
+    ],
+    [
+      'nested',
+      {
+        summary: 'The Problem section needs a clearer statement.',
+        findings: [
+          {
+            category: 'clarity',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The current wording does not identify the consequence.',
+            citationChunkIds: [],
+            proposedMarkdown: null,
+            unexpectedNestedProperty: true,
+          },
+        ],
+      },
+    ],
+  ])('rejects unexpected %s structured-review properties from Ollama', async (_level, output) => {
+    aiMocks.generateText.mockResolvedValue({ text: JSON.stringify(output) });
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(3);
+    expect(repository.storeFinding).not.toHaveBeenCalled();
   });
 
   it('normalises provider failures and records a failed run', async () => {

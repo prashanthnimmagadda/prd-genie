@@ -373,6 +373,62 @@ describe('Repository', () => {
     });
   });
 
+  it('rolls back the PRD revision when the ChatGPT application marker fails', () => {
+    const project = repository.createProject('Atomic handoff', '');
+    const current = repository.getPrd(project.id);
+    const problem = current.sections[0]!;
+    const handoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: current.revision,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Clarify the problem.',
+      sectionIds: [problem.id],
+      citationIds: [],
+    });
+    const response: ChatGptHandoffResponse = {
+      formatVersion: 1,
+      kind: 'prd-genie-response',
+      handoffId: handoff.id,
+      projectId: project.id,
+      sourceRevision: current.revision,
+      requestDigest: handoff.request.requestDigest,
+      summary: 'Clarifies the synthetic problem.',
+      patches: [
+        {
+          sectionId: problem.id,
+          preimageHash: handoff.request.sections[0]!.preimageHash,
+          afterMarkdown: 'Atomic replacement.',
+          evidenceIds: [],
+        },
+      ],
+      findings: [],
+      hostModel: null,
+    };
+    repository.importChatGptHandoffResponse(project.id, response);
+    database.sqlite.exec(`
+      CREATE TEMP TRIGGER fail_handoff_application_marker
+      BEFORE UPDATE OF status, applied_revision ON chatgpt_handoffs
+      WHEN NEW.id = '${handoff.id}' AND NEW.status = 'applied'
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic handoff marker failure');
+      END
+    `);
+
+    expect(() =>
+      repository.applyChatGptHandoff(project.id, handoff.id, current.revision, [
+        { sectionId: problem.id, afterMarkdown: 'Atomic replacement.' },
+      ]),
+    ).toThrow('synthetic handoff marker failure');
+    expect(repository.getPrd(project.id)).toMatchObject({ revision: current.revision });
+    expect(repository.getPrd(project.id).sections[0]?.body).toBe(problem.body);
+    expect(repository.listRevisions(project.id)).toHaveLength(1);
+    expect(repository.getChatGptHandoff(project.id, handoff.id)).toMatchObject({
+      status: 'staged',
+      appliedRevision: null,
+    });
+  });
+
   it('marks an outstanding ChatGPT handoff stale when the PRD changes', () => {
     const project = repository.createProject('Stale handoff', '');
     const initial = repository.getPrd(project.id);
@@ -466,6 +522,36 @@ describe('Repository', () => {
       unavailabilityReason: null,
     });
     repository.completeAiRun(runId, undefined, 'Historical answer');
+    const exportedHandoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: 0,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Use the current evidence.',
+      sectionIds: [repository.getPrd(project.id).sections[0]!.id],
+      citationIds: [citationId],
+    });
+    const stagedHandoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: 0,
+      action: 'review',
+      scope: 'document',
+      instruction: 'Review using the current evidence.',
+      sectionIds: repository.getPrd(project.id).sections.map((section) => section.id),
+      citationIds: [citationId],
+    });
+    repository.importChatGptHandoffResponse(project.id, {
+      formatVersion: 1,
+      kind: 'prd-genie-response',
+      handoffId: stagedHandoff.id,
+      projectId: project.id,
+      sourceRevision: 0,
+      requestDigest: stagedHandoff.request.requestDigest,
+      summary: 'Synthetic evidence-backed review.',
+      patches: [],
+      findings: [],
+      hostModel: null,
+    });
     const openFinding = repository.storeFinding({
       aiRunId: runId,
       projectId: project.id,
@@ -483,6 +569,8 @@ describe('Repository', () => {
     });
     expect(openFinding.status).toBe('open');
     repository.deleteSource(project.id, sourceId);
+    expect(repository.getChatGptHandoff(project.id, exportedHandoff.id).status).toBe('stale');
+    expect(repository.getChatGptHandoff(project.id, stagedHandoff.id).status).toBe('stale');
     expect(repository.listAiRuns(project.id)[0]?.citations[0]).toMatchObject({
       sourceId: null,
       locationId: null,

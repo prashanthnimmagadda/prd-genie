@@ -600,34 +600,44 @@ export class Repository {
     expectedRevision: number,
     selectedPatches: Array<{ sectionId: string; afterMarkdown: string }>,
   ): PrdDocument {
-    const handoff = this.getChatGptHandoff(projectId, id);
-    if (handoff.status !== 'staged' || !handoff.response) {
-      throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
-    }
-    if (expectedRevision !== handoff.sourceRevision) {
-      throw new ApiError(409, 'stale_handoff', 'The PRD revision no longer matches this handoff.');
-    }
-    const current = this.getPrd(projectId);
-    if (current.revision !== expectedRevision) {
-      throw new ApiError(409, 'stale_revision', 'The PRD changed after this handoff was imported.');
-    }
-    const appliedSections = buildHandoffApplication(
-      current.sections,
-      handoff.response.patches,
-      selectedPatches,
-    );
-    const saved = this.savePrd(
-      projectId,
-      expectedRevision,
-      appliedSections,
-      `ChatGPT handoff ${id} accepted`,
-    );
-    this.database.db
-      .update(chatGptHandoffs)
-      .set({ status: 'applied', appliedRevision: saved.revision })
-      .where(eq(chatGptHandoffs.id, id))
-      .run();
-    return saved;
+    return this.database.sqlite.transaction(() => {
+      const handoff = this.getChatGptHandoff(projectId, id);
+      if (handoff.status !== 'staged' || !handoff.response) {
+        throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
+      }
+      if (expectedRevision !== handoff.sourceRevision) {
+        throw new ApiError(
+          409,
+          'stale_handoff',
+          'The PRD revision no longer matches this handoff.',
+        );
+      }
+      const current = this.getPrd(projectId);
+      if (current.revision !== expectedRevision) {
+        throw new ApiError(
+          409,
+          'stale_revision',
+          'The PRD changed after this handoff was imported.',
+        );
+      }
+      const appliedSections = buildHandoffApplication(
+        current.sections,
+        handoff.response.patches,
+        selectedPatches,
+      );
+      const saved = this.savePrd(
+        projectId,
+        expectedRevision,
+        appliedSections,
+        `ChatGPT handoff ${id} accepted`,
+      );
+      this.database.db
+        .update(chatGptHandoffs)
+        .set({ status: 'applied', appliedRevision: saved.revision })
+        .where(eq(chatGptHandoffs.id, id))
+        .run();
+      return saved;
+    })();
   }
 
   dismissChatGptHandoff(projectId: string, id: string): void {
@@ -645,6 +655,20 @@ export class Repository {
       .set({ appliedRevision: revision })
       .where(eq(aiRuns.id, id))
       .run();
+  }
+
+  saveAiRunApplication(
+    projectId: string,
+    runId: string,
+    expectedRevision: number,
+    sections: Array<Pick<PrdSection, 'id' | 'title' | 'body' | 'position'>>,
+    reason: string,
+  ): PrdDocument {
+    return this.database.sqlite.transaction(() => {
+      const saved = this.savePrd(projectId, expectedRevision, sections, reason);
+      this.markAiRunApplied(projectId, runId, saved.revision);
+      return saved;
+    })();
   }
 
   storeCitation(input: Omit<typeof citations.$inferInsert, 'id' | 'createdAt'>): string {

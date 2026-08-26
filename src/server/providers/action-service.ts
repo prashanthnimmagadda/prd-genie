@@ -63,23 +63,23 @@ export class ActionService {
         : {}),
     });
     const citationIds = new Map<string, string>();
+    const durableEvidence: Citation[] = [];
     for (const citation of evidence) {
       if (!citation.sourceId || !citation.locationId || !citation.chunkId) continue;
-      citationIds.set(
-        citation.chunkId,
-        this.repository.storeCitation({
-          aiRunId: runId,
-          sourceId: citation.sourceId,
-          locationId: citation.locationId,
-          chunkId: citation.chunkId,
-          sourceName: citation.sourceName,
-          locator: citation.locator,
-          excerpt: citation.excerpt,
-          evidenceStatus: citation.evidenceStatus,
-          available: true,
-          unavailabilityReason: null,
-        }),
-      );
+      const durableId = this.repository.storeCitation({
+        aiRunId: runId,
+        sourceId: citation.sourceId,
+        locationId: citation.locationId,
+        chunkId: citation.chunkId,
+        sourceName: citation.sourceName,
+        locator: citation.locator,
+        excerpt: citation.excerpt,
+        evidenceStatus: citation.evidenceStatus,
+        available: true,
+        unavailabilityReason: null,
+      });
+      citationIds.set(citation.chunkId, durableId);
+      durableEvidence.push({ ...citation, id: durableId });
     }
 
     const model = this.providers.model(sessionId, request.provider, request.model);
@@ -90,7 +90,7 @@ export class ActionService {
           transient: true,
           data: { stage: 'retrieval', detail: `${evidence.length} source excerpts selected` },
         });
-        for (const citation of evidence) {
+        for (const citation of durableEvidence) {
           writer.write({ type: 'data-citation', id: citation.id, data: citation });
         }
 

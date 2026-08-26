@@ -33,14 +33,13 @@ export class ProposalService {
         ? parseDocumentProposal(output, current.sections)
         : applyScopedProposal(current.sections, run.targetSectionId, run.selectionText, output);
     const revised = proposedMarkdown !== undefined && proposedMarkdown !== run.outputText;
-    const saved = this.repository.savePrd(
+    return this.repository.saveAiRunApplication(
       projectId,
+      runId,
       expectedRevision,
       sections,
       `AI run ${runId} ${revised ? 'revised and accepted' : 'accepted'}`,
     );
-    this.repository.markAiRunApplied(projectId, runId, saved.revision);
-    return saved;
   }
 }
 

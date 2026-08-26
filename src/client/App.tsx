@@ -455,6 +455,7 @@ function Workbench({
         : null,
     );
     setCitations([]);
+    setHandoffCitationIds([]);
     if (requestedAction === 'review') setFindings([]);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -635,15 +636,17 @@ function Workbench({
     setSources((current) => current.filter((item) => item.id !== source.id));
     setEvidenceDetail(null);
     try {
-      const [findingResult, runResult] = await Promise.all([
+      const [findingResult, runResult, handoffResult] = await Promise.all([
         api.findings(project.id),
         api.aiRuns(project.id),
+        api.chatGptHandoffs(project.id),
       ]);
       const refreshedCitations = new Map(
         runResult.runs.flatMap((run) => run.citations.map((citation) => [citation.id, citation])),
       );
       setFindings(findingResult.findings);
       setAiRuns(runResult.runs);
+      setHandoffs(handoffResult.handoffs);
       setCitations((current) =>
         current.map((citation) => refreshedCitations.get(citation.id) ?? citation),
       );
@@ -873,6 +876,7 @@ function Workbench({
               onClick={() => {
                 if (documentMutationRef.current) return;
                 if (!dirty || window.confirm('Discard unsaved changes and switch projects?')) {
+                  setHandoffCitationIds([]);
                   onProjectSelect(item.id);
                   setRailOpen(false);
                 }
@@ -1863,6 +1867,7 @@ function Workbench({
                           setScope(run.scope);
                           setOutput(run.outputText ?? '');
                           setCitations(run.citations);
+                          setHandoffCitationIds([]);
                           setProposalContext(
                             run.action === 'draft' || run.action === 'rewrite'
                               ? {

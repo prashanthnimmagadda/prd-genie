@@ -41,6 +41,118 @@ test('creates a project and exposes the document-first workbench', async ({
   }
 });
 
+test('exports current AI evidence immediately and clears handoff selection boundaries', async ({
+  page,
+  request,
+}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  const projectName = `Evidence handoff ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const alternateName = `Evidence alternate ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', {
+    data: { name: projectName, description: 'Synthetic evidence handoff fixture' },
+  });
+  const project = (await created.json()) as { id: string };
+  const alternate = await request.post('/api/projects', {
+    data: { name: alternateName, description: 'Synthetic project switch fixture' },
+  });
+  expect(created.ok()).toBe(true);
+  expect(alternate.ok()).toBe(true);
+
+  await page.goto('/');
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByLabel('Add source file').setInputFiles({
+    name: 'handoff-evidence.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(
+      '# Evidence\nEight of twelve product managers lost an unsaved PRD draft before review.',
+    ),
+  });
+  await expect
+    .poll(async () => {
+      const result = (await (await request.get(`/api/projects/${project.id}/sources`)).json()) as {
+        sources: Array<{ status: string }>;
+      };
+      return result.sources[0]?.status;
+    })
+    .not.toBe('processing');
+
+  await page.getByRole('button', { name: 'Configure model provider' }).click();
+  const providerDialog = page.getByRole('dialog', { name: 'Model provider' });
+  await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
+  await providerDialog.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
+  await providerDialog.getByLabel('Session key').fill('synthetic-session-key');
+  await providerDialog.getByRole('button', { name: 'Configure and discover' }).click();
+  await expect(providerDialog.getByPlaceholder('Or enter a model ID')).toHaveValue(
+    'synthetic-prd-model',
+  );
+  await providerDialog.getByRole('button', { name: 'Use provider' }).click();
+
+  await page.getByLabel('Action').selectOption('rewrite');
+  await page
+    .getByPlaceholder('How should this be improved?')
+    .fill('Rewrite the problem using the current evidence.');
+  await page.getByLabel('Submit').click();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
+
+  await page.getByRole('tab', { name: 'history' }).click();
+  const evidenceCheckbox = page.getByRole('checkbox', { name: /handoff-evidence\.md/ });
+  await expect(evidenceCheckbox).toBeVisible();
+  await evidenceCheckbox.check();
+  await page
+    .getByPlaceholder('Describe the draft, review, or rewrite you want ChatGPT to propose.')
+    .fill('Rewrite the problem using only the selected evidence.');
+  const handoffDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export request' }).click();
+  const handoffPath = await (await handoffDownload).path();
+  expect(handoffPath).toBeTruthy();
+  const handoffRequest = JSON.parse(fs.readFileSync(handoffPath, 'utf8')) as {
+    evidence: Array<{ id: string; sourceName: string }>;
+  };
+  expect(handoffRequest.evidence).toEqual([
+    expect.objectContaining({
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      sourceName: 'handoff-evidence.md',
+    }),
+  ]);
+
+  await page.getByRole('tab', { name: 'assist' }).click();
+  await page.getByLabel('Action').selectOption('ask');
+  await page.getByPlaceholder('Ask about this PRD').fill('Summarize the current evidence.');
+  await page.getByLabel('Submit').click();
+  await expect
+    .poll(async () => {
+      const result = (await (await request.get(`/api/projects/${project.id}/ai-runs`)).json()) as {
+        runs: unknown[];
+      };
+      return result.runs.length;
+    })
+    .toBe(2);
+  await page.getByRole('tab', { name: 'history' }).click();
+  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+
+  await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
+  const rewriteRun = page
+    .locator('.history-row')
+    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'synthetic-prd-model' })
+    .first();
+  await rewriteRun.getByRole('button', { name: 'Inspect' }).click();
+  await page.getByRole('tab', { name: 'history' }).click();
+  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+
+  await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
+  await page.getByRole('button', { name: alternateName, exact: true }).click();
+  await expect(page.getByRole('heading', { name: alternateName })).toBeVisible();
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByRole('tab', { name: 'history' }).click();
+  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).toHaveCount(0);
+
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Delete handoff-evidence.md' }).click();
+  await expect(page.getByText('handoff-evidence.md', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.handoff-row').first()).toContainText('stale');
+});
+
 test('completes the provider, evidence, proposal, review, undo, and export workflow', async ({
   page,
   request,

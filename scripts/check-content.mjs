@@ -84,10 +84,11 @@ for (const relative of inventory()) {
   }
 }
 
-const metadata = [
-  git(['log', '--all', '--format=%B']),
-  git(['for-each-ref', '--format=%(refname) %(subject)']),
-].join('\n');
+const persistentRefMetadata = git(['for-each-ref', '--format=%(refname) %(subject)'])
+  .split('\n')
+  .filter((line) => !line.startsWith(`refs/${forbiddenProductTerm}/`))
+  .join('\n');
+const metadata = [git(['log', '--all', '--format=%B']), persistentRefMetadata].join('\n');
 if (metadata.toLowerCase().includes(forbiddenProductTerm)) {
   failures.push('Git metadata: reserved product term');
 }

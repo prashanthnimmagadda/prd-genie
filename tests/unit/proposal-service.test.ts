@@ -45,6 +45,35 @@ describe('ProposalService', () => {
     expect(restored.sections[0]?.body).toBe('');
   });
 
+  it('rolls back the PRD revision when the AI application marker fails', () => {
+    const project = repository.createProject('Atomic proposal', '');
+    const section = repository.getPrd(project.id).sections[0]!;
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: section.id,
+    });
+    repository.completeAiRun(runId, undefined, 'Atomic replacement.');
+    database.sqlite.exec(`
+      CREATE TEMP TRIGGER fail_ai_application_marker
+      BEFORE UPDATE OF applied_revision ON ai_runs
+      WHEN NEW.id = '${runId}' AND NEW.applied_revision IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic marker failure');
+      END
+    `);
+
+    expect(() => proposals.apply(project.id, runId, 0)).toThrow('synthetic marker failure');
+    expect(repository.getPrd(project.id)).toMatchObject({ revision: 0 });
+    expect(repository.getPrd(project.id).sections[0]?.body).toBe('');
+    expect(repository.listRevisions(project.id)).toHaveLength(1);
+    expect(repository.getAiRun(project.id, runId).appliedRevision).toBeNull();
+  });
+
   it('replaces only a unique selected span and rejects changed selections', () => {
     const project = repository.createProject('Selection', '');
     const initial = repository.getPrd(project.id);

@@ -50,3 +50,8 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Expanded grounding evaluation for unsupported qualifiers and target recommendations.
 - Bound public provenance to the clean SHA, release tag, full runtime tree, and validation bundle.
 - Made all checked-in GitHub workflow templates manual-only while Actions remains disabled.
+- Streamed durable citation identities so current AI evidence can be exported to ChatGPT without reloading.
+- Cleared ChatGPT evidence selections across action, history, and project context changes.
+- Marked exported and staged ChatGPT handoffs stale when selected source evidence is deleted.
+- Made direct AI and ChatGPT handoff application markers atomic with their PRD revisions.
+- Rejected undeclared root and nested fields in structured review output.
