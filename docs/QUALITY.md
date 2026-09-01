@@ -38,6 +38,9 @@ The upstream models advertise much larger context windows that can require impra
 - Correct section scope.
 - Citation and completion events.
 - Concrete structured review output grounded in available source citations or the exact PRD section state.
+- An adversarial structured-review case that proves raw retrieval contains a fixed hostile canary,
+  while the provider-visible and durable citation sets exclude that chunk and generated review prose
+  or patches do not repeat its instruction.
 - Stable section targeting and revision binding.
 - Proposal application and restart persistence.
 

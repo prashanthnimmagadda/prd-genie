@@ -40,6 +40,23 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+interface AiRunInput {
+  projectId: string;
+  action: string;
+  scope: string;
+  provider: string;
+  model: string;
+  sourceRevision: number;
+  targetSectionId?: string;
+  selectionText?: string;
+}
+
+type DurableCitationInput = Omit<typeof citations.$inferInsert, 'id' | 'aiRunId' | 'createdAt'> & {
+  sourceId: string;
+  locationId: string;
+  chunkId: string;
+};
+
 export class Repository {
   constructor(readonly database: AppDatabase) {}
 
@@ -321,22 +338,67 @@ export class Repository {
     deleteSourceData(this.database, projectId, sourceId);
   }
 
-  createAiRun(input: {
-    projectId: string;
-    action: string;
-    scope: string;
-    provider: string;
-    model: string;
-    sourceRevision: number;
-    targetSectionId?: string;
-    selectionText?: string;
-  }): string {
+  createAiRun(input: AiRunInput): string {
     const id = crypto.randomUUID();
     this.database.db
       .insert(aiRuns)
       .values({ id, ...input, status: 'running', startedAt: now() })
       .run();
     return id;
+  }
+
+  createAiRunWithCitations(
+    input: AiRunInput,
+    citationInputs: DurableCitationInput[],
+  ): { runId: string; citations: Array<{ id: string; chunkId: string }> } {
+    return this.database.sqlite.transaction(() => {
+      const linkedEvidence = this.database.sqlite.prepare(
+        `SELECT 1
+         FROM chunks
+         INNER JOIN sources ON sources.id = chunks.source_id
+         INNER JOIN source_locations ON source_locations.id = chunks.location_id
+         WHERE chunks.id = ?
+           AND chunks.project_id = ?
+           AND chunks.source_id = ?
+           AND chunks.location_id = ?
+           AND sources.project_id = ?
+           AND source_locations.source_id = ?
+         LIMIT 1`,
+      );
+      for (const citation of citationInputs) {
+        const linked = linkedEvidence.get(
+          citation.chunkId,
+          input.projectId,
+          citation.sourceId,
+          citation.locationId,
+          input.projectId,
+          citation.sourceId,
+        );
+        if (!linked) {
+          throw new ApiError(
+            409,
+            'stale_evidence',
+            'Source evidence changed while this action was starting. Try again.',
+          );
+        }
+      }
+
+      const runId = crypto.randomUUID();
+      const startedAt = now();
+      this.database.db
+        .insert(aiRuns)
+        .values({ id: runId, ...input, status: 'running', startedAt })
+        .run();
+      const storedCitations = citationInputs.map((citation) => {
+        const id = crypto.randomUUID();
+        this.database.db
+          .insert(citations)
+          .values({ id, aiRunId: runId, ...citation, createdAt: startedAt })
+          .run();
+        return { id, chunkId: citation.chunkId };
+      });
+      return { runId, citations: storedCitations };
+    })();
   }
 
   completeAiRun(id: string, errorCode?: string, outputText?: string): void {

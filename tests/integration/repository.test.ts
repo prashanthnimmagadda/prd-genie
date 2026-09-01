@@ -64,6 +64,115 @@ describe('Repository', () => {
     expect(JSON.stringify(updated)).not.toContain('apiKey');
   });
 
+  it('atomically creates an AI run with revalidated citations and rolls back stale or failed setup', () => {
+    const project = repository.createProject('Atomic action setup', '');
+    const sourceId = crypto.randomUUID();
+    const locationId = crypto.randomUUID();
+    const chunkId = crypto.randomUUID();
+    database.db
+      .insert(sources)
+      .values({
+        id: sourceId,
+        projectId: project.id,
+        name: 'atomic-evidence.txt',
+        mediaType: 'text/plain',
+        size: 15,
+        hash: 'c'.repeat(64),
+        binaryPath: path.join(os.tmpdir(), 'missing-atomic-evidence'),
+        status: 'ready',
+        error: null,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+    database.db
+      .insert(sourceLocations)
+      .values({
+        id: locationId,
+        sourceId,
+        locator: 'Paragraph 1',
+        heading: null,
+        ordinal: 0,
+        content: 'Atomic evidence',
+        startOffset: 0,
+        endOffset: 15,
+      })
+      .run();
+    database.db
+      .insert(chunks)
+      .values({
+        id: chunkId,
+        projectId: project.id,
+        sourceId,
+        locationId,
+        ordinal: 0,
+        content: 'Atomic evidence',
+        tokenCount: 2,
+        startOffset: 0,
+        endOffset: 15,
+        documentHash: 'c'.repeat(64),
+      })
+      .run();
+    const runInput = {
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+    };
+    const citationInput = {
+      sourceId,
+      locationId,
+      chunkId,
+      sourceName: 'atomic-evidence.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Atomic evidence',
+      evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
+    };
+    const stored = repository.createAiRunWithCitations(runInput, [citationInput]);
+    expect(repository.getAiRun(project.id, stored.runId)).toMatchObject({
+      status: 'running',
+      citations: [expect.objectContaining({ id: stored.citations[0]?.id, chunkId })],
+    });
+
+    const counts = () => ({
+      runs: (
+        database.sqlite.prepare('SELECT count(*) AS count FROM ai_runs').get() as { count: number }
+      ).count,
+      citations: (
+        database.sqlite.prepare('SELECT count(*) AS count FROM citations').get() as {
+          count: number;
+        }
+      ).count,
+    });
+    const baseline = counts();
+    expect(() =>
+      repository.createAiRunWithCitations(runInput, [
+        citationInput,
+        { ...citationInput, chunkId: crypto.randomUUID() },
+      ]),
+    ).toThrow('Source evidence changed');
+    expect(counts()).toEqual(baseline);
+
+    database.sqlite.exec(`
+      CREATE TRIGGER fail_atomic_citation_insert
+      BEFORE INSERT ON citations
+      WHEN NEW.excerpt = 'synthetic write failure'
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic citation marker failure');
+      END
+    `);
+    expect(() =>
+      repository.createAiRunWithCitations(runInput, [
+        citationInput,
+        { ...citationInput, excerpt: 'synthetic write failure' },
+      ]),
+    ).toThrow('synthetic citation marker failure');
+    expect(counts()).toEqual(baseline);
+  });
+
   it('validates project, section, finding, and location identities', () => {
     const first = repository.createProject('First', '');
     const second = repository.createProject('Second', '');

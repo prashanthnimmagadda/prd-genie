@@ -53,6 +53,7 @@ export function ProviderDialog({
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
   const [model, setModel] = useState(project.selectedModel ?? '');
   const [busy, setBusy] = useState(false);
+  const [statesLoading, setStatesLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -60,17 +61,42 @@ export function ProviderDialog({
     void api
       .providerStates()
       .then(({ providers }) => setStates(providers))
-      .catch((reason: unknown) => setError(messageFrom(reason)));
+      .catch((reason: unknown) => setError(messageFrom(reason)))
+      .finally(() => setStatesLoading(false));
   }, [open]);
 
   const currentState = states.find((state) => state.provider === provider);
-  const endpoint =
-    baseUrl ||
-    (provider === 'ollama'
-      ? 'http://127.0.0.1:11434/v1'
-      : provider === 'openai-compatible'
-        ? ''
-        : undefined);
+  const typedBaseUrl = baseUrl.trim();
+  const hasDraftConfiguration = Boolean(apiKey || typedBaseUrl || headersText.trim());
+  const endpointToSubmit = typedBaseUrl || undefined;
+  const missingCompatibleEndpoint =
+    provider === 'openai-compatible' &&
+    (!currentState?.configured || hasDraftConfiguration) &&
+    !typedBaseUrl;
+
+  function clearDraftConfiguration() {
+    setApiKey('');
+    setBaseUrl('');
+    setHeadersText('');
+  }
+
+  function changeProvider(next: ProviderKind) {
+    clearDraftConfiguration();
+    setProvider(next);
+    setModel('');
+    setModels([]);
+    setError('');
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && busy) return;
+    if (!nextOpen) {
+      clearDraftConfiguration();
+      setModels([]);
+      setError('');
+    }
+    onOpenChange(nextOpen);
+  }
 
   async function configure() {
     setBusy(true);
@@ -89,17 +115,17 @@ export function ProviderDialog({
         }
         headers = parsed as Record<string, string>;
       }
-      const hasNewConfiguration = Boolean(apiKey || baseUrl || headers);
       const state =
-        currentState?.configured && !hasNewConfiguration
+        currentState?.configured && !hasDraftConfiguration
           ? currentState
           : await api.configureProvider(provider, {
               ...(apiKey ? { apiKey } : {}),
-              ...(endpoint ? { baseUrl: endpoint } : {}),
+              ...((provider === 'openai-compatible' || provider === 'ollama') && endpointToSubmit
+                ? { baseUrl: endpointToSubmit }
+                : {}),
               ...(headers ? { headers } : {}),
             });
-      setApiKey('');
-      setHeadersText('');
+      clearDraftConfiguration();
       setStates((current) => [...current.filter((item) => item.provider !== provider), state]);
       const discovered = await api.models(provider);
       setModels(discovered.models);
@@ -116,6 +142,7 @@ export function ProviderDialog({
     setError('');
     try {
       await api.clearProvider(provider);
+      clearDraftConfiguration();
       const result = await api.providerStates();
       setStates(result.providers);
       setModels([]);
@@ -128,6 +155,10 @@ export function ProviderDialog({
   }
 
   async function saveSelection() {
+    if (hasDraftConfiguration) {
+      setError('Configure the pending session settings before using this provider.');
+      return;
+    }
     if (!model.trim()) {
       setError('Choose a model or enter a model ID.');
       return;
@@ -149,8 +180,8 @@ export function ProviderDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="provider-dialog">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="provider-dialog" showCloseButton={!busy} aria-busy={busy}>
         <DialogHeader>
           <DialogTitle>Model provider</DialogTitle>
           <DialogDescription>
@@ -174,13 +205,8 @@ export function ProviderDialog({
           <span>Provider</span>
           <select
             value={provider}
-            onChange={(event) => {
-              const next = event.target.value as ProviderKind;
-              setProvider(next);
-              setModel('');
-              setModels([]);
-              setError('');
-            }}
+            disabled={busy || statesLoading}
+            onChange={(event) => changeProvider(event.target.value as ProviderKind)}
           >
             {Object.entries(providerLabels).map(([value, label]) => (
               <option key={value} value={value}>
@@ -195,6 +221,7 @@ export function ProviderDialog({
             <span>Endpoint</span>
             <Input
               value={baseUrl}
+              disabled={busy}
               placeholder={
                 provider === 'ollama'
                   ? 'http://127.0.0.1:11434/v1'
@@ -214,6 +241,7 @@ export function ProviderDialog({
               <Input
                 type="password"
                 value={apiKey}
+                disabled={busy}
                 placeholder={
                   currentState?.credentialSource === 'environment'
                     ? 'Environment fallback available'
@@ -232,6 +260,7 @@ export function ProviderDialog({
             <span>Optional headers as JSON</span>
             <textarea
               value={headersText}
+              disabled={busy}
               placeholder='{"X-Provider-Team":"team-id"}'
               onChange={(event) => setHeadersText(event.target.value)}
               autoComplete="off"
@@ -241,8 +270,20 @@ export function ProviderDialog({
         )}
 
         <div className="provider-host">
-          Outbound host: <code>{currentState?.baseUrl ?? endpoint ?? 'Provider default'}</code>
+          Active outbound host: <code>{currentState?.baseUrl ?? 'Provider default'}</code>
         </div>
+
+        {typedBaseUrl && (
+          <div className="provider-host provider-host-pending">
+            Pending endpoint host: <code>{displayHostname(typedBaseUrl)}</code>
+          </div>
+        )}
+
+        {missingCompatibleEndpoint && currentState?.configured && (
+          <p className="field-hint" role="note">
+            Re-enter the full endpoint before replacing this session configuration.
+          </p>
+        )}
 
         <div className="provider-actions">
           <Button
@@ -250,11 +291,12 @@ export function ProviderDialog({
             variant="secondary"
             disabled={
               busy ||
+              statesLoading ||
               (provider !== 'ollama' &&
                 provider !== 'openai-compatible' &&
                 !apiKey &&
                 !currentState?.configured) ||
-              (provider === 'openai-compatible' && !endpoint)
+              missingCompatibleEndpoint
             }
             onClick={() => void configure()}
           >
@@ -280,7 +322,7 @@ export function ProviderDialog({
         <div className="model-row">
           <ModelSelector>
             <ModelSelectorTrigger asChild>
-              <Button type="button" variant="outline" className="model-trigger">
+              <Button type="button" variant="outline" className="model-trigger" disabled={busy}>
                 <span>{model || 'Choose a model'}</span>
                 <ChevronDown aria-hidden="true" />
               </Button>
@@ -306,6 +348,7 @@ export function ProviderDialog({
           </ModelSelector>
           <Input
             value={model}
+            disabled={busy}
             placeholder="Or enter a model ID"
             onChange={(event) => setModel(event.target.value)}
             spellCheck={false}
@@ -319,12 +362,17 @@ export function ProviderDialog({
         )}
 
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => handleOpenChange(false)}
+          >
             Cancel
           </Button>
           <Button
             type="button"
-            disabled={busy || !model.trim()}
+            disabled={busy || statesLoading || hasDraftConfiguration || !model.trim()}
             onClick={() => void saveSelection()}
           >
             Use provider
@@ -337,4 +385,12 @@ export function ProviderDialog({
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'The provider could not be configured.';
+}
+
+function displayHostname(value: string): string {
+  try {
+    return new URL(value).hostname || 'Invalid endpoint';
+  } catch {
+    return 'Invalid endpoint';
+  }
 }

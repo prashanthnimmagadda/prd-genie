@@ -51,28 +51,24 @@ export class ActionService {
     const query = [request.instruction, scopedContent].filter(Boolean).join('\n');
     const retrievedEvidence = await this.retrieval.retrieve(request.projectId, query);
     const evidence =
-      request.action === 'draft' || request.action === 'rewrite'
-        ? filterExcludedProposalEvidence(retrievedEvidence, request.instruction ?? '')
-        : retrievedEvidence;
+      request.action === 'review'
+        ? retrievedEvidence.filter(
+            (item) =>
+              !isInstructionLikeEvidence([item.sourceName, item.locator, item.excerpt].join('\n')),
+          )
+        : request.action === 'draft' || request.action === 'rewrite'
+          ? filterExcludedProposalEvidence(retrievedEvidence, request.instruction ?? '')
+          : retrievedEvidence;
     const model = this.providers.model(sessionId, request.provider, request.model);
-    const runId = this.repository.createAiRun({
-      projectId: request.projectId,
-      action: request.action,
-      scope: request.scope,
-      provider: request.provider,
-      model: request.model,
-      sourceRevision: request.revision,
-      ...(request.targetSectionId ? { targetSectionId: request.targetSectionId } : {}),
-      ...(request.scope === 'selection' && request.selection
-        ? { selectionText: request.selection }
-        : {}),
-    });
-    const citationIds = new Map<string, string>();
-    const durableEvidence: Citation[] = [];
-    for (const citation of evidence) {
-      if (!citation.sourceId || !citation.locationId || !citation.chunkId) continue;
-      const durableId = this.repository.storeCitation({
-        aiRunId: runId,
+    const citationInputs = evidence.map((citation) => {
+      if (!citation.sourceId || !citation.locationId || !citation.chunkId) {
+        throw new ApiError(
+          409,
+          'stale_evidence',
+          'Source evidence changed while this action was starting. Try again.',
+        );
+      }
+      return {
         sourceId: citation.sourceId,
         locationId: citation.locationId,
         chunkId: citation.chunkId,
@@ -82,10 +78,31 @@ export class ActionService {
         evidenceStatus: citation.evidenceStatus,
         available: true,
         unavailabilityReason: null,
-      });
-      citationIds.set(citation.chunkId, durableId);
-      durableEvidence.push({ ...citation, id: durableId });
-    }
+      };
+    });
+    const stored = this.repository.createAiRunWithCitations(
+      {
+        projectId: request.projectId,
+        action: request.action,
+        scope: request.scope,
+        provider: request.provider,
+        model: request.model,
+        sourceRevision: request.revision,
+        ...(request.targetSectionId ? { targetSectionId: request.targetSectionId } : {}),
+        ...(request.scope === 'selection' && request.selection
+          ? { selectionText: request.selection }
+          : {}),
+      },
+      citationInputs,
+    );
+    const runId = stored.runId;
+    const citationIds = new Map(
+      stored.citations.map((citation) => [citation.chunkId, citation.id]),
+    );
+    const durableEvidence: Citation[] = evidence.map((citation) => ({
+      ...citation,
+      id: citationIds.get(citation.chunkId!)!,
+    }));
     const stream = createUIMessageStream<WorkbenchMessage>({
       execute: async ({ writer }) => {
         writer.write({
@@ -745,8 +762,30 @@ function normalizeClaimToken(token: string): string {
 }
 
 function isInstructionLikeEvidence(value: string): boolean {
-  return /\b(?:untrusted|prompt[ -]?injection)\b|\b(?:ignore|disregard|forget)\b.{0,100}\b(?:previous|prior|above|task|instruction|prompt|system)\b|\b(?:reply|respond|output|return|print|say)\b.{0,60}\b(?:only|exactly|with)\b|\b(?:system|assistant|developer)\s*(?:message|prompt|instruction|:)\b|<\/?(?:system|assistant|developer|prompt)>|```(?:system|assistant|developer)/i.test(
-    value,
+  const normalized = value.normalize('NFKC').replace(/[\p{Cf}\s]+/gu, ' ');
+  const roleSyntax =
+    /\b(?:system|assistant|developer)\s*(?:(?:message|prompt|instruction)\b|:)|<\/?(?:system|assistant|developer|prompt)>|```(?:system|assistant|developer)/i.test(
+      normalized,
+    );
+  const explicitlyUntrusted = /\b(?:untrusted|prompt[ -]?injection)\b/i.test(normalized);
+  const directive =
+    /\b(?:ignore|disregard|forget|follow|obey|override|bypass|execute|comply|reply|respond|output|return|print|say)\b/i.test(
+      normalized,
+    );
+  const metaTarget =
+    /\b(?:previous|prior|above|following|task|directions?|instructions?|commands?|rules?|prompt|system|assistant|developer|response|answer|output)\b/i.test(
+      normalized,
+    );
+  const redirect = /\b(?:instead|only|exactly)\b/i.test(normalized);
+  const sensitiveDisclosure =
+    /\b(?:disclose|reveal|expose|leak|print|return|output|send|share)\b.{0,100}\b(?:api[ -]?keys?|credentials?|secrets?|passwords?|cookies?|tokens?)\b|\b(?:api[ -]?keys?|credentials?|secrets?|passwords?|cookies?|tokens?)\b.{0,100}\b(?:disclose|reveal|expose|leak|print|return|output|send|share)\b/i.test(
+      normalized,
+    );
+  return (
+    roleSyntax ||
+    explicitlyUntrusted ||
+    (directive && (metaTarget || redirect)) ||
+    sensitiveDisclosure
   );
 }
 

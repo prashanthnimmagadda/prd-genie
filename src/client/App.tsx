@@ -1001,6 +1001,7 @@ function Workbench({
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`Delete ${source.name}`}
+                  disabled={busy || documentMutationBusy}
                   onClick={() => {
                     if (!window.confirm(`Delete ${source.name} and its index?`)) return;
                     void removeSource(source);
@@ -1931,12 +1932,15 @@ function Workbench({
         />
       )}
 
-      <ProviderDialog
-        open={providerOpen}
-        project={project}
-        onOpenChange={setProviderOpen}
-        onProjectChange={onProjectChange}
-      />
+      {providerOpen && (
+        <ProviderDialog
+          key={project.id}
+          open
+          project={project}
+          onOpenChange={setProviderOpen}
+          onProjectChange={onProjectChange}
+        />
+      )}
     </div>
   );
 }

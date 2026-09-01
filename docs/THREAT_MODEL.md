@@ -30,7 +30,7 @@ The provider disclosure names the outbound host and data classes. Actions send o
 
 ### Prompt injection in sources
 
-Source excerpts are labelled as untrusted evidence in system instructions. They are not interpreted as tool instructions. Human approval remains required for document changes.
+Source excerpts are labelled as untrusted evidence in system instructions. Recognized instruction-like excerpts and metadata are excluded from structured-review prompts, citations, and applyable patches. The detector is a conservative lexical boundary, not a general proof against every encoded or cross-chunk instruction. Human approval remains required for document changes.
 
 ### Malicious uploads
 

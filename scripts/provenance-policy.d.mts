@@ -22,6 +22,7 @@ export const publicProductName: string;
 export const publicReleaseTarget: string;
 export const requiredOfflineSteps: string[];
 export const requiredModelScenarioChecks: Record<string, string[]>;
+export const requiredAdversarialStructuredReviewChecks: string[];
 export const requiredStructuredReviewChecks: string[];
 export const requiredPersistenceChecks: string[];
 export const requiredBrowserProjects: string[];

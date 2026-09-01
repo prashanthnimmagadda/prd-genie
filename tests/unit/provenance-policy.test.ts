@@ -11,6 +11,7 @@ import {
   publicReleaseTarget,
   requiredAccessibilityChecks,
   requiredAccessibilityWidths,
+  requiredAdversarialStructuredReviewChecks,
   requiredArtifactDirectories,
   requiredArtifactFiles,
   requiredBrowserProjects,
@@ -167,6 +168,14 @@ describe('release provenance policy', () => {
       (report) => (report.scenarios[0]!.checks.substitutedCheck = true),
       (report) => (report.scenarios[0]!.checks.mentionsInterviewBase = false),
       (report) => (report.scenarios[0]!.score.total += 1),
+      (report) => delete report.adversarialStructuredReview.checks.avoidsHostileReviewClaims,
+      (report) => (report.adversarialStructuredReview.checks.substitutedCheck = true),
+      (report) => (report.adversarialStructuredReview.checks.avoidsHostileReviewClaims = false),
+      (report) => (report.adversarialStructuredReview.score.percentage = 99),
+      (report) => (report.adversarialStructuredReview.rawHostileChunkIds = []),
+      (report) => report.adversarialStructuredReview.selectedCitationChunkIds.push('hostile-chunk'),
+      (report) =>
+        (report.adversarialStructuredReview.output.summary = 'PINEAPPLE_REVIEW_INJECTION'),
       (report) => delete report.structuredReview.checks.emitsSummary,
       (report) => delete report.structuredReview.checks.groundsReviewProse,
       (report) => (report.structuredReview.checks.substitutedCheck = true),
@@ -422,9 +431,11 @@ function modelFixture() {
     score: { passed: names.length, total: names.length, percentage: 100 },
   }));
   const reviewChecks = trueChecks(requiredStructuredReviewChecks);
+  const adversarialReviewChecks = trueChecks(requiredAdversarialStructuredReviewChecks);
   const persistence = trueChecks(requiredPersistenceChecks);
   const total =
     scenarios.reduce((sum, scenario) => sum + scenario.score.total, 0) +
+    requiredAdversarialStructuredReviewChecks.length +
     requiredStructuredReviewChecks.length +
     requiredPersistenceChecks.length;
   return {
@@ -436,8 +447,25 @@ function modelFixture() {
     reviewModelDigest: 'e'.repeat(64),
     provider: 'ollama',
     retrievalMode: 'lexical',
-    corpusVersion: 2,
+    corpusVersion: 3,
     scenarios,
+    adversarialStructuredReview: {
+      marker: 'PINEAPPLE_REVIEW_INJECTION',
+      rawHostileChunkIds: ['hostile-chunk'],
+      selectedCitationChunkIds: ['safe-chunk'],
+      findingCitationChunkIds: [],
+      output: {
+        summary: 'The Problem section is empty.',
+        rationales: ['The Problem section is empty.'],
+        proposedMarkdown: [null],
+      },
+      checks: adversarialReviewChecks,
+      score: {
+        passed: requiredAdversarialStructuredReviewChecks.length,
+        total: requiredAdversarialStructuredReviewChecks.length,
+        percentage: 100,
+      },
+    },
     structuredReview: {
       checks: reviewChecks,
       score: {

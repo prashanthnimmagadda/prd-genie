@@ -10,6 +10,8 @@ import { Repository } from '../../src/server/db/repository.js';
 import { ensureVerifiedBinary, SourceService } from '../../src/server/documents/source-service.js';
 import { RetrievalService } from '../../src/server/retrieval/retrieval-service.js';
 import type { EmbeddingService } from '../../src/server/retrieval/embedding-service.js';
+import { ActionService } from '../../src/server/providers/action-service.js';
+import type { ProviderService } from '../../src/server/providers/provider-service.js';
 
 describe('source lifecycle and retrieval fallback', () => {
   let database: AppDatabase;
@@ -281,6 +283,66 @@ describe('source lifecycle and retrieval fallback', () => {
     expect(fs.existsSync(binary)).toBe(true);
     repository.deleteSource(second.id, secondSource.id);
     expect(fs.existsSync(binary)).toBe(false);
+  });
+
+  it('rolls back action setup when a source is deleted during deferred retrieval', async () => {
+    const project = repository.createProject('Delete during retrieval', '');
+    const sourceService = new SourceService(database, unavailableEmbeddings);
+    const source = await sourceService.add(
+      project.id,
+      'deferred-evidence.txt',
+      Buffer.from('Synthetic evidence supports a deferred retrieval race regression.'),
+    );
+    await expect.poll(() => repository.listSources(project.id)[0]?.status).toBe('partial');
+
+    let releaseEmbedding: ((vectors: number[][]) => void) | undefined;
+    let markEmbeddingStarted: (() => void) | undefined;
+    const embeddingStarted = new Promise<void>((resolve) => {
+      markEmbeddingStarted = resolve;
+    });
+    const pendingEmbedding = new Promise<number[][]>((resolve) => {
+      releaseEmbedding = resolve;
+    });
+    const retrieval = new RetrievalService(database, {
+      embed: () => {
+        markEmbeddingStarted?.();
+        return pendingEmbedding;
+      },
+    } as unknown as EmbeddingService);
+    const providers = { model: vi.fn(() => ({ provider: 'synthetic' })) };
+    const actions = new ActionService(
+      repository,
+      retrieval,
+      providers as unknown as ProviderService,
+    );
+    const action = actions.run(
+      undefined,
+      {
+        projectId: project.id,
+        revision: 0,
+        action: 'ask',
+        scope: 'document',
+        provider: 'ollama',
+        model: 'synthetic',
+        instruction: 'Explain the synthetic evidence.',
+      },
+      new AbortController().signal,
+    );
+
+    await embeddingStarted;
+    repository.deleteSource(project.id, source.id);
+    releaseEmbedding?.([]);
+
+    await expect(action).rejects.toMatchObject({ code: 'stale_evidence' });
+    expect(providers.model).toHaveBeenCalledTimes(1);
+    expect(repository.listAiRuns(project.id)).toEqual([]);
+    expect(
+      (
+        database.sqlite.prepare('SELECT count(*) AS count FROM citations').get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(0);
   });
 
   it('removes lexical data and prevents late vectors after project deletion', async () => {

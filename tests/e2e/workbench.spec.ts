@@ -41,6 +41,170 @@ test('creates a project and exposes the document-first workbench', async ({
   }
 });
 
+test('isolates provider drafts and discloses active and pending outbound hosts', async ({
+  page,
+  request,
+}, testInfo) => {
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
+  const projectName = `Provider isolation ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', {
+    data: { name: projectName, description: 'Synthetic provider isolation fixture' },
+  });
+  expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
+
+  await page.route('**/api/session/providers', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        providers: [
+          {
+            provider: 'openai',
+            credentialSource: 'none',
+            configured: false,
+            baseUrl: 'api.openai.com',
+          },
+          {
+            provider: 'anthropic',
+            credentialSource: 'none',
+            configured: false,
+            baseUrl: 'api.anthropic.com',
+          },
+          {
+            provider: 'google',
+            credentialSource: 'none',
+            configured: false,
+            baseUrl: 'generativelanguage.googleapis.com',
+          },
+          {
+            provider: 'openai-compatible',
+            credentialSource: 'session',
+            configured: true,
+            baseUrl: 'models.saved.example.test',
+          },
+          {
+            provider: 'ollama',
+            credentialSource: 'session',
+            configured: true,
+            baseUrl: 'ollama.saved.example.test',
+          },
+        ],
+      }),
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await page.getByRole('button', { name: 'Configure model provider' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Model provider' });
+  const providerSelect = dialog.getByRole('combobox').first();
+
+  await providerSelect.selectOption('openai-compatible');
+  await expect(dialog.locator('.provider-host').first()).toContainText('models.saved.example.test');
+  await dialog.getByLabel('Session key').fill('replacement-compatible-key');
+  await expect(dialog.getByText('Re-enter the full endpoint')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Refresh models' })).toBeDisabled();
+  await dialog.getByLabel('Session key').fill('');
+  await dialog.getByLabel('Endpoint').fill('https://models.example.test/v1');
+  await dialog.getByLabel('Session key').fill('old-compatible-key');
+  await dialog.getByLabel('Optional headers as JSON').fill('{"X-Old-Provider":"retained"}');
+
+  await providerSelect.selectOption('anthropic');
+  await expect(dialog.getByLabel('Session key')).toHaveValue('');
+  await expect(dialog.getByLabel('Endpoint')).toHaveCount(0);
+  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
+
+  let anthropicConfiguration: unknown;
+  const anthropicKey = ['new', 'anthropic', 'key'].join('-');
+  let releaseAnthropicConfiguration: (() => void) | undefined;
+  const anthropicConfigurationReleased = new Promise<void>((resolve) => {
+    releaseAnthropicConfiguration = resolve;
+  });
+  await page.route('**/api/session/providers/anthropic', async (route) => {
+    anthropicConfiguration = route.request().postDataJSON();
+    await anthropicConfigurationReleased;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'anthropic',
+        credentialSource: 'session',
+        configured: true,
+        baseUrl: 'api.anthropic.com',
+      }),
+    });
+  });
+  await page.route('**/api/providers/anthropic/models', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ models: [{ id: 'claude-synthetic', name: 'Claude synthetic' }] }),
+    }),
+  );
+  await dialog.getByLabel('Session key').fill(anthropicKey);
+  const configureAnthropic = dialog.getByRole('button', { name: 'Configure and discover' });
+  await configureAnthropic.click();
+  await expect(providerSelect).toBeDisabled();
+  await expect(dialog.getByLabel('Session key')).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  releaseAnthropicConfiguration?.();
+  await expect(dialog.getByPlaceholder('Or enter a model ID')).toHaveValue('claude-synthetic');
+  expect(anthropicConfiguration).toEqual({ apiKey: anthropicKey });
+
+  await providerSelect.selectOption('openai-compatible');
+  await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
+  await expect(dialog.getByLabel('Session key')).toHaveValue('');
+  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveValue('');
+  await dialog.getByLabel('Endpoint').fill('https://remote.example.test/v1');
+  await dialog.getByLabel('Session key').fill('second-compatible-key');
+  await dialog.getByLabel('Optional headers as JSON').fill('{"X-Remote":"true"}');
+  await dialog.getByPlaceholder('Or enter a model ID').fill('manual-compatible');
+  await expect(dialog.getByRole('button', { name: 'Use provider' })).toBeDisabled();
+  await expect(dialog.locator('.provider-host-pending')).toContainText('remote.example.test');
+
+  await providerSelect.selectOption('ollama');
+  await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
+  await expect(dialog.getByLabel('Session key')).toHaveCount(0);
+  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
+  await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
+  await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
+
+  let ollamaConfiguration: unknown;
+  await page.route('**/api/session/providers/ollama', async (route) => {
+    ollamaConfiguration = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'ollama',
+        credentialSource: 'session',
+        configured: true,
+        baseUrl: '127.0.0.1',
+      }),
+    });
+  });
+  await page.route('**/api/providers/ollama/models', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ models: [{ id: 'local-synthetic', name: 'Local synthetic' }] }),
+    }),
+  );
+  await dialog.getByRole('button', { name: /Configure and discover|Refresh models/ }).click();
+  await expect(dialog.getByPlaceholder('Or enter a model ID')).toHaveValue('local-synthetic');
+  expect(ollamaConfiguration).toBeUndefined();
+  await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
+  await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
+
+  await dialog.getByLabel('Endpoint').fill('https://pending-close.example.test/v1');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Configure model provider' }).click();
+  const reopened = page.getByRole('dialog', { name: 'Model provider' });
+  await reopened.getByRole('combobox').first().selectOption('ollama');
+  await expect(reopened.getByLabel('Endpoint')).toHaveValue('');
+  await expect(reopened.locator('.provider-host')).toContainText('ollama.saved.example.test');
+  await expect(reopened.locator('.provider-host')).not.toContainText('pending-close.example.test');
+});
+
 test('exports current AI evidence immediately and clears handoff selection boundaries', async ({
   page,
   request,
