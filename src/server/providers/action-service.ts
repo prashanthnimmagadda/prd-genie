@@ -222,16 +222,58 @@ export class ActionService {
             const output = await result.text;
             this.repository.completeAiRun(runId, undefined, output);
           } else {
-            const result = await generateText({
-              model,
-              system: actionSystemPrompt(request.action, request.scope),
-              prompt: buildPrompt(prd, request, scopedContent, evidence, request.instruction),
-              providerOptions: localProviderOptions(request.provider),
-              abortSignal: signal,
-              maxOutputTokens: outputTokenLimit(request.action, request.scope),
-              temperature: 0,
-            });
-            const output = normalizeGeneratedProposal(prd, request, result.text);
+            const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
+            const trustedProposalContent = [
+              scopedContent,
+              ...evidence
+                .filter((item) => !isHostileEvidence(item.excerpt))
+                .map((item) => item.excerpt),
+            ].join('\n');
+            const attempts = request.provider === 'ollama' ? 3 : 1;
+            let output: string | undefined;
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+              try {
+                const result = await generateText({
+                  model,
+                  system: actionSystemPrompt(request.action, request.scope),
+                  prompt:
+                    attempt === 0
+                      ? prompt
+                      : `${prompt}\n\nThe previous proposal introduced unsupported evaluative or normative language. Return only the facts requested in userInstruction. Do not add a conclusion, consequence, evaluation, recommendation, or requirement.`,
+                  providerOptions: localProviderOptions(request.provider),
+                  abortSignal: signal,
+                  maxOutputTokens: outputTokenLimit(request.action, request.scope),
+                  temperature: attempt * 0.2,
+                });
+                const candidate = normalizeGeneratedProposal(prd, request, result.text);
+                if (containsUnsupportedProposalQualifier(candidate, trustedProposalContent)) {
+                  throw new ApiError(
+                    502,
+                    'malformed_output',
+                    'The provider returned an unsupported evaluative or normative claim.',
+                  );
+                }
+                output = candidate;
+                break;
+              } catch (error) {
+                if (
+                  request.provider === 'ollama' &&
+                  attempt < attempts - 1 &&
+                  error instanceof ApiError &&
+                  error.code === 'malformed_output'
+                ) {
+                  continue;
+                }
+                throw error;
+              }
+            }
+            if (!output) {
+              throw new ApiError(
+                502,
+                'malformed_output',
+                'The provider did not return a grounded proposal.',
+              );
+            }
             writer.write({ type: 'text-start', id: runId });
             writer.write({ type: 'text-delta', id: runId, delta: output });
             writer.write({ type: 'text-end', id: runId });
@@ -344,6 +386,39 @@ export function containsNumericTargetProposal(value: string): boolean {
     /\b(?:target|threshold|success criterion)\b.{0,100}(?:[≤≥<>%]|\b(?:under|over|at least|at most|no more than|less than|greater than)\b|\d)/i.test(
       value,
     )
+  );
+}
+
+const guardedProposalQualifiers = [
+  'always',
+  'consistent',
+  'critical',
+  'guarantee',
+  'guaranteed',
+  'must',
+  'severe',
+  'shall',
+  'should',
+  'significant',
+  'urgent',
+] as const;
+
+export function containsUnsupportedProposalQualifier(
+  generated: string,
+  trustedContent: string,
+): boolean {
+  return guardedProposalQualifiers.some(
+    (term) => containsWord(generated, term) && !containsWord(trustedContent, term),
+  );
+}
+
+function containsWord(value: string, word: string): boolean {
+  return new RegExp(`\\b${word}\\b`, 'i').test(value);
+}
+
+function isHostileEvidence(value: string): boolean {
+  return /\b(?:untrusted|prompt[ -]?injection)\b|\bignore\b.{0,80}\b(?:task|instruction|prompt)\b/i.test(
+    value,
   );
 }
 

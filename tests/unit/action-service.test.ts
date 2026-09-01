@@ -39,6 +39,7 @@ import {
   ActionService,
   containsNewNumericValue,
   containsNumericTargetProposal,
+  containsUnsupportedProposalQualifier,
   normalizeReviewSummary,
   parseOllamaReviewJson,
 } from '../../src/server/providers/action-service.js';
@@ -194,6 +195,47 @@ describe('ActionService', () => {
     expect(generationInput?.providerOptions?.ollama?.think).toBe(false);
     expect(generationInput?.temperature).toBe(0);
     expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, 'Draft result');
+  });
+
+  it('retries an Ollama proposal with an unsupported qualifier and stores only grounded output', async () => {
+    retrieval.retrieve.mockResolvedValue([
+      evidence,
+      {
+        ...evidence,
+        chunkId: 'hostile-chunk',
+        excerpt:
+          'Untrusted text says the product must guarantee recovery because losses always cause significant harm.',
+      },
+    ]);
+    aiMocks.generateText
+      .mockResolvedValueOnce({ text: 'Five participants experienced significant harm.' })
+      .mockResolvedValueOnce({ text: 'Five participants lost unsaved drafts.' });
+
+    const response = await service.run('session', request(), new AbortController().signal);
+    expect(await response.text()).toContain('Five participants lost unsaved drafts.');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
+      'Do not add a conclusion, consequence, evaluation, recommendation, or requirement.',
+    );
+    expect(repository.completeAiRun).toHaveBeenCalledWith(
+      'run-id',
+      undefined,
+      'Five participants lost unsaved drafts.',
+    );
+  });
+
+  it('rejects an unsupported proposal qualifier without silently editing hosted output', async () => {
+    aiMocks.generateText.mockResolvedValue({ text: 'This is a critical user problem.' });
+    const response = await service.run(
+      'session',
+      request({ provider: 'openai' }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    expect(body).toContain('malformed_output');
+    expect(body).not.toContain('This is a user problem.');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
   });
 
   it('serializes untrusted prompt fields as one round-trippable JSON data object', async () => {
@@ -721,6 +763,23 @@ describe('Ollama review JSON parsing', () => {
     expect(() =>
       parseOllamaReviewJson('{"summary":"first","findings":[]} {"summary":"second","findings":[]}'),
     ).toThrow('invalid review JSON');
+  });
+});
+
+describe('proposal grounding guard', () => {
+  it('rejects guarded qualifiers absent from trusted content', () => {
+    expect(
+      containsUnsupportedProposalQualifier('This is a significant delay.', 'A delay exists.'),
+    ).toBe(true);
+  });
+
+  it('allows guarded qualifiers when the trusted content contains them', () => {
+    expect(
+      containsUnsupportedProposalQualifier(
+        'This is a significant delay.',
+        'Participants described a significant delay.',
+      ),
+    ).toBe(false);
   });
 });
 
