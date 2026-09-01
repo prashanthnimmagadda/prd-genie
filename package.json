@@ -59,7 +59,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "3.0.103",
     "@ai-sdk/google": "3.0.101",
-    "@ai-sdk/openai": "3.0.88",
+    "@ai-sdk/openai": "4.0.22",
     "@ai-sdk/openai-compatible": "2.0.62",
     "@ai-sdk/react": "3.0.238",
     "@fastify/cookie": "11.1.2",
