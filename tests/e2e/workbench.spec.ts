@@ -526,7 +526,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await page.getByRole('tab', { name: 'review' }).click();
   await page.getByRole('button', { name: 'Run review' }).click();
   await expect(
-    page.getByText('The cited evidence states reconstruction took 23 minutes on average.'),
+    page.getByText('Reconstruction took 23 minutes on average.', { exact: true }),
   ).toBeVisible();
   await page.getByRole('tab', { name: 'history' }).click();
   const durableReview = page

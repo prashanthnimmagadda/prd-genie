@@ -20,13 +20,13 @@ const server = createServer(async (request, response) => {
         )?.[1] ?? 'Problem';
       const chunkId = prompt.match(/chunkId\\?":\\?"([^"\\]+)/i)?.[1];
       completion(response, {
-        summary: 'The Problem section states observed draft loss.',
+        summary: 'Eight of twelve product managers lost an unsaved PRD draft.',
         findings: [
           {
             category: 'clarity',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The cited evidence states reconstruction took 23 minutes on average.',
+            rationale: 'Reconstruction took 23 minutes on average.',
             citationChunkIds: chunkId ? [chunkId] : [],
             proposedMarkdown:
               'Eight of twelve product managers lost an unsaved PRD draft. Reconstruction took 23 minutes on average.',
