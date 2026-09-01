@@ -71,6 +71,188 @@ describe('portable project archive restore', () => {
     const manifest = await zip.file('project.json')!.async('string');
     expect(manifest).not.toContain(directory);
     expect(manifest).not.toMatch(/api[_-]?key/i);
+
+    const legacyZip = await JSZip.loadAsync(archive.body);
+    const legacyManifest = JSON.parse(manifest) as {
+      formatVersion: number;
+      appliedChatGptHandoffs?: unknown;
+      chunks: Array<Record<string, unknown>>;
+      locations: Array<{ id: string; content: string; startOffset: number }>;
+    };
+    const locationById = new Map(
+      legacyManifest.locations.map((location) => [location.id, location]),
+    );
+    legacyManifest.formatVersion = 2;
+    delete legacyManifest.appliedChatGptHandoffs;
+    legacyManifest.chunks = legacyManifest.chunks.map((chunk) => {
+      const location = locationById.get(String(chunk.locationId))!;
+      return {
+        ...chunk,
+        content: location.content.slice(
+          Number(chunk.startOffset) - location.startOffset,
+          Number(chunk.endOffset) - location.startOffset,
+        ),
+      };
+    });
+    legacyZip.file('project.json', JSON.stringify(legacyManifest));
+    await expect(
+      exporter.restoreArchive(await legacyZip.generateAsync({ type: 'nodebuffer' })),
+    ).resolves.toMatchObject({ name: project.name });
+  });
+
+  it('archives and restores projects that share one content-addressed source binary', async () => {
+    const first = repository.createProject('Shared binary first', '');
+    const second = repository.createProject('Shared binary second', '');
+    const content = 'Shared synthetic source content.';
+    addSource(first.id, 'shared.txt', content);
+    addSource(second.id, 'shared.txt', content);
+
+    const firstRestored = await exporter.restoreArchive(
+      (await exporter.create(first.id, 'archive')).body,
+    );
+    const secondRestored = await exporter.restoreArchive(
+      (await exporter.create(second.id, 'archive')).body,
+    );
+    const restoredPaths = database.sqlite
+      .prepare('SELECT binary_path AS binaryPath FROM sources WHERE project_id IN (?, ?)')
+      .all(firstRestored.id, secondRestored.id) as Array<{ binaryPath: string }>;
+    expect(new Set(restoredPaths.map((row) => row.binaryPath)).size).toBe(1);
+    expect(fs.readFileSync(restoredPaths[0]!.binaryPath, 'utf8')).toBe(content);
+  });
+
+  it('round trips exact applied ChatGPT handoff provenance with remapped digests', async () => {
+    const project = repository.createProject('Portable ChatGPT decision', '');
+    const prd = repository.getPrd(project.id);
+    const target = prd.sections[0]!;
+    const handoff = repository.createChatGptHandoff({
+      projectId: project.id,
+      revision: prd.revision,
+      action: 'rewrite',
+      scope: 'section',
+      instruction: 'Clarify the synthetic problem.',
+      sectionIds: [target.id],
+      citationIds: [],
+    });
+    repository.importChatGptHandoffResponse(project.id, {
+      formatVersion: 1,
+      kind: 'prd-genie-response',
+      handoffId: handoff.id,
+      projectId: project.id,
+      sourceRevision: prd.revision,
+      requestDigest: handoff.request.requestDigest,
+      summary: 'A synthetic rewrite is ready.',
+      patches: [
+        {
+          sectionId: target.id,
+          preimageHash: handoff.request.sections[0]!.preimageHash,
+          afterMarkdown: 'A grounded synthetic problem statement.',
+          evidenceIds: [],
+        },
+      ],
+      findings: [],
+      hostModel: 'synthetic-host-model',
+    });
+    repository.applyChatGptHandoff(project.id, handoff.id, prd.revision, [
+      { sectionId: target.id, afterMarkdown: 'A user-revised grounded statement.' },
+    ]);
+
+    const archive = await exporter.create(project.id, 'archive');
+    const zip = await JSZip.loadAsync(archive.body);
+    const manifest = JSON.parse(await zip.file('project.json')!.async('string')) as {
+      formatVersion: number;
+      appliedChatGptHandoffs: Array<{ application: unknown; applicationDigest: string }>;
+    };
+    expect(manifest.formatVersion).toBe(3);
+    expect(manifest.appliedChatGptHandoffs).toHaveLength(1);
+    const archivedHandoff = manifest.appliedChatGptHandoffs[0]!;
+    expect(archivedHandoff.applicationDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect((archivedHandoff.application as { appliedRevision: number }).appliedRevision).toBe(1);
+
+    const restored = await exporter.restoreArchive(archive.body);
+    const restoredHandoff = repository.listChatGptHandoffs(restored.id)[0]!;
+    expect(restoredHandoff.status).toBe('applied');
+    expect(restoredHandoff.sourceRevision).toBe(0);
+    expect(restoredHandoff.appliedRevision).toBe(1);
+    expect(restoredHandoff.application?.sourceRevision).toBe(0);
+    expect(restoredHandoff.application?.appliedRevision).toBe(1);
+    expect(restoredHandoff.application?.patches[0]).toMatchObject({
+      proposedAfterMarkdown: 'A grounded synthetic problem statement.',
+      appliedAfterMarkdown: 'A user-revised grounded statement.',
+    });
+    expect(restoredHandoff.id).not.toBe(handoff.id);
+    expect(restoredHandoff.request.requestDigest).not.toBe(handoff.request.requestDigest);
+    expect(repository.listRevisions(restored.id)[0]?.reason).toContain(restoredHandoff.id);
+
+    const restoredAgain = await exporter.restoreArchive(
+      (await exporter.create(restored.id, 'archive')).body,
+    );
+    const restoredAgainHandoff = repository.listChatGptHandoffs(restoredAgain.id)[0]!;
+    expect(restoredAgainHandoff.status).toBe('applied');
+    expect(restoredAgainHandoff.application?.appliedRevision).toBe(1);
+
+    const forged = await JSZip.loadAsync(archive.body);
+    const forgedManifest = JSON.parse(await forged.file('project.json')!.async('string')) as {
+      appliedChatGptHandoffs: Array<{ applicationDigest: string }>;
+    };
+    forgedManifest.appliedChatGptHandoffs[0]!.applicationDigest = '0'.repeat(64);
+    forged.file('project.json', JSON.stringify(forgedManifest));
+    await expect(
+      exporter.restoreArchive(await forged.generateAsync({ type: 'nodebuffer' })),
+    ).rejects.toMatchObject({ code: 'invalid_archive' });
+  });
+
+  it('archives and restores a valid source location larger than the former 2 MB cap', async () => {
+    const project = repository.createProject('Large portable source', '');
+    const content = `${'Synthetic evidence sentence. '.repeat(80_000)}End.`;
+    addLargeSource(project.id, 'large.md', content);
+
+    const archive = await exporter.create(project.id, 'archive');
+    const zip = await JSZip.loadAsync(archive.body);
+    const manifest = JSON.parse(await zip.file('project.json')!.async('string')) as {
+      chunks: Array<Record<string, unknown>>;
+    };
+    expect(manifest.chunks[0]).not.toHaveProperty('content');
+    const restored = await exporter.restoreArchive(archive.body);
+    const restoredLocation = database.sqlite
+      .prepare(
+        `SELECT source_locations.content
+         FROM source_locations JOIN sources ON sources.id = source_locations.source_id
+         WHERE sources.project_id = ?`,
+      )
+      .get(restored.id) as { content: string };
+    expect(restoredLocation.content).toBe(content);
+    expect(Buffer.isBuffer((await exporter.create(restored.id, 'archive')).body)).toBe(true);
+  });
+
+  it('repairs a corrupt reused content-addressed binary during restore', async () => {
+    const project = repository.createProject('Restore binary repair', '');
+    addSource(project.id, 'repair.txt', 'Expected synthetic source bytes.');
+    const archive = await exporter.create(project.id, 'archive');
+    const binaryPath = (
+      database.sqlite
+        .prepare('SELECT binary_path AS binaryPath FROM sources WHERE project_id = ?')
+        .get(project.id) as { binaryPath: string }
+    ).binaryPath;
+    fs.writeFileSync(binaryPath, 'Corrupt bytes.');
+
+    await exporter.restoreArchive(archive.body);
+    expect(fs.readFileSync(binaryPath, 'utf8')).toBe('Expected synthetic source bytes.');
+    expect(fs.statSync(binaryPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('refuses to export a source binary whose current bytes fail integrity verification', async () => {
+    const project = repository.createProject('Export integrity failure', '');
+    addSource(project.id, 'integrity.txt', 'Expected synthetic source bytes.');
+    const binaryPath = (
+      database.sqlite
+        .prepare('SELECT binary_path AS binaryPath FROM sources WHERE project_id = ?')
+        .get(project.id) as { binaryPath: string }
+    ).binaryPath;
+    fs.writeFileSync(binaryPath, 'Different same-enough bytes.');
+
+    await expect(exporter.create(project.id, 'archive')).rejects.toMatchObject({
+      code: 'archive_source_corrupt',
+    });
   });
 
   it('rejects a source whose bytes do not match the signed manifest hash', async () => {
@@ -858,5 +1040,68 @@ describe('portable project archive restore', () => {
       })
       .run();
     return { sourceId, locationId, chunkId };
+  }
+
+  function addLargeSource(projectId: string, name: string, content: string): void {
+    const binary = Buffer.from(content);
+    const hash = createHash('sha256').update(binary).digest('hex');
+    const binaryPath = path.join(directory, `${hash}.md`);
+    fs.writeFileSync(binaryPath, binary, { mode: 0o600 });
+    const sourceId = crypto.randomUUID();
+    const locationId = crypto.randomUUID();
+    database.db
+      .insert(sources)
+      .values({
+        id: sourceId,
+        projectId,
+        name,
+        mediaType: 'text/markdown',
+        size: binary.length,
+        hash,
+        binaryPath,
+        status: 'ready',
+        error: null,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+    database.db
+      .insert(sourceLocations)
+      .values({
+        id: locationId,
+        sourceId,
+        locator: 'Paragraph 1',
+        heading: null,
+        ordinal: 0,
+        content,
+        startOffset: 0,
+        endOffset: content.length,
+      })
+      .run();
+    const insertChunk = database.sqlite.prepare(
+      `INSERT INTO chunks
+       (id, project_id, source_id, location_id, ordinal, content, token_count,
+        start_offset, end_offset, document_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertFts = database.sqlite.prepare(
+      'INSERT INTO chunks_fts (chunk_id, project_id, content) VALUES (?, ?, ?)',
+    );
+    for (let offset = 0, ordinal = 0; offset < content.length; offset += 50_000, ordinal += 1) {
+      const chunkId = crypto.randomUUID();
+      const chunk = content.slice(offset, offset + 50_000);
+      insertChunk.run(
+        chunkId,
+        projectId,
+        sourceId,
+        locationId,
+        ordinal,
+        chunk,
+        Math.ceil(chunk.length / 4),
+        offset,
+        offset + chunk.length,
+        hash,
+      );
+      insertFts.run(chunkId, projectId, chunk);
+    }
   }
 });

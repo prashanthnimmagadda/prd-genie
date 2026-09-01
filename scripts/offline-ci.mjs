@@ -77,7 +77,7 @@ const steps = [
   ['dependency-audit', ['audit', '--offline', '--audit-level=low']],
   ['licenses', ['run', 'licenses']],
   ['sbom', ['run', 'sbom']],
-  ...(!quick ? [['browser', ['run', 'test:e2e']]] : []),
+  ...(!quick ? [['browser', ['run', 'test:e2e:record']]] : []),
 ];
 
 const startedAt = new Date();
@@ -123,11 +123,9 @@ const report = {
   results,
 };
 const reportDirectory = path.join(root, 'reports');
+const reportName = process.env.PRD_GENIE_OFFLINE_REPORT_NAME ?? 'offline-ci.json';
 fs.mkdirSync(reportDirectory, { recursive: true });
-fs.writeFileSync(
-  path.join(reportDirectory, 'offline-ci.json'),
-  `${JSON.stringify(report, null, 2)}\n`,
-);
+fs.writeFileSync(path.join(reportDirectory, reportName), `${JSON.stringify(report, null, 2)}\n`);
 console.log(
   passed
     ? `Offline ${report.mode} gate passed ${results.length}/${steps.length} steps.`

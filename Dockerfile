@@ -1,5 +1,5 @@
-ARG NODE_VERSION=22
-FROM node:${NODE_VERSION}-trixie-slim AS build
+ARG NODE_IMAGE=node:22.23.2-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd1fb6a443fa6f6284
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 RUN apt-get update \
   && apt-get install --no-install-recommends --yes g++ make python3 \
@@ -10,7 +10,7 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:${NODE_VERSION}-trixie-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 ARG GIT_REVISION=unknown
 LABEL org.opencontainers.image.revision=$GIT_REVISION
 ENV NODE_ENV=production

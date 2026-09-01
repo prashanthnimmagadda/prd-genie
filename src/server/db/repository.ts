@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type {
   AiRunProposal,
+  ChatGptHandoffApplication,
   ChatGptHandoffRequest,
   ChatGptHandoffResponse,
   ChatGptHandoffSummary,
@@ -490,7 +491,7 @@ export class Repository {
     const rows = this.database.db
       .select({ id: chatGptHandoffs.id })
       .from(chatGptHandoffs)
-      .where(eq(chatGptHandoffs.projectId, projectId))
+      .where(and(eq(chatGptHandoffs.projectId, projectId), isNull(chatGptHandoffs.retiredAt)))
       .orderBy(chatGptHandoffs.createdAt)
       .all()
       .reverse();
@@ -503,7 +504,7 @@ export class Repository {
       .from(chatGptHandoffs)
       .where(eq(chatGptHandoffs.id, id))
       .get();
-    if (!row || row.projectId !== projectId) {
+    if (!row || row.projectId !== projectId || row.retiredAt !== null) {
       throw new ApiError(404, 'handoff_not_found', 'ChatGPT handoff not found.');
     }
     return {
@@ -515,9 +516,14 @@ export class Repository {
       status: row.status as ChatGptHandoffSummary['status'],
       request: JSON.parse(row.requestJson) as ChatGptHandoffRequest,
       response: row.responseJson ? (JSON.parse(row.responseJson) as ChatGptHandoffResponse) : null,
+      application: row.applicationJson
+        ? (JSON.parse(row.applicationJson) as ChatGptHandoffApplication)
+        : null,
+      applicationDigest: row.applicationDigest,
       createdAt: row.createdAt,
       importedAt: row.importedAt,
       appliedRevision: row.appliedRevision,
+      appliedAt: row.appliedAt,
     };
   }
 
@@ -620,29 +626,92 @@ export class Repository {
           'The PRD changed after this handoff was imported.',
         );
       }
+      const claim = this.database.db
+        .update(chatGptHandoffs)
+        .set({ status: 'applying' })
+        .where(
+          and(
+            eq(chatGptHandoffs.projectId, projectId),
+            eq(chatGptHandoffs.id, id),
+            eq(chatGptHandoffs.status, 'staged'),
+          ),
+        )
+        .run();
+      if (claim.changes !== 1) {
+        throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
+      }
       const appliedSections = buildHandoffApplication(
         current.sections,
         handoff.response.patches,
         selectedPatches,
       );
+      const responsePatches = new Map(
+        handoff.response.patches.map((patch) => [patch.sectionId, patch]),
+      );
+      const revised = selectedPatches.some(
+        (patch) => responsePatches.get(patch.sectionId)?.afterMarkdown !== patch.afterMarkdown,
+      );
       const saved = this.savePrd(
         projectId,
         expectedRevision,
         appliedSections,
-        `ChatGPT handoff ${id} accepted`,
+        `ChatGPT handoff ${id} ${revised ? 'revised and accepted' : 'accepted'}`,
       );
-      this.database.db
+      const application: ChatGptHandoffApplication = {
+        formatVersion: 1,
+        sourceRevision: handoff.sourceRevision,
+        appliedRevision: saved.revision,
+        patches: selectedPatches.map((selected) => {
+          const proposed = responsePatches.get(selected.sectionId)!;
+          return {
+            sectionId: selected.sectionId,
+            preimageHash: proposed.preimageHash,
+            proposedAfterMarkdown: proposed.afterMarkdown,
+            appliedAfterMarkdown: selected.afterMarkdown,
+            evidenceIds: proposed.evidenceIds,
+          };
+        }),
+      };
+      const applicationJson = JSON.stringify(application);
+      const appliedAt = now();
+      const update = this.database.db
         .update(chatGptHandoffs)
-        .set({ status: 'applied', appliedRevision: saved.revision })
-        .where(eq(chatGptHandoffs.id, id))
+        .set({
+          status: 'applied',
+          appliedRevision: saved.revision,
+          applicationJson,
+          applicationDigest: sha256(applicationJson),
+          appliedAt,
+        })
+        .where(
+          and(
+            eq(chatGptHandoffs.projectId, projectId),
+            eq(chatGptHandoffs.id, id),
+            eq(chatGptHandoffs.status, 'applying'),
+          ),
+        )
         .run();
+      if (update.changes !== 1) {
+        throw new ApiError(409, 'handoff_closed', 'This handoff is not an open proposal.');
+      }
       return saved;
     })();
   }
 
   dismissChatGptHandoff(projectId: string, id: string): void {
-    this.getChatGptHandoff(projectId, id);
-    this.database.db.delete(chatGptHandoffs).where(eq(chatGptHandoffs.id, id)).run();
+    const handoff = this.getChatGptHandoff(projectId, id);
+    if (handoff.status === 'applied') {
+      this.database.db
+        .update(chatGptHandoffs)
+        .set({ retiredAt: now() })
+        .where(and(eq(chatGptHandoffs.projectId, projectId), eq(chatGptHandoffs.id, id)))
+        .run();
+      return;
+    }
+    this.database.db
+      .delete(chatGptHandoffs)
+      .where(and(eq(chatGptHandoffs.projectId, projectId), eq(chatGptHandoffs.id, id)))
+      .run();
   }
 
   markAiRunApplied(projectId: string, id: string, revision: number): void {
@@ -928,7 +997,12 @@ export class Repository {
     return this.savePrd(projectId, expectedRevision, snapshot, `Restored revision ${revision}`);
   }
 
-  getLocation(sourceId: string, locationId: string) {
+  getLocation(projectId: string, sourceId: string, locationId: string) {
+    const source = this.database.db
+      .select({ projectId: sources.projectId })
+      .from(sources)
+      .where(eq(sources.id, sourceId))
+      .get();
     const location = this.database.db
       .select({
         id: sourceLocations.id,
@@ -942,7 +1016,7 @@ export class Repository {
       .from(sourceLocations)
       .where(eq(sourceLocations.id, locationId))
       .get();
-    if (!location || location.sourceId !== sourceId) {
+    if (!source || source.projectId !== projectId || !location || location.sourceId !== sourceId) {
       throw new ApiError(404, 'location_not_found', 'Source location not found.');
     }
     return location;

@@ -6,6 +6,29 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ## Unreleased
 
+## [0.1.0-rc.3] - 2026-09-01
+
+### Added
+
+- Portable archive format 3 with applied ChatGPT handoff provenance and format 2 restore compatibility.
+- Exact-SHA browser, accessibility, Node 22, Node 24, and online dependency evidence reports.
+- Automatic mode-0600 SQLite snapshots before migrations of an existing database.
+
+### Fixed
+
+- Made valid large source locations portable while removing duplicated chunk text from new manifests.
+- Preserved exact selected and user-revised ChatGPT applications after archive restore and re-export.
+- Made fresh-clone coverage independent of a prebuilt client bundle.
+- Rejected private, mixed, redirected, and DNS-rebound custom provider destinations.
+- Isolated untrusted PRD instructions and evidence inside one structured provider envelope.
+- Rejected cross-project evidence lookups and repaired corrupt reused content-addressed binaries.
+- Prevented synchronous provider construction failures from leaving orphaned AI runs.
+- Added fault-injection proof for review, direct AI, and ChatGPT application transactions.
+- Pinned GitHub workflow actions and the Node container base to immutable identities.
+- Corrected security reporting, archive retention, rollback, and release-evidence documentation.
+
+## [0.1.0-rc.2] - 2026-08-30
+
 ### Added
 
 - Independent local-first PRD workbench foundation.

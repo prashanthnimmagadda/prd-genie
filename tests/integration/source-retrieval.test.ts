@@ -2,12 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../../src/server/config.js';
 import type { AppDatabase } from '../../src/server/db/client.js';
 import { createDatabase } from '../../src/server/db/client.js';
 import { Repository } from '../../src/server/db/repository.js';
-import { SourceService } from '../../src/server/documents/source-service.js';
+import { ensureVerifiedBinary, SourceService } from '../../src/server/documents/source-service.js';
 import { RetrievalService } from '../../src/server/retrieval/retrieval-service.js';
 import type { EmbeddingService } from '../../src/server/retrieval/embedding-service.js';
 
@@ -29,6 +29,7 @@ describe('source lifecycle and retrieval fallback', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     Object.assign(config, { sourceDir: originalSourceDir });
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -101,6 +102,40 @@ describe('source lifecycle and retrieval fallback', () => {
 
     expect(repository.pendingFileDeletionCount()).toBe(0);
     expect(fs.existsSync(binaryPath)).toBe(true);
+  });
+
+  it('repairs a corrupt content-addressed binary before storing a source reference', async () => {
+    const project = repository.createProject('Binary verification', '');
+    const service = new SourceService(database, unavailableEmbeddings);
+    const content = Buffer.from('Verified evidence bytes are retained for every shared reference.');
+    const hash = createHash('sha256').update(content).digest('hex');
+    const binaryPath = path.join(directory, `${hash}.txt`);
+    fs.writeFileSync(binaryPath, Buffer.from('corrupt'));
+
+    const source = await service.add(project.id, 'verified.txt', content);
+
+    expect(source.hash).toBe(hash);
+    expect(fs.readFileSync(binaryPath)).toEqual(content);
+    expect(fs.statSync(binaryPath).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(directory).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('reuses and verifies a binary created by a concurrent first writer', () => {
+    const content = Buffer.from('Concurrent identical evidence bytes.');
+    const hash = createHash('sha256').update(content).digest('hex');
+    const binaryPath = path.join(directory, `${hash}.txt`);
+    const writeFileSync = fs.writeFileSync.bind(fs);
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((target, data, options) => {
+      writeFileSync(target, data, options);
+      const error = new Error('already exists') as NodeJS.ErrnoException;
+      error.code = 'EEXIST';
+      throw error;
+    });
+
+    expect(ensureVerifiedBinary(binaryPath, content, hash)).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(binaryPath)).toEqual(content);
+    expect(fs.statSync(binaryPath).mode & 0o777).toBe(0o600);
   });
 
   it('rejects empty and oversized source buffers before writing', async () => {

@@ -211,12 +211,12 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     return reply.code(202).send(services.sources.retry(projectId, sourceId));
   });
   app.get('/api/projects/:projectId/sources/:sourceId/locations/:locationId', (request) => {
-    const { sourceId, locationId } = request.params as {
+    const { projectId, sourceId, locationId } = request.params as {
       projectId: string;
       sourceId: string;
       locationId: string;
     };
-    return services.repository.getLocation(sourceId, locationId);
+    return services.repository.getLocation(projectId, sourceId, locationId);
   });
 
   app.get('/api/session/providers', (request) => {

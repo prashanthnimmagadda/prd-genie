@@ -148,6 +148,19 @@ export interface ChatGptHandoffResponse {
   hostModel: string | null;
 }
 
+export interface ChatGptHandoffApplication {
+  formatVersion: 1;
+  sourceRevision: number;
+  appliedRevision: number;
+  patches: Array<{
+    sectionId: string;
+    preimageHash: string;
+    proposedAfterMarkdown: string;
+    appliedAfterMarkdown: string;
+    evidenceIds: string[];
+  }>;
+}
+
 export interface ChatGptHandoffSummary {
   id: string;
   projectId: string;
@@ -157,9 +170,12 @@ export interface ChatGptHandoffSummary {
   status: 'exported' | 'staged' | 'stale' | 'applied' | 'dismissed';
   request: ChatGptHandoffRequest;
   response: ChatGptHandoffResponse | null;
+  application: ChatGptHandoffApplication | null;
+  applicationDigest: string | null;
   createdAt: string;
   importedAt: string | null;
   appliedRevision: number | null;
+  appliedAt: string | null;
 }
 
 export interface ProjectSummary {

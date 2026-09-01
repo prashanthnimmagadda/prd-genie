@@ -18,7 +18,7 @@ This repository is an independent implementation with synthetic fixtures only.
 
 ## Status
 
-The public `v0.1.0-rc.1` release is an early candidate, not a finished product claim. Development changes are validated against the exact release commit before a later candidate is promoted. See [Quality and model evaluation](docs/QUALITY.md) for the evidence rules and current limitations.
+The public `v0.1.0-rc.2` release is an early candidate, not a finished product claim. RC.3 development changes are validated against an exact clean commit before any later candidate is proposed for promotion. See [Quality and model evaluation](docs/QUALITY.md) for the evidence rules and current limitations.
 
 No adoption, universal accuracy, native desktop packaging, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
@@ -183,7 +183,7 @@ Open Model provider and configure a session key, or set the documented environme
 
 **A custom endpoint is rejected**
 
-Remote endpoints must use HTTPS. Plain HTTP is accepted only for loopback hosts. Credentials embedded in URLs are always rejected.
+Remote endpoints must use HTTPS and resolve only to public addresses. Plain HTTP is accepted only for loopback hosts. Redirects and credentials embedded in URLs are rejected.
 
 **An AI proposal became stale**
 

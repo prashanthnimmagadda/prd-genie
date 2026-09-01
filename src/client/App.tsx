@@ -1792,7 +1792,7 @@ function Workbench({
                           .catch((reason: unknown) => setError(messageFrom(reason)));
                       }}
                     >
-                      Delete handoff
+                      {handoff.status === 'applied' ? 'Retire handoff' : 'Delete handoff'}
                     </Button>
                   </footer>
                 </article>

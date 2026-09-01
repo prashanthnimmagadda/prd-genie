@@ -122,8 +122,21 @@ describe('database migrations', () => {
       .run(findingId, runId, projectId, sectionId, JSON.stringify([citationId]), timestamp);
     legacy.close();
 
+    const incompleteBackupPath = `${databasePath}.pre-0002_durable_evidence.backup`;
+    fs.writeFileSync(incompleteBackupPath, 'incomplete backup');
+
     const upgraded = createDatabase(databasePath);
     try {
+      const backupPath = `${databasePath}.pre-0002_durable_evidence.backup`;
+      expect(fs.existsSync(backupPath)).toBe(true);
+      expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+      const backup = new Database(backupPath, { readonly: true });
+      expect(
+        (
+          backup.prepare("PRAGMA table_info('chatgpt_handoffs')").all() as Array<{ name: string }>
+        ).some((row) => row.name === 'application_json'),
+      ).toBe(false);
+      backup.close();
       const citation = upgraded.sqlite
         .prepare(
           `SELECT source_name AS sourceName, locator, available
@@ -148,6 +161,34 @@ describe('database migrations', () => {
       expect(
         upgraded.sqlite
           .prepare("SELECT name FROM app_migrations WHERE name = '0005_file_deletion_outbox'")
+          .get(),
+      ).toBeTruthy();
+      expect(
+        upgraded.sqlite
+          .prepare(
+            "SELECT name FROM app_migrations WHERE name = '0006_chatgpt_handoff_applications'",
+          )
+          .get(),
+      ).toBeTruthy();
+      expect(
+        (
+          upgraded.sqlite.prepare("PRAGMA table_info('chatgpt_handoffs')").all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      ).toEqual(
+        expect.arrayContaining([
+          'application_json',
+          'application_digest',
+          'applied_at',
+          'retired_at',
+        ]),
+      );
+      expect(
+        upgraded.sqlite
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'handoffs_project_applied_revision_idx'",
+          )
           .get(),
       ).toBeTruthy();
       expect(

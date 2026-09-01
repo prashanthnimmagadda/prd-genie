@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderService } from '../../src/server/providers/provider-service.js';
 import { SessionStore } from '../../src/server/providers/session-store.js';
+import { createGuardedProviderFetch } from '../../src/server/providers/endpoints.js';
 
 describe('ProviderService', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  const testGuardedFetch = () =>
+    createGuardedProviderFetch({
+      resolveAddresses: () => Promise.resolve(['93.184.216.34']),
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
 
   function configured(provider: 'openai' | 'anthropic' | 'google' | 'openai-compatible') {
     const sessions = new SessionStore();
@@ -12,7 +19,10 @@ describe('ProviderService', () => {
       apiKey: ['test', provider, 'value'].join('-'),
       ...(provider === 'openai-compatible' ? { baseUrl: 'https://models.example.com/v1' } : {}),
     });
-    return { service: new ProviderService(sessions), sessionId: session.id };
+    return {
+      service: new ProviderService(sessions, testGuardedFetch()),
+      sessionId: session.id,
+    };
   }
 
   it('constructs direct provider models without making a request', () => {
@@ -26,7 +36,7 @@ describe('ProviderService', () => {
   });
 
   it('rejects missing credentials and endpoints', () => {
-    const service = new ProviderService(new SessionStore());
+    const service = new ProviderService(new SessionStore(), testGuardedFetch());
     expect(() => service.model(undefined, 'openai', 'model')).toThrow('Configure');
     expect(() => service.model(undefined, 'openai-compatible', 'model')).toThrow('endpoint');
   });
@@ -74,7 +84,7 @@ describe('ProviderService', () => {
         )
         .mockResolvedValueOnce(new Response('{}', { status: 429 })),
     );
-    const service = new ProviderService(new SessionStore());
+    const service = new ProviderService(new SessionStore(), testGuardedFetch());
     expect(await service.listModels(undefined, 'ollama')).toEqual([
       { id: 'llama-test', name: 'llama-test' },
     ]);
@@ -147,7 +157,7 @@ describe('ProviderService', () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'local' }] }))),
     );
     await expect(
-      new ProviderService(sessions).listModels(session.id, 'openai-compatible'),
+      new ProviderService(sessions, testGuardedFetch()).listModels(session.id, 'openai-compatible'),
     ).resolves.toEqual([{ id: 'local', name: 'local' }]);
   });
 });

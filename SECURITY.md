@@ -6,7 +6,7 @@ Security fixes are provided for the latest release candidate and the latest tagg
 
 ## Reporting
 
-Do not open a public issue for a suspected vulnerability. Use GitHub private vulnerability reporting for this repository. If that feature is unavailable, contact the repository owner through their verified GitHub profile.
+Do not open a public issue for a suspected vulnerability. Use the repository’s [private security advisory form](https://github.com/prashanthnimmagadda/prd-genie/security/advisories/new). If GitHub does not show that private form, contact the repository owner through the verified GitHub profile without disclosing vulnerability details publicly.
 
 Include:
 

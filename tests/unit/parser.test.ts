@@ -26,6 +26,23 @@ describe('parseDocument', () => {
     expect(parsed.locations[1]?.locator).toBe('Paragraph 2');
   });
 
+  it('bounds oversized structural locations and labels without losing source text', async () => {
+    const content = `${'a'.repeat(2 * 1024 * 1024)}🙂tail`;
+    const parsed = await parseDocument('large.txt', Buffer.from(content));
+    expect(parsed.locations).toHaveLength(2);
+    expect(parsed.locations.every((location) => location.content.length <= 2 * 1024 * 1024)).toBe(
+      true,
+    );
+    expect(parsed.locations.map((location) => location.content).join('')).toBe(content);
+    expect(parsed.locations[0]?.locator).toContain('part 1 of 2');
+    expect(parsed.locations[1]?.startOffset).toBe(parsed.locations[0]?.endOffset);
+
+    const heading = 'h'.repeat(700);
+    const markdown = await parseDocument('large-heading.md', Buffer.from(`# ${heading}\n\nBody.`));
+    expect(markdown.locations[0]?.heading).toHaveLength(500);
+    expect(markdown.locations[0]?.locator.length).toBeLessThanOrEqual(500);
+  });
+
   it('rejects unsupported, binary, and mismatched files', async () => {
     await expect(parseDocument('legacy.doc', Buffer.from('text'))).rejects.toMatchObject({
       code: 'unsupported_file',

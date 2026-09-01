@@ -8,6 +8,7 @@ import { parseDocument } from '../../src/server/documents/parser.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 describe('ExportService', () => {
   let database: AppDatabase;
@@ -61,7 +62,8 @@ describe('ExportService', () => {
     const project = repository.createProject('🔥', '');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-export-source-'));
     const binaryPath = path.join(directory, 'evidence.txt');
-    fs.writeFileSync(binaryPath, 'Synthetic source');
+    const binary = Buffer.from('Synthetic source');
+    fs.writeFileSync(binaryPath, binary);
     database.db
       .insert(sources)
       .values({
@@ -69,8 +71,8 @@ describe('ExportService', () => {
         projectId: project.id,
         name: '../evidence.txt',
         mediaType: 'text/plain',
-        size: 16,
-        hash: 'c'.repeat(64),
+        size: binary.length,
+        hash: createHash('sha256').update(binary).digest('hex'),
         binaryPath,
         status: 'ready',
         error: null,
@@ -100,13 +102,14 @@ describe('ExportService', () => {
       ['second/brief.txt', secondPath],
     ];
     for (const [name, binaryPath] of sourceFiles) {
+      const binary = fs.readFileSync(binaryPath);
       const source: typeof sources.$inferInsert = {
         id: crypto.randomUUID(),
         projectId: project.id,
         name,
         mediaType: 'text/plain',
-        size: 12,
-        hash: crypto.randomUUID().replaceAll('-', '').padEnd(64, '0'),
+        size: binary.length,
+        hash: createHash('sha256').update(binary).digest('hex'),
         binaryPath,
         status: 'ready',
         error: null,

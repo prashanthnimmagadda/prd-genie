@@ -93,6 +93,29 @@ export const requiredStructuredReviewChecks = [
   'avoidsInventedExamples',
 ];
 export const requiredPersistenceChecks = ['allProjectsPersisted', 'reviewHistoryPersisted'];
+export const requiredBrowserProjects = ['chromium', 'firefox', 'webkit'];
+export const requiredAccessibilityWidths = [320, 375, 414, 768, 1440];
+export const requiredAccessibilityChecks = [
+  'keyboardNavigation',
+  'visibleFocus',
+  'semanticControls',
+  'labelsAndDialogs',
+  'screenReaderAnnouncements',
+  'reducedMotion',
+  'errorAndEmptyStates',
+  'longContent',
+  'contrastWcag22Aa',
+  'localFontsAndAssets',
+];
+export const requiredProductionSmokeChecks = [
+  'health',
+  'client',
+  'projectCreated',
+  'markdownExport',
+  'persistenceAfterRestart',
+  'gracefulSigterm',
+  'cleanupComplete',
+];
 
 export const requiredArtifactFiles = [
   'Dockerfile',
@@ -105,9 +128,15 @@ export const requiredArtifactFiles = [
   'scripts/record-container-smoke.mjs',
   'evaluations/ollama-qwen35-review.Modelfile',
   'reports/container-smoke.json',
+  'reports/browser-e2e.json',
+  'reports/accessibility-review.json',
+  'reports/dependency-audit.json',
   'reports/licenses.json',
   'reports/model-evaluation.json',
   'reports/offline-ci.json',
+  'reports/node-22.json',
+  'reports/node-24.json',
+  'reports/production-smoke.json',
   'reports/sbom.cdx.json',
   'coverage/coverage-summary.json',
 ];
@@ -132,6 +161,12 @@ export function collectArtifactPaths(root) {
 
 export function validateEvidenceReports(root, gitSha) {
   const offline = readJson(root, 'reports/offline-ci.json');
+  const browser = readJson(root, 'reports/browser-e2e.json');
+  const accessibility = readJson(root, 'reports/accessibility-review.json');
+  const dependencyAudit = readJson(root, 'reports/dependency-audit.json');
+  const node22 = readJson(root, 'reports/node-22.json');
+  const node24 = readJson(root, 'reports/node-24.json');
+  const productionSmoke = readJson(root, 'reports/production-smoke.json');
   const model = readJson(root, 'reports/model-evaluation.json');
   const container = readJson(root, 'reports/container-smoke.json');
   if (
@@ -145,12 +180,144 @@ export function validateEvidenceReports(root, gitSha) {
   ) {
     throw new Error('Offline CI evidence does not validate the clean current SHA.');
   }
+  if (
+    !validSimpleEvidence(browser, gitSha) ||
+    browser.command !== 'playwright test' ||
+    browser.exitCode !== 0 ||
+    !validBrowserReport(browser.playwright)
+  ) {
+    throw new Error('Browser evidence does not validate the clean current SHA.');
+  }
+  if (
+    !validSimpleEvidence(accessibility, gitSha) ||
+    accessibility.reviewMethod !== 'manual-browser-and-source-review' ||
+    !sameNumberSet(accessibility.widths, requiredAccessibilityWidths) ||
+    !exactTrueChecks(accessibility.checks, requiredAccessibilityChecks) ||
+    !Array.isArray(accessibility.materialWarnings) ||
+    accessibility.materialWarnings.length !== 0
+  ) {
+    throw new Error('Accessibility evidence does not validate the clean current SHA.');
+  }
+  if (
+    !validSimpleEvidence(dependencyAudit, gitSha) ||
+    dependencyAudit.online !== true ||
+    !Array.isArray(dependencyAudit.results) ||
+    dependencyAudit.results.length !== 2 ||
+    !sameStringSet(
+      dependencyAudit.results.map((result) => result?.scope),
+      ['production', 'full'],
+    ) ||
+    dependencyAudit.results.some(
+      (result) =>
+        result?.passed !== true ||
+        result?.exitCode !== 0 ||
+        !Number.isInteger(result?.auditReportVersion) ||
+        (result.vulnerabilities?.high ?? 0) !== 0 ||
+        (result.vulnerabilities?.critical ?? 0) !== 0,
+    )
+  ) {
+    throw new Error('Online dependency evidence does not validate the clean current SHA.');
+  }
+  if (!validNodeGate(node22, gitSha, 22) || !validNodeGate(node24, gitSha, 24)) {
+    throw new Error('Node 22 and Node 24 evidence does not validate the clean current SHA.');
+  }
+  if (
+    !validSimpleEvidence(productionSmoke, gitSha) ||
+    productionSmoke.command !== 'node dist/server/server/index.js' ||
+    productionSmoke.childPidRecorded !== true ||
+    !exactTrueChecks(productionSmoke.checks, requiredProductionSmokeChecks)
+  ) {
+    throw new Error('Production runtime evidence does not validate the clean current SHA.');
+  }
   if (!validModelEvidence(model, gitSha)) {
     throw new Error('Model evaluation evidence does not validate the clean current SHA.');
   }
   if (!validateContainerSmokeReport(container, gitSha)) {
     throw new Error('Container smoke evidence does not validate the clean current SHA.');
   }
+}
+
+function validBrowserReport(report) {
+  if (!report || typeof report !== 'object') return false;
+  const configuredProjects = report.config?.projects?.map((project) =>
+    typeof project === 'string' ? project : project?.name,
+  );
+  if (!sameStringSet(configuredProjects, requiredBrowserProjects)) return false;
+  if (
+    !Array.isArray(report.suites) ||
+    report.suites.length === 0 ||
+    !Number.isInteger(report.stats?.expected) ||
+    report.stats.expected < requiredBrowserProjects.length ||
+    report.stats.unexpected !== 0
+  ) {
+    return false;
+  }
+  const executedProjects = new Set();
+  const visit = (suite) => {
+    for (const spec of suite?.specs ?? []) {
+      for (const test of spec?.tests ?? []) executedProjects.add(test?.projectName);
+    }
+    for (const child of suite?.suites ?? []) visit(child);
+  };
+  for (const suite of report.suites) visit(suite);
+  return requiredBrowserProjects.every((project) => executedProjects.has(project));
+}
+
+function exactTrueChecks(checks, required) {
+  return (
+    checks !== null &&
+    typeof checks === 'object' &&
+    !Array.isArray(checks) &&
+    sameStringSet(Object.keys(checks), required) &&
+    required.every((name) => checks[name] === true)
+  );
+}
+
+function sameStringSet(actual, expected) {
+  return (
+    Array.isArray(actual) &&
+    actual.every((value) => typeof value === 'string') &&
+    JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort())
+  );
+}
+
+function sameNumberSet(actual, expected) {
+  return (
+    Array.isArray(actual) &&
+    actual.every((value) => Number.isInteger(value)) &&
+    JSON.stringify([...actual].sort((left, right) => left - right)) ===
+      JSON.stringify([...expected].sort((left, right) => left - right))
+  );
+}
+
+function validSimpleEvidence(report, gitSha) {
+  return (
+    report?.schemaVersion === 1 &&
+    report.git?.sha === gitSha &&
+    report.git?.clean === true &&
+    report.passed === true
+  );
+}
+
+function validNodeGate(report, gitSha, major) {
+  const expectedSteps = requiredOfflineSteps.filter((step) => step !== 'browser');
+  if (
+    report?.schemaVersion !== 1 ||
+    report.mode !== 'quick' ||
+    report.git?.sha !== gitSha ||
+    report.git?.clean !== true ||
+    report.passed !== true ||
+    !new RegExp(`^v${major}\\.`).test(report.runtime?.node ?? '') ||
+    !Array.isArray(report.results) ||
+    report.results.length !== expectedSteps.length
+  ) {
+    return false;
+  }
+  const byName = new Map(report.results.map((result) => [result?.name, result]));
+  return expectedSteps.every((name) => {
+    const result = byName.get(name);
+    return result?.status === 'passed' && result?.exitCode === 0;
+  });
 }
 
 export function validatePublicApproval({ approval, artifacts, gitSha, clean, tagSha }) {

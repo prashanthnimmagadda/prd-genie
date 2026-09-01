@@ -24,6 +24,8 @@ export interface ParsedDocument {
 }
 
 const supportedExtensions = new Set(['.pdf', '.docx', '.md', '.markdown', '.txt']);
+const maxLocationChars = 2 * 1024 * 1024;
+const maxLocationLabelChars = 500;
 const rejectedExtensions = new Map([
   ['.doc', 'Legacy Word files are not supported. Save the file as DOCX.'],
   ['.xls', 'Spreadsheets are not supported.'],
@@ -52,23 +54,51 @@ function structuralTextLocations(text: string, markdown: boolean): ParsedLocatio
     if (!trimmed) continue;
     const headingMatch = markdown ? /^(#{1,6})\s+(.+)$/m.exec(trimmed) : null;
     if (headingMatch?.[2]) {
-      currentHeading = headingMatch[2].trim();
+      currentHeading = boundedLabel(headingMatch[2].trim());
       pendingHeading = true;
       if (trimmed === headingMatch[0]) continue;
     }
-    locations.push({
-      id: crypto.randomUUID(),
-      locator: currentHeading ? `Heading: ${currentHeading}` : `Paragraph ${locations.length + 1}`,
-      heading: currentHeading,
-      ordinal: locations.length,
-      content: trimmed,
-      startOffset: Math.max(start, 0),
-      endOffset: Math.max(start, 0) + block.length,
-      ...(pendingHeading ? { startsHeading: true } : {}),
-    });
+    const blockStart = Math.max(start, 0) + Math.max(0, block.indexOf(trimmed));
+    const parts = splitBoundedText(trimmed, maxLocationChars);
+    const baseLocator = currentHeading
+      ? `Heading: ${currentHeading}`
+      : `Paragraph ${locations.length + 1}`;
+    let partOffset = 0;
+    for (const [partIndex, content] of parts.entries()) {
+      const partLabel = parts.length > 1 ? ` (part ${partIndex + 1} of ${parts.length})` : '';
+      locations.push({
+        id: crypto.randomUUID(),
+        locator: boundedLabel(`${baseLocator}${partLabel}`),
+        heading: currentHeading,
+        ordinal: locations.length,
+        content,
+        startOffset: blockStart + partOffset,
+        endOffset: blockStart + partOffset + content.length,
+        ...(pendingHeading && partIndex === 0 ? { startsHeading: true } : {}),
+      });
+      partOffset += content.length;
+    }
     pendingHeading = false;
   }
   return locations;
+}
+
+function splitBoundedText(value: string, limit: number): string[] {
+  if (value.length <= limit) return [value];
+  const parts: string[] = [];
+  let offset = 0;
+  while (offset < value.length) {
+    let end = Math.min(offset + limit, value.length);
+    if (end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1] ?? '')) end -= 1;
+    parts.push(value.slice(offset, end));
+    offset = end;
+  }
+  return parts;
+}
+
+function boundedLabel(value: string): string {
+  if (value.length <= maxLocationLabelChars) return value;
+  return `${value.slice(0, maxLocationLabelChars - 3)}...`;
 }
 
 async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {

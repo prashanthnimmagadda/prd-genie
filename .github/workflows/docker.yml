@@ -10,7 +10,7 @@ jobs:
   smoke:
     runs-on: [self-hosted, prd-genie]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build --tag prd-genie:smoke .
       - run: docker run --detach --name prd-genie-smoke --publish 127.0.0.1:3210:3210 prd-genie:smoke
       - run: |

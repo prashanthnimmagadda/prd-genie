@@ -19,6 +19,12 @@ describe('API', () => {
 
   beforeEach(async () => {
     sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-api-'));
+    const clientRoot = path.join(sourceDir, 'client');
+    fs.mkdirSync(clientRoot);
+    fs.writeFileSync(
+      path.join(clientRoot, 'index.html'),
+      '<!doctype html><title>PRD Genie test client</title>',
+    );
     originalSourceDir = config.sourceDir;
     Object.assign(config, { sourceDir });
     const embeddings = {
@@ -31,7 +37,7 @@ describe('API', () => {
       embed: () => Promise.reject(new Error('Unavailable in test')),
       close: () => Promise.resolve(),
     } as unknown as EmbeddingService;
-    const built = await buildApp({ databasePath: ':memory:', embeddings });
+    const built = await buildApp({ databasePath: ':memory:', embeddings, clientRoot });
     app = built.app;
     database = built.database;
     repository = built.services.repository;
@@ -81,7 +87,7 @@ describe('API', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       status: 'degraded',
-      version: '0.1.0-rc.2',
+      version: '0.1.0-rc.3',
       retrieval: { mode: 'lexical' },
       fileCleanup: { status: 'complete', pending: 0 },
     });
@@ -484,6 +490,12 @@ describe('API', () => {
       url: `/api/projects/${project.id}/sources/${sourceId}/locations/${location.id}`,
     });
     expect(opened.json()).toMatchObject({ locator: 'Paragraph 1' });
+    const otherProject = repository.createProject('Other evidence project', '');
+    const crossProject = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${otherProject.id}/sources/${sourceId}/locations/${location.id}`,
+    });
+    expect(crossProject.statusCode).toBe(404);
     const missingLocation = await app.inject({
       method: 'GET',
       url: `/api/projects/${project.id}/sources/${sourceId}/locations/${crypto.randomUUID()}`,

@@ -20,7 +20,7 @@ import { RetrievalService } from './retrieval/retrieval-service.js';
 import { registerApi } from './routes/api.js';
 
 export async function buildApp(
-  options: { databasePath?: string; embeddings?: EmbeddingService } = {},
+  options: { databasePath?: string; embeddings?: EmbeddingService; clientRoot?: string } = {},
 ) {
   const app = Fastify({
     logger: {
@@ -97,7 +97,7 @@ export async function buildApp(
   };
   registerApi(app, services);
 
-  const clientRoot = path.resolve(process.cwd(), 'dist/client');
+  const clientRoot = options.clientRoot ?? path.resolve(process.cwd(), 'dist/client');
   if (fs.existsSync(clientRoot)) {
     await app.register(staticFiles, { root: clientRoot, wildcard: false });
     app.setNotFoundHandler((request, reply) => {

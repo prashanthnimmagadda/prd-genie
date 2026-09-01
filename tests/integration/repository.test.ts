@@ -6,6 +6,7 @@ import { drainPendingFileDeletions } from '../../src/server/db/file-deletion.js'
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { sources, sourceLocations, chunks } from '../../src/server/db/schema.js';
 import type { ChatGptHandoffResponse } from '../../src/shared/types.js';
 import { config } from '../../src/server/config.js';
@@ -99,7 +100,7 @@ describe('Repository', () => {
         'Collision',
       ),
     ).toThrow('already in use');
-    expect(() => repository.getLocation('source', 'location')).toThrow('location');
+    expect(() => repository.getLocation(first.id, 'source', 'location')).toThrow('location');
     expect(() => repository.setFindingStatus(first.id, 'missing', 'accepted')).toThrow('finding');
     expect(repository.listRevisions(first.id)).toHaveLength(1);
     expect(repository.listSources(first.id)).toEqual([]);
@@ -241,7 +242,11 @@ describe('Repository', () => {
     ]);
     repository.setFindingStatus(project.id, finding.id, 'dismissed');
     expect(repository.listFindings(project.id)[0]?.status).toBe('dismissed');
-    expect(repository.getLocation(sourceId, locationId).content).toBe('Evidence');
+    expect(repository.getLocation(project.id, sourceId, locationId).content).toBe('Evidence');
+    const foreignProject = repository.createProject('Foreign evidence', '');
+    expect(() => repository.getLocation(foreignProject.id, sourceId, locationId)).toThrow(
+      'location',
+    );
 
     const revisionOne = repository.savePrd(project.id, 0, prd.sections, 'Close finding revision');
     expect(() => repository.setFindingStatus(project.id, finding.id, 'accepted')).toThrow(
@@ -367,10 +372,44 @@ describe('Repository', () => {
     expect(applied.sections.find((section) => section.id === problem.id)?.body).toContain(
       'synthetic participants',
     );
-    expect(repository.getChatGptHandoff(project.id, handoff.id)).toMatchObject({
+    const appliedHandoff = repository.getChatGptHandoff(project.id, handoff.id);
+    expect(appliedHandoff).toMatchObject({
       status: 'applied',
       appliedRevision: applied.revision,
+      application: {
+        sourceRevision: saved.revision,
+        appliedRevision: applied.revision,
+        patches: [
+          {
+            sectionId: problem.id,
+            proposedAfterMarkdown: response.patches[0]!.afterMarkdown,
+            appliedAfterMarkdown: response.patches[0]!.afterMarkdown,
+          },
+        ],
+      },
     });
+    expect(appliedHandoff.applicationDigest).toBe(
+      createHash('sha256').update(JSON.stringify(appliedHandoff.application)).digest('hex'),
+    );
+    repository.dismissChatGptHandoff(project.id, handoff.id);
+    expect(repository.listChatGptHandoffs(project.id)).toEqual([]);
+    expect(() => repository.getChatGptHandoff(project.id, handoff.id)).toThrow('not found');
+    const retained = database.sqlite
+      .prepare(
+        'SELECT status, request_json AS requestJson, response_json AS responseJson, application_json AS applicationJson, retired_at AS retiredAt FROM chatgpt_handoffs WHERE id = ?',
+      )
+      .get(handoff.id) as {
+      status: string;
+      requestJson: string;
+      responseJson: string;
+      applicationJson: string;
+      retiredAt: string;
+    };
+    expect(retained.status).toBe('applied');
+    expect(retained.requestJson.length).toBeGreaterThan(0);
+    expect(retained.responseJson.length).toBeGreaterThan(0);
+    expect(retained.applicationJson.length).toBeGreaterThan(0);
+    expect(retained.retiredAt.length).toBeGreaterThan(0);
   });
 
   it('rolls back the PRD revision when the ChatGPT application marker fails', () => {
@@ -426,7 +465,60 @@ describe('Repository', () => {
     expect(repository.getChatGptHandoff(project.id, handoff.id)).toMatchObject({
       status: 'staged',
       appliedRevision: null,
+      application: null,
+      applicationDigest: null,
     });
+  });
+
+  it('rolls back review finding status when revision creation fails and retries once', () => {
+    const project = repository.createProject('Atomic review finding', '');
+    const current = repository.getPrd(project.id);
+    const target = current.sections[0]!;
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'review',
+      scope: 'document',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: current.revision,
+    });
+    const finding = repository.storeFinding({
+      aiRunId: runId,
+      projectId: project.id,
+      category: 'clarity',
+      severity: 'warning',
+      targetSectionId: target.id,
+      rationale: 'Clarify the actor.',
+      citationIds: [],
+      proposedPatch: {
+        sectionId: target.id,
+        beforeMarkdown: target.body,
+        afterMarkdown: 'A product manager loses unsaved draft changes.',
+      },
+      sourceRevision: current.revision,
+    });
+    database.sqlite.exec(`
+      CREATE TEMP TRIGGER fail_review_revision_insert
+      BEFORE INSERT ON revisions
+      WHEN NEW.project_id = '${project.id}' AND NEW.revision = 1
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic review revision failure');
+      END
+    `);
+
+    expect(() => repository.acceptFinding(project.id, finding.id, current.revision)).toThrow(
+      'synthetic review revision failure',
+    );
+    expect(repository.getPrd(project.id)).toMatchObject({ revision: current.revision });
+    expect(repository.getPrd(project.id).sections[0]?.body).toBe(target.body);
+    expect(repository.listRevisions(project.id)).toHaveLength(1);
+    expect(repository.listFindings(project.id)[0]?.status).toBe('open');
+
+    database.sqlite.exec('DROP TRIGGER fail_review_revision_insert');
+    const applied = repository.acceptFinding(project.id, finding.id, current.revision);
+    expect(applied.revision).toBe(1);
+    expect(repository.listRevisions(project.id)).toHaveLength(2);
+    expect(repository.listFindings(project.id)[0]?.status).toBe('accepted');
   });
 
   it('marks an outstanding ChatGPT handoff stale when the PRD changes', () => {

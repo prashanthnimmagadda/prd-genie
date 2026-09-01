@@ -42,7 +42,7 @@ export function isAllowedBrowserOrigin(
 }
 
 export const config = {
-  version: process.env.npm_package_version ?? '0.1.0-rc.2',
+  version: process.env.npm_package_version ?? '0.1.0-rc.3',
   host: resolveServerHost(
     process.env.PRD_GENIE_HOST ?? '127.0.0.1',
     process.env.PRD_GENIE_CONTAINER === '1',
@@ -57,7 +57,7 @@ export const config = {
   sessionIdleMs: 8 * 60 * 60 * 1000,
   maxUploadBytes: 25 * 1024 * 1024,
   maxArchiveBytes: 250 * 1024 * 1024,
-  maxArchiveManifestBytes: 20 * 1024 * 1024,
+  maxArchiveManifestBytes: 225 * 1024 * 1024,
   maxDocxEntries: 5_000,
   maxDocxExpandedBytes: 100 * 1024 * 1024,
   maxPdfPages: 200,

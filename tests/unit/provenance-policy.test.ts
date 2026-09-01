@@ -9,11 +9,15 @@ import {
   parseContainerSystemStatus,
   publicProductName,
   publicReleaseTarget,
+  requiredAccessibilityChecks,
+  requiredAccessibilityWidths,
   requiredArtifactDirectories,
   requiredArtifactFiles,
+  requiredBrowserProjects,
   requiredModelScenarioChecks,
   requiredOfflineSteps,
   requiredPersistenceChecks,
+  requiredProductionSmokeChecks,
   requiredStructuredReviewChecks,
   validateContainerSmokeReport,
   validateEvidenceReports,
@@ -78,6 +82,69 @@ describe('release provenance policy', () => {
       expect(() => validateEvidenceReports(root, gitSha)).toThrow('Offline CI evidence');
       writeEvidence(root);
     }
+  });
+
+  it('requires separate browser, accessibility, online audit, and Node gate evidence', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    for (const relative of [
+      'reports/browser-e2e.json',
+      'reports/accessibility-review.json',
+      'reports/dependency-audit.json',
+      'reports/node-22.json',
+      'reports/node-24.json',
+      'reports/production-smoke.json',
+    ]) {
+      const report = JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      report.passed = false;
+      writeJson(root, relative, report);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow();
+      writeEvidence(root);
+    }
+  });
+
+  it('rejects incomplete browser, accessibility, audit, and production report shapes', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    const expectRejected = (relative: string, report: unknown) => {
+      writeJson(root, relative, report);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow();
+      writeEvidence(root);
+    };
+
+    const emptySuites = browserFixture();
+    emptySuites.playwright.suites = [];
+    expectRejected('reports/browser-e2e.json', emptySuites);
+    const missingBrowsers = browserFixture();
+    missingBrowsers.playwright.config.projects = [{ name: 'chromium' }];
+    expectRejected('reports/browser-e2e.json', missingBrowsers);
+    const failedBrowser = browserFixture();
+    failedBrowser.playwright.stats.unexpected = 1;
+    expectRejected('reports/browser-e2e.json', failedBrowser);
+
+    const missingWidth = accessibilityFixture();
+    missingWidth.widths.pop();
+    expectRejected('reports/accessibility-review.json', missingWidth);
+    const missingAccessibilityCheck = accessibilityFixture();
+    delete missingAccessibilityCheck.checks.keyboardNavigation;
+    expectRejected('reports/accessibility-review.json', missingAccessibilityCheck);
+
+    const duplicateAuditScope = dependencyAuditFixture();
+    duplicateAuditScope.results[1]!.scope = 'production';
+    expectRejected('reports/dependency-audit.json', duplicateAuditScope);
+    const failedAudit = dependencyAuditFixture();
+    failedAudit.results[0]!.exitCode = 1;
+    expectRejected('reports/dependency-audit.json', failedAudit);
+
+    const emptyProductionChecks = productionSmokeFixture();
+    Object.assign(emptyProductionChecks, { checks: {} });
+    expectRejected('reports/production-smoke.json', emptyProductionChecks);
+    const missingProductionCheck = productionSmokeFixture();
+    delete missingProductionCheck.checks.health;
+    expectRejected('reports/production-smoke.json', missingProductionCheck);
   });
 
   it('recomputes every model-evaluation check instead of trusting its percentage', () => {
@@ -252,10 +319,76 @@ describe('release provenance policy', () => {
 
   function writeEvidence(root: string): void {
     writeJson(root, 'reports/offline-ci.json', offlineFixture());
+    writeJson(root, 'reports/browser-e2e.json', browserFixture());
+    writeJson(root, 'reports/accessibility-review.json', accessibilityFixture());
+    writeJson(root, 'reports/dependency-audit.json', dependencyAuditFixture());
+    writeJson(root, 'reports/node-22.json', nodeFixture(22));
+    writeJson(root, 'reports/node-24.json', nodeFixture(24));
+    writeJson(root, 'reports/production-smoke.json', productionSmokeFixture());
     writeJson(root, 'reports/model-evaluation.json', modelFixture());
     writeJson(root, 'reports/container-smoke.json', containerReportFixture());
   }
 });
+
+function browserFixture() {
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    passed: true,
+    exitCode: 0,
+    command: 'playwright test',
+    playwright: {
+      config: { projects: requiredBrowserProjects.map((name) => ({ name })) },
+      suites: [
+        {
+          specs: requiredBrowserProjects.map((projectName) => ({
+            tests: [{ projectName }],
+          })),
+        },
+      ],
+      stats: { expected: requiredBrowserProjects.length, unexpected: 0 },
+    },
+  };
+}
+
+function accessibilityFixture() {
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    passed: true,
+    reviewMethod: 'manual-browser-and-source-review',
+    widths: [...requiredAccessibilityWidths],
+    checks: trueChecks(requiredAccessibilityChecks) as Record<string, boolean | undefined>,
+    materialWarnings: [],
+  };
+}
+
+function dependencyAuditFixture() {
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    online: true,
+    passed: true,
+    results: ['production', 'full'].map((scope) => ({
+      scope,
+      passed: true,
+      exitCode: 0,
+      auditReportVersion: 2,
+      vulnerabilities: { high: 0, critical: 0 },
+    })),
+  };
+}
+
+function productionSmokeFixture() {
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    childPidRecorded: true,
+    command: 'node dist/server/server/index.js',
+    passed: true,
+    checks: trueChecks(requiredProductionSmokeChecks) as Record<string, boolean | undefined>,
+  };
+}
 
 function offlineFixture() {
   return {
@@ -265,6 +398,19 @@ function offlineFixture() {
     git: { sha: gitSha, clean: true },
     passed: true,
     results: requiredOfflineSteps.map((name) => ({ name, status: 'passed', exitCode: 0 })),
+  };
+}
+
+function nodeFixture(major: 22 | 24) {
+  return {
+    schemaVersion: 1,
+    mode: 'quick',
+    runtime: { node: `v${major}.23.0` },
+    git: { sha: gitSha, clean: true },
+    passed: true,
+    results: requiredOfflineSteps
+      .filter((name) => name !== 'browser')
+      .map((name) => ({ name, status: 'passed', exitCode: 0 })),
   };
 }
 

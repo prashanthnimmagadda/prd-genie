@@ -37,8 +37,7 @@ export class SourceService {
     fs.mkdirSync(config.sourceDir, { recursive: true, mode: 0o700 });
     const extension = path.extname(name).toLowerCase();
     const binaryPath = path.join(config.sourceDir, `${hash}${extension}`);
-    const createdBinary = !fs.existsSync(binaryPath);
-    if (createdBinary) fs.writeFileSync(binaryPath, buffer, { mode: 0o600, flag: 'wx' });
+    const createdBinary = ensureVerifiedBinary(binaryPath, buffer, hash);
     const sourceId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const source = {
@@ -233,4 +232,36 @@ export class SourceService {
       .prepare('UPDATE sources SET status = ?, error = ? WHERE id = ?')
       .run(status, error, sourceId);
   }
+}
+
+export function ensureVerifiedBinary(
+  binaryPath: string,
+  buffer: Buffer,
+  expectedHash: string,
+): boolean {
+  if (!fs.existsSync(binaryPath)) {
+    try {
+      fs.writeFileSync(binaryPath, buffer, { mode: 0o600, flag: 'wx' });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+
+  const existing = fs.readFileSync(binaryPath);
+  const existingHash = createHash('sha256').update(existing).digest('hex');
+  if (existing.length === buffer.length && existingHash === expectedHash) {
+    fs.chmodSync(binaryPath, 0o600);
+    return false;
+  }
+
+  const temporaryPath = `${binaryPath}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, buffer, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporaryPath, binaryPath);
+    fs.chmodSync(binaryPath, 0o600);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
+  return false;
 }

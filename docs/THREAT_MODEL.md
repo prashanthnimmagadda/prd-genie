@@ -44,6 +44,8 @@ ChatGPT handoffs bind the project, source revision, section preimage hashes, evi
 
 Native execution permits only loopback hosts. The server rejects non-loopback `Host` headers and non-loopback browser origins to prevent DNS rebinding and remote cross-site mutations. Different loopback ports remain permitted for the local development proxy. Containers require an explicit marker before wildcard binding, and Docker Compose publishes only on host loopback. Remote hosting is unsupported.
 
+Remote custom provider endpoints must use HTTPS. Every resolved address must be public, the validated addresses are pinned into the connection lookup, and redirects are rejected. Loopback HTTP remains available only for local providers. These controls reduce server-side request forgery exposure; a selected external provider still receives the explicitly disclosed action context.
+
 ### Local device compromise
 
 An attacker with access to the user account or unencrypted disk may read project data. This is a residual risk. Use full-disk encryption and a protected operating-system account.

@@ -201,6 +201,10 @@ export const chatGptHandoffs = sqliteTable(
     createdAt: text('created_at').notNull(),
     importedAt: text('imported_at'),
     appliedRevision: integer('applied_revision'),
+    applicationJson: text('application_json'),
+    applicationDigest: text('application_digest'),
+    appliedAt: text('applied_at'),
+    retiredAt: text('retired_at'),
   },
   (table) => [index('handoffs_project_idx').on(table.projectId, table.createdAt)],
 );

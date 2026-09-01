@@ -16,10 +16,12 @@ import { ApiError } from '../../shared/api.js';
 import { config } from '../config.js';
 import type { AppDatabase } from '../db/client.js';
 import type { Repository } from '../db/repository.js';
+import { ensureVerifiedBinary } from '../documents/source-service.js';
 import { parseDocumentProposal } from '../providers/proposal-service.js';
 
 const id = z.string().uuid();
 const timestamp = z.string().datetime();
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const sectionSchema = z.object({
   id,
   projectId: id,
@@ -50,7 +52,7 @@ const locationSchema = z.object({
   locator: z.string().max(500),
   heading: z.string().max(500).nullable(),
   ordinal: z.number().int().nonnegative(),
-  content: z.string().max(2 * 1024 * 1024),
+  content: z.string().max(config.maxDocxExpandedBytes),
   startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().nonnegative(),
 });
@@ -66,6 +68,7 @@ const chunkSchema = z.object({
   endOffset: z.number().int().nonnegative(),
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
+const portableChunkSchema = chunkSchema.omit({ content: true });
 const aiRunSchema = z.object({
   id,
   projectId: id,
@@ -113,7 +116,114 @@ const findingSchema = z.object({
   status: z.enum(['open', 'accepted', 'dismissed', 'stale']),
   createdAt: timestamp,
 });
-const manifestSchema = z.object({
+const chatGptHandoffSectionSchema = z
+  .object({
+    id,
+    title: z.string().min(1).max(160),
+    markdown: z.string().max(100_000),
+    preimageHash: digest,
+  })
+  .strict();
+const chatGptHandoffEvidenceSchema = z
+  .object({
+    id,
+    sourceName: z.string().min(1).max(1024),
+    locator: z.string().min(1).max(500),
+    excerpt: z.string().min(1).max(100_000),
+  })
+  .strict();
+const chatGptHandoffRequestSchema = z
+  .object({
+    formatVersion: z.literal(1),
+    kind: z.literal('prd-genie-request'),
+    handoffId: id,
+    projectId: id,
+    sourceRevision: z.number().int().nonnegative(),
+    requestDigest: digest,
+    action: z.enum(['draft', 'review', 'rewrite']),
+    scope: z.enum(actionScopes),
+    instruction: z.string().min(1).max(10_000),
+    sections: z.array(chatGptHandoffSectionSchema).min(1).max(50),
+    evidence: z.array(chatGptHandoffEvidenceSchema).max(8),
+  })
+  .strict();
+const chatGptHandoffPatchSchema = z
+  .object({
+    sectionId: id,
+    preimageHash: digest,
+    afterMarkdown: z.string().max(100_000),
+    evidenceIds: z.array(id).max(8),
+  })
+  .strict();
+const chatGptHandoffResponseSchema = z
+  .object({
+    formatVersion: z.literal(1),
+    kind: z.literal('prd-genie-response'),
+    handoffId: id,
+    projectId: id,
+    sourceRevision: z.number().int().nonnegative(),
+    requestDigest: digest,
+    summary: z.string().min(1).max(4000),
+    patches: z.array(chatGptHandoffPatchSchema).max(50),
+    findings: z
+      .array(
+        z
+          .object({
+            category: z.enum(findingCategories),
+            severity: z.enum(severityLevels),
+            sectionId: id,
+            rationale: z.string().min(1).max(1200),
+            evidenceIds: z.array(id).max(8),
+          })
+          .strict(),
+      )
+      .max(20),
+    hostModel: z.string().min(1).max(300).nullable(),
+  })
+  .strict();
+const chatGptHandoffApplicationSchema = z
+  .object({
+    formatVersion: z.literal(1),
+    sourceRevision: z.number().int().nonnegative(),
+    appliedRevision: z.number().int().nonnegative(),
+    patches: z
+      .array(
+        z
+          .object({
+            sectionId: id,
+            preimageHash: digest,
+            proposedAfterMarkdown: z.string().max(100_000),
+            appliedAfterMarkdown: z.string().max(100_000),
+            evidenceIds: z.array(id).max(8),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict();
+const appliedChatGptHandoffSchema = z
+  .object({
+    id,
+    projectId: id,
+    sourceRevision: z.number().int().nonnegative(),
+    action: z.enum(['draft', 'review', 'rewrite']),
+    scope: z.enum(actionScopes),
+    requestDigest: digest,
+    request: chatGptHandoffRequestSchema,
+    responseDigest: digest,
+    response: chatGptHandoffResponseSchema,
+    appliedRevision: z.number().int().nonnegative(),
+    application: chatGptHandoffApplicationSchema.nullable(),
+    applicationDigest: digest.nullable(),
+    legacyApplicationProvenanceUnavailable: z.boolean(),
+    createdAt: timestamp,
+    importedAt: timestamp,
+    appliedAt: timestamp.nullable(),
+    retiredAt: timestamp.nullable(),
+  })
+  .strict();
+const manifestV2Schema = z.object({
   formatVersion: z.literal(2),
   exportedAt: timestamp,
   privacy: z.string(),
@@ -152,7 +262,17 @@ const manifestSchema = z.object({
   findings: z.array(findingSchema).max(100_000),
 });
 
-type ArchiveManifest = z.infer<typeof manifestSchema>;
+const manifestV3Schema = manifestV2Schema.omit({ formatVersion: true }).extend({
+  formatVersion: z.literal(3),
+  chunks: z.array(portableChunkSchema).max(200_000),
+  appliedChatGptHandoffs: z.array(appliedChatGptHandoffSchema).max(10_000),
+});
+const manifestSchema = z.discriminatedUnion('formatVersion', [manifestV2Schema, manifestV3Schema]);
+const internalManifestSchema = manifestV3Schema.extend({
+  chunks: z.array(chunkSchema).max(200_000),
+});
+
+type ArchiveManifest = z.infer<typeof internalManifestSchema>;
 
 const maxEntries = 1000;
 export class ArchiveService {
@@ -213,14 +333,40 @@ export class ArchiveService {
           createdAt: row.createdAt,
         };
       });
-    const manifest: ArchiveManifest = manifestSchema.parse({
-      formatVersion: 2,
+    const appliedChatGptHandoffs = this.rows(
+      `SELECT id, project_id AS projectId, source_revision AS sourceRevision, action, scope,
+              request_digest AS requestDigest, request_json AS requestJson,
+              response_digest AS responseDigest, response_json AS responseJson,
+              applied_revision AS appliedRevision, application_json AS applicationJson,
+              application_digest AS applicationDigest, created_at AS createdAt,
+              imported_at AS importedAt, applied_at AS appliedAt, retired_at AS retiredAt
+       FROM chatgpt_handoffs
+       WHERE project_id = ? AND status = 'applied'
+       ORDER BY created_at, id`,
+      projectId,
+    ).map((value) => {
+      const row = value as Record<string, unknown> & {
+        requestJson: string;
+        responseJson: string;
+        applicationJson: string | null;
+      };
+      const { requestJson, responseJson, applicationJson, ...fields } = row;
+      return {
+        ...fields,
+        request: JSON.parse(requestJson) as unknown,
+        response: JSON.parse(responseJson) as unknown,
+        application: applicationJson ? (JSON.parse(applicationJson) as unknown) : null,
+        legacyApplicationProvenanceUnavailable: applicationJson === null,
+      };
+    });
+    const manifest: ArchiveManifest = internalManifestSchema.parse({
+      formatVersion: 3,
       exportedAt: new Date().toISOString(),
       privacy:
         'Contains local project content and source binaries. Contains no provider credentials.',
       omissions: [
         'Session credentials are never persisted or exported.',
-        'Open ChatGPT handoffs are omitted because their digests bind the original project identifiers.',
+        'Unapplied ChatGPT handoffs are omitted because their digests bind the original project identifiers.',
         'Embeddings are omitted and must be regenerated locally.',
       ],
       project,
@@ -282,16 +428,29 @@ export class ArchiveService {
           proposedPatch: proposedPatchJson ? (JSON.parse(proposedPatchJson) as unknown) : null,
         };
       }),
+      appliedChatGptHandoffs,
+    });
+    const portableManifest = manifestV3Schema.parse({
+      ...manifest,
+      chunks: manifest.chunks.map(toPortableChunk),
     });
     const zip = new JSZip();
-    zip.file('project.json', JSON.stringify(manifest, null, 2));
+    zip.file('project.json', JSON.stringify(portableManifest, null, 2));
     zip.file('prd.md', toMarkdown(project, prd));
     for (const source of archivedSources) {
       const original = sources.find((candidate) => candidate.id === source.id);
       if (!original || !fs.existsSync(original.binaryPath)) {
         throw new ApiError(422, 'archive_source_missing', `Source ${source.name} is unavailable.`);
       }
-      zip.file(source.archivePath, fs.readFileSync(original.binaryPath));
+      const binary = fs.readFileSync(original.binaryPath);
+      if (binary.length !== source.size || sha256(binary) !== source.hash) {
+        throw new ApiError(
+          422,
+          'archive_source_corrupt',
+          `Source ${source.name} no longer matches its verified content hash.`,
+        );
+      }
+      zip.file(source.archivePath, binary);
     }
     return zip.generateAsync({
       type: 'nodebuffer',
@@ -348,7 +507,18 @@ export class ArchiveService {
     if (!parsed.success) {
       throw new ApiError(422, 'invalid_archive', 'The project archive manifest is invalid.');
     }
-    const manifest = parsed.data;
+    const normalized =
+      parsed.data.formatVersion === 2
+        ? { ...parsed.data, formatVersion: 3 as const, appliedChatGptHandoffs: [] }
+        : {
+            ...parsed.data,
+            chunks: restorePortableChunkContent(parsed.data.locations, parsed.data.chunks),
+          };
+    const internal = internalManifestSchema.safeParse(normalized);
+    if (!internal.success) {
+      throw new ApiError(422, 'invalid_archive', 'The project archive manifest is invalid.');
+    }
+    const manifest = internal.data;
     validateManifestReferences(manifest);
     const permittedEntries = new Set([
       'project.json',
@@ -394,6 +564,9 @@ export class ArchiveService {
         ...manifest.prd.sections.map((row) => row.id),
         ...manifest.revisions.flatMap((revision) => revision.snapshot.map((section) => section.id)),
         ...manifest.aiRuns.flatMap((run) => (run.targetSectionId ? [run.targetSectionId] : [])),
+        ...manifest.appliedChatGptHandoffs.flatMap((handoff) =>
+          handoff.request.sections.map((section) => section.id),
+        ),
       ]),
     ]);
     const sourceIds = idMap(manifest.sources.map((row) => row.id));
@@ -402,6 +575,7 @@ export class ArchiveService {
     const runIds = idMap(manifest.aiRuns.map((row) => row.id));
     const citationIds = idMap(manifest.citations.map((row) => row.id));
     const findingIds = idMap(manifest.findings.map((row) => row.id));
+    const handoffIds = idMap(manifest.appliedChatGptHandoffs.map((row) => row.id));
     const timestampNow = new Date().toISOString();
     const createdPaths: string[] = [];
     const sourcePaths = new Map<string, string>();
@@ -410,8 +584,7 @@ export class ArchiveService {
       for (const source of manifest.sources) {
         const extension = safeSourceExtension(source.name, source.mediaType);
         const binaryPath = path.join(config.sourceDir, `${source.hash}${extension}`);
-        if (!fs.existsSync(binaryPath)) {
-          fs.writeFileSync(binaryPath, binaries.get(source.id)!, { mode: 0o600, flag: 'wx' });
+        if (ensureVerifiedBinary(binaryPath, binaries.get(source.id)!, source.hash)) {
           createdPaths.push(binaryPath);
         }
         sourcePaths.set(source.id, binaryPath);
@@ -518,7 +691,7 @@ export class ArchiveService {
             crypto.randomUUID(),
             projectId,
             revision.revision,
-            remapRevisionReason(revision.reason, runIds, findingIds),
+            remapRevisionReason(revision.reason, runIds, findingIds, handoffIds),
             JSON.stringify(
               revision.snapshot.map((section) => ({
                 ...section,
@@ -604,6 +777,40 @@ export class ArchiveService {
             finding.createdAt,
           );
         }
+        const insertHandoff = this.database.sqlite.prepare(
+          `INSERT INTO chatgpt_handoffs
+           (id, project_id, source_revision, action, scope, request_digest, request_json,
+            response_digest, response_json, status, created_at, imported_at, applied_revision,
+            application_json, application_digest, applied_at, retired_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const handoff of manifest.appliedChatGptHandoffs) {
+          const remapped = remapChatGptHandoff(
+            handoff,
+            projectId,
+            handoffIds,
+            sectionIds,
+            citationIds,
+          );
+          insertHandoff.run(
+            remapped.id,
+            projectId,
+            handoff.sourceRevision,
+            handoff.action,
+            handoff.scope,
+            remapped.requestDigest,
+            JSON.stringify(remapped.request),
+            remapped.responseDigest,
+            JSON.stringify(remapped.response),
+            handoff.createdAt,
+            handoff.importedAt,
+            handoff.appliedRevision,
+            remapped.application ? JSON.stringify(remapped.application) : null,
+            remapped.applicationDigest,
+            handoff.appliedAt,
+            handoff.retiredAt,
+          );
+        }
       })();
     } catch (error) {
       for (const binaryPath of createdPaths) {
@@ -663,6 +870,10 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
     manifest.findings.map((row) => row.id),
     'finding',
   );
+  unique(
+    manifest.appliedChatGptHandoffs.map((row) => row.id),
+    'ChatGPT handoff',
+  );
   for (const revision of manifest.revisions) {
     unique(
       revision.snapshot.map((section) => section.id),
@@ -697,8 +908,10 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
   );
   const runs = new Map(manifest.aiRuns.map((row) => [row.id, row]));
   const findingsById = new Map(manifest.findings.map((row) => [row.id, row]));
+  const handoffsById = new Map(manifest.appliedChatGptHandoffs.map((row) => [row.id, row]));
   const citationRuns = new Map(manifest.citations.map((row) => [row.id, row.aiRunId]));
   const citationAvailability = new Map(manifest.citations.map((row) => [row.id, row.available]));
+  const citationsById = new Map(manifest.citations.map((row) => [row.id, row]));
   const citations = new Set(manifest.citations.map((row) => row.id));
   const appliedRevisions = new Set<number>();
   const invalidRun = manifest.aiRuns.some((row) => {
@@ -753,6 +966,66 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
         finding.sourceRevision + 1 !== revision.revision
       );
     }
+    if (revision.reason.startsWith('ChatGPT handoff ')) {
+      const match = revision.reason.match(
+        /^ChatGPT handoff ([0-9a-f-]{36}) (accepted|revised and accepted)$/i,
+      );
+      const handoff = match?.[1] ? handoffsById.get(match[1]) : undefined;
+      return !handoff || handoff.appliedRevision !== revision.revision;
+    }
+    return false;
+  });
+  const invalidFinding = manifest.findings.some((row) => {
+    const run = runs.get(row.aiRunId);
+    const sourceSection = revisionSections.get(row.sourceRevision)?.get(row.targetSectionId);
+    const acceptedRevision = revisionsByNumber.get(row.sourceRevision + 1);
+    if (
+      row.projectId !== manifest.project.id ||
+      !run ||
+      run.action !== 'review' ||
+      !validRevisions.has(row.sourceRevision) ||
+      row.sourceRevision !== run.sourceRevision ||
+      !sourceSection ||
+      row.citationIds.some(
+        (citation) => !citations.has(citation) || citationRuns.get(citation) !== row.aiRunId,
+      ) ||
+      (row.status === 'open' &&
+        row.citationIds.some((citation) => !citationAvailability.get(citation))) ||
+      (row.proposedPatch !== null &&
+        (row.proposedPatch.sectionId !== row.targetSectionId ||
+          row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||
+      (row.status === 'accepted' &&
+        (!row.proposedPatch ||
+          !acceptedRevision ||
+          !validFindingApplication(
+            row,
+            revisionsByNumber.get(row.sourceRevision)!.snapshot,
+            acceptedRevision,
+          )))
+    ) {
+      return true;
+    }
+    if (row.status === 'accepted') {
+      const appliedRevision = row.sourceRevision + 1;
+      if (appliedRevisions.has(appliedRevision)) return true;
+      appliedRevisions.add(appliedRevision);
+    }
+    return false;
+  });
+  const invalidHandoff = manifest.appliedChatGptHandoffs.some((handoff) => {
+    if (
+      !validChatGptHandoff(
+        handoff,
+        manifest.project.id,
+        revisionSections,
+        revisionsByNumber,
+        citationsById,
+      ) ||
+      appliedRevisions.has(handoff.appliedRevision)
+    ) {
+      return true;
+    }
+    appliedRevisions.add(handoff.appliedRevision);
     return false;
   });
   if (
@@ -772,6 +1045,8 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
         sourceHashes.get(row.sourceId) !== row.documentHash,
     ) ||
     invalidRun ||
+    invalidFinding ||
+    invalidHandoff ||
     invalidApplicationReason ||
     manifest.citations.some((row) => {
       const chunk = row.chunkId === null ? undefined : chunks.get(row.chunkId);
@@ -798,39 +1073,155 @@ function validateManifestReferences(manifest: ArchiveManifest): void {
             row.chunkId !== null ||
             row.unavailabilityReason !== 'source_deleted')
       );
-    }) ||
-    manifest.findings.some((row) => {
-      const run = runs.get(row.aiRunId);
-      const sourceSection = revisionSections.get(row.sourceRevision)?.get(row.targetSectionId);
-      const acceptedRevision = revisionsByNumber.get(row.sourceRevision + 1);
-      return (
-        row.projectId !== manifest.project.id ||
-        !run ||
-        run.action !== 'review' ||
-        !validRevisions.has(row.sourceRevision) ||
-        row.sourceRevision !== run.sourceRevision ||
-        !sourceSection ||
-        row.citationIds.some(
-          (citation) => !citations.has(citation) || citationRuns.get(citation) !== row.aiRunId,
-        ) ||
-        (row.status === 'open' &&
-          row.citationIds.some((citation) => !citationAvailability.get(citation))) ||
-        (row.proposedPatch !== null &&
-          (row.proposedPatch.sectionId !== row.targetSectionId ||
-            row.proposedPatch.beforeMarkdown !== sourceSection.body)) ||
-        (row.status === 'accepted' &&
-          (!row.proposedPatch ||
-            !acceptedRevision ||
-            !validFindingApplication(
-              row,
-              revisionsByNumber.get(row.sourceRevision)!.snapshot,
-              acceptedRevision,
-            )))
-      );
     })
   ) {
     invalidReferences();
   }
+}
+
+function validChatGptHandoff(
+  handoff: ArchiveManifest['appliedChatGptHandoffs'][number],
+  projectId: string,
+  revisionSections: Map<number, Map<string, ArchiveManifest['prd']['sections'][number]>>,
+  revisionsByNumber: Map<number, ArchiveManifest['revisions'][number]>,
+  citationsById: Map<string, ArchiveManifest['citations'][number]>,
+): boolean {
+  const request = handoff.request;
+  const response = handoff.response;
+  const requestPayload = requestDigestPayload(request);
+  const sourceSections = revisionSections.get(handoff.sourceRevision);
+  const appliedRevision = revisionsByNumber.get(handoff.appliedRevision);
+  if (
+    handoff.projectId !== projectId ||
+    handoff.sourceRevision !== request.sourceRevision ||
+    handoff.action !== request.action ||
+    handoff.scope !== request.scope ||
+    request.handoffId !== handoff.id ||
+    request.projectId !== projectId ||
+    handoff.requestDigest !== request.requestDigest ||
+    request.requestDigest !== sha256(JSON.stringify(requestPayload)) ||
+    response.handoffId !== handoff.id ||
+    response.projectId !== projectId ||
+    response.sourceRevision !== handoff.sourceRevision ||
+    response.requestDigest !== request.requestDigest ||
+    handoff.responseDigest !== sha256(JSON.stringify(response)) ||
+    handoff.appliedRevision !== handoff.sourceRevision + 1 ||
+    !sourceSections ||
+    !appliedRevision
+  ) {
+    return false;
+  }
+  const requestSectionIds = request.sections.map((section) => section.id);
+  const requestEvidenceIds = request.evidence.map((evidence) => evidence.id);
+  if (
+    new Set(requestSectionIds).size !== requestSectionIds.length ||
+    new Set(requestEvidenceIds).size !== requestEvidenceIds.length ||
+    request.sections.some((section) => {
+      const source = sourceSections.get(section.id);
+      return (
+        !source ||
+        section.title !== source.title ||
+        section.markdown !== source.body ||
+        section.preimageHash !== sha256(source.body)
+      );
+    }) ||
+    request.evidence.some((evidence) => {
+      const citation = citationsById.get(evidence.id);
+      return (
+        !citation ||
+        evidence.sourceName !== citation.sourceName ||
+        evidence.locator !== citation.locator ||
+        evidence.excerpt !== citation.excerpt
+      );
+    })
+  ) {
+    return false;
+  }
+  const allowedSections = new Map(
+    request.sections.map((section) => [section.id, section.preimageHash]),
+  );
+  const allowedEvidence = new Set(requestEvidenceIds);
+  const responsePatchSections = response.patches.map((patch) => patch.sectionId);
+  if (
+    new Set(responsePatchSections).size !== responsePatchSections.length ||
+    response.patches.some(
+      (patch) =>
+        allowedSections.get(patch.sectionId) !== patch.preimageHash ||
+        patch.evidenceIds.some((evidenceId) => !allowedEvidence.has(evidenceId)),
+    ) ||
+    response.findings.some(
+      (finding) =>
+        !allowedSections.has(finding.sectionId) ||
+        finding.evidenceIds.some((evidenceId) => !allowedEvidence.has(evidenceId)),
+    )
+  ) {
+    return false;
+  }
+  if (handoff.application === null) {
+    return (
+      handoff.legacyApplicationProvenanceUnavailable &&
+      handoff.applicationDigest === null &&
+      appliedRevision.reason.startsWith(`ChatGPT handoff ${handoff.id} `)
+    );
+  }
+  const application = handoff.application;
+  if (
+    handoff.legacyApplicationProvenanceUnavailable ||
+    handoff.applicationDigest !== sha256(JSON.stringify(application)) ||
+    application.sourceRevision !== handoff.sourceRevision ||
+    application.appliedRevision !== handoff.appliedRevision ||
+    !sameSectionShape([...sourceSections.values()], appliedRevision.snapshot)
+  ) {
+    return false;
+  }
+  const responsePatches = new Map(response.patches.map((patch) => [patch.sectionId, patch]));
+  const appliedSectionIds = application.patches.map((patch) => patch.sectionId);
+  if (
+    new Set(appliedSectionIds).size !== appliedSectionIds.length ||
+    application.patches.some((patch) => {
+      const proposed = responsePatches.get(patch.sectionId);
+      const source = sourceSections.get(patch.sectionId);
+      const applied = appliedRevision.snapshot.find((section) => section.id === patch.sectionId);
+      return (
+        !proposed ||
+        !source ||
+        !applied ||
+        patch.preimageHash !== proposed.preimageHash ||
+        patch.preimageHash !== sha256(source.body) ||
+        patch.proposedAfterMarkdown !== proposed.afterMarkdown ||
+        patch.appliedAfterMarkdown !== applied.body ||
+        JSON.stringify(patch.evidenceIds) !== JSON.stringify(proposed.evidenceIds)
+      );
+    }) ||
+    [...sourceSections.values()].some((source) => {
+      const applied = appliedRevision.snapshot.find((section) => section.id === source.id);
+      return !appliedSectionIds.includes(source.id) && applied?.body !== source.body;
+    })
+  ) {
+    return false;
+  }
+  const revised = application.patches.some(
+    (patch) => patch.proposedAfterMarkdown !== patch.appliedAfterMarkdown,
+  );
+  return (
+    appliedRevision.reason ===
+    `ChatGPT handoff ${handoff.id} ${revised ? 'revised and accepted' : 'accepted'}`
+  );
+}
+
+function requestDigestPayload(request: z.infer<typeof chatGptHandoffRequestSchema>) {
+  return {
+    formatVersion: request.formatVersion,
+    kind: request.kind,
+    handoffId: request.handoffId,
+    projectId: request.projectId,
+    sourceRevision: request.sourceRevision,
+    action: request.action,
+    scope: request.scope,
+    instruction: request.instruction,
+    sections: request.sections,
+    evidence: request.evidence,
+  };
 }
 
 function validAiApplication(
@@ -939,6 +1330,7 @@ function remapRevisionReason(
   reason: string,
   runIds: Map<string, string>,
   findingIds: Map<string, string>,
+  handoffIds: Map<string, string>,
 ): string {
   const run = reason.match(/^AI run ([0-9a-f-]{36}) (accepted|revised and accepted)$/i);
   if (run?.[1]) {
@@ -950,7 +1342,80 @@ function remapRevisionReason(
     const mapped = findingIds.get(finding[1]);
     if (mapped) return `Review finding ${mapped} ${finding[2]}`;
   }
+  const handoff = reason.match(
+    /^ChatGPT handoff ([0-9a-f-]{36}) (accepted|revised and accepted)$/i,
+  );
+  if (handoff?.[1]) {
+    const mapped = handoffIds.get(handoff[1]);
+    if (mapped) return `ChatGPT handoff ${mapped} ${handoff[2]}`;
+  }
   return reason;
+}
+
+function remapChatGptHandoff(
+  handoff: ArchiveManifest['appliedChatGptHandoffs'][number],
+  projectId: string,
+  handoffIds: Map<string, string>,
+  sectionIds: Map<string, string>,
+  citationIds: Map<string, string>,
+) {
+  const mappedId = handoffIds.get(handoff.id)!;
+  const requestPayload = {
+    formatVersion: 1 as const,
+    kind: 'prd-genie-request' as const,
+    handoffId: mappedId,
+    projectId,
+    sourceRevision: handoff.request.sourceRevision,
+    action: handoff.request.action,
+    scope: handoff.request.scope,
+    instruction: handoff.request.instruction,
+    sections: handoff.request.sections.map((section) => ({
+      ...section,
+      id: sectionIds.get(section.id)!,
+    })),
+    evidence: handoff.request.evidence.map((evidence) => ({
+      ...evidence,
+      id: citationIds.get(evidence.id)!,
+    })),
+  };
+  const requestDigest = sha256(JSON.stringify(requestPayload));
+  const request = { ...requestPayload, requestDigest };
+  const response = {
+    ...handoff.response,
+    handoffId: mappedId,
+    projectId,
+    requestDigest,
+    patches: handoff.response.patches.map((patch) => ({
+      ...patch,
+      sectionId: sectionIds.get(patch.sectionId)!,
+      evidenceIds: patch.evidenceIds.map((evidenceId) => citationIds.get(evidenceId)!),
+    })),
+    findings: handoff.response.findings.map((finding) => ({
+      ...finding,
+      sectionId: sectionIds.get(finding.sectionId)!,
+      evidenceIds: finding.evidenceIds.map((evidenceId) => citationIds.get(evidenceId)!),
+    })),
+  };
+  const responseDigest = sha256(JSON.stringify(response));
+  const application = handoff.application
+    ? {
+        ...handoff.application,
+        patches: handoff.application.patches.map((patch) => ({
+          ...patch,
+          sectionId: sectionIds.get(patch.sectionId)!,
+          evidenceIds: patch.evidenceIds.map((evidenceId) => citationIds.get(evidenceId)!),
+        })),
+      }
+    : null;
+  return {
+    id: mappedId,
+    request,
+    requestDigest,
+    response,
+    responseDigest,
+    application,
+    applicationDigest: application ? sha256(JSON.stringify(application)) : null,
+  };
 }
 
 function remapRunOutput(
@@ -992,6 +1457,44 @@ function sameSections(
 
 function invalidReferences(): never {
   throw new ApiError(422, 'invalid_archive', 'The project archive contains invalid references.');
+}
+
+function restorePortableChunkContent(
+  locations: z.infer<typeof locationSchema>[],
+  chunks: z.infer<typeof portableChunkSchema>[],
+): z.infer<typeof chunkSchema>[] {
+  const locationsById = new Map(locations.map((location) => [location.id, location]));
+  return chunks.map((chunk) => {
+    const location = locationsById.get(chunk.locationId);
+    if (
+      !location ||
+      location.endOffset < location.startOffset ||
+      chunk.endOffset < chunk.startOffset ||
+      chunk.startOffset < location.startOffset ||
+      chunk.endOffset > location.endOffset
+    ) {
+      invalidReferences();
+    }
+    const relativeStart = chunk.startOffset - location.startOffset;
+    const relativeEnd = chunk.endOffset - location.startOffset;
+    const content = location.content.slice(relativeStart, relativeEnd);
+    if (content.length !== chunk.endOffset - chunk.startOffset) invalidReferences();
+    return { ...chunk, content };
+  });
+}
+
+function toPortableChunk(chunk: z.infer<typeof chunkSchema>): z.infer<typeof portableChunkSchema> {
+  return {
+    id: chunk.id,
+    projectId: chunk.projectId,
+    sourceId: chunk.sourceId,
+    locationId: chunk.locationId,
+    ordinal: chunk.ordinal,
+    tokenCount: chunk.tokenCount,
+    startOffset: chunk.startOffset,
+    endOffset: chunk.endOffset,
+    documentHash: chunk.documentHash,
+  };
 }
 
 function unique(values: string[], label: string): void {
@@ -1044,7 +1547,7 @@ function safeSourceExtension(name: string, mediaType: string): string {
   return expected;
 }
 
-function sha256(value: Buffer): string {
+function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 

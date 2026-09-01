@@ -10,7 +10,7 @@ The standalone PRD Genie application still connects to model providers through a
 
 The plugin runs in the ChatGPT conversation. Users must share only the PRD sections and evidence they are authorized to send to OpenAI. The standalone application does not receive ChatGPT cookies, account tokens, unrelated conversation history, billing data, or subscription details.
 
-Exporting a handoff is an intentional disclosure to ChatGPT and OpenAI by the user. It is outside the standalone provider request path. The exported request and imported response are retained locally as handoff records until the user deletes the handoff or deletes the project.
+Exporting a handoff is an intentional disclosure to ChatGPT and OpenAI by the user. It is outside the standalone provider request path. Unapplied handoffs can be deleted completely. Applied handoffs can be retired from the interface, but their request, response, exact accepted application, and digests remain local revision provenance until the project is deleted.
 
 The first integration is skills-only. It does not operate a remote PRD Genie service. An optional local MCP adapter may be considered later, but it will remain disabled by default and will stage proposals only.
 
@@ -29,6 +29,8 @@ It will not include keys, cookies, source binaries, filesystem paths, environmen
 ChatGPT returns a versioned response. The local app validates the handoff ID, request digest, project, revision, section allowlist, preimage hashes, evidence allowlist, size, and replay state. Imported output is staged as a proposal and is never silently applied.
 
 Findings returned through a ChatGPT handoff remain inside that handoff record. They do not automatically enter the direct-provider review queue.
+
+Portable archives include applied handoffs and recompute their digests after identifier remapping. Unapplied handoffs are excluded. Handoffs applied before RC.3 did not record the exact selected or user-revised patch, so an archive preserves those legacy records with an explicit provenance-unavailable marker rather than inventing detail.
 
 ## Availability
 

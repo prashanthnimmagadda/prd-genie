@@ -5,7 +5,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { ApiError } from '../../shared/api.js';
 import type { ProviderKind } from '../../shared/types.js';
-import { validateProviderEndpoint } from './endpoints.js';
+import { createGuardedProviderFetch, validateProviderEndpoint } from './endpoints.js';
 import type { ProviderCredential, SessionStore } from './session-store.js';
 
 interface ModelItem {
@@ -25,7 +25,10 @@ export type ProviderErrorCode =
   | 'provider_unavailable';
 
 export class ProviderService {
-  constructor(private readonly sessions: SessionStore) {}
+  constructor(
+    private readonly sessions: SessionStore,
+    private readonly guardedFetch = createGuardedProviderFetch(),
+  ) {}
 
   model(sessionId: string | undefined, provider: ProviderKind, modelId: string): LanguageModel {
     const credential = this.sessions.resolve(sessionId, provider);
@@ -49,6 +52,7 @@ export class ProviderService {
           baseURL,
           apiKey: credential.apiKey,
           headers: credential.headers,
+          fetch: this.guardedFetch,
           supportsStructuredOutputs: true,
         })(modelId);
       }
@@ -58,6 +62,7 @@ export class ProviderService {
           name: 'ollama',
           baseURL,
           apiKey: credential.apiKey ?? 'ollama',
+          fetch: this.guardedFetch,
           supportsStructuredOutputs: true,
         })(modelId);
       }
@@ -74,8 +79,13 @@ export class ProviderService {
       throw new ApiError(401, 'missing_credentials', 'Configure a provider key for this session.');
     }
     const request = modelRequest(provider, credential);
-    const response = await fetch(request.url, {
+    const requestFetch =
+      provider === 'openai-compatible' || provider === 'ollama'
+        ? this.guardedFetch
+        : globalThis.fetch;
+    const response = await requestFetch(request.url, {
       headers: request.headers,
+      redirect: 'manual',
       signal: signal ?? AbortSignal.timeout(10_000),
     }).catch((error: unknown) => {
       throw normalizeProviderError(error);

@@ -500,6 +500,7 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
 for (const width of [320, 375, 414, 768]) {
   test(`keeps editing and provider setup available at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 820 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
     if (await page.getByLabel('Project name').isVisible()) {
       await page.getByLabel('Project name').fill(`Responsive ${width}`);
@@ -511,5 +512,15 @@ for (const width of [320, 375, 414, 768]) {
     await page.getByRole('button', { name: 'Configure model provider' }).click();
     await expect(page.getByRole('heading', { name: 'Model provider' })).toBeVisible();
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.keyboard.press('Tab');
+    const focused = page.locator(':focus');
+    await expect(focused).toBeVisible();
+    const focusStyle = await focused.evaluate((element) => {
+      const style = window.getComputedStyle(element);
+      return { outline: style.outlineStyle, boxShadow: style.boxShadow };
+    });
+    expect(focusStyle.outline !== 'none' || focusStyle.boxShadow !== 'none').toBe(true);
   });
 }

@@ -17,9 +17,11 @@ Run the complete local gate:
 npm run ci:offline
 ```
 
-The gate runs the content and history guard, formatting, lint, strict TypeScript, coverage, production build, a cache-only dependency audit, license inventory, SBOM generation, and Chromium, Firefox, and WebKit end-to-end tests. It writes `reports/offline-ci.json`.
+The gate runs the content and history guard, formatting, lint, strict TypeScript, coverage, production build, a cache-only dependency audit, license inventory, SBOM generation, and Chromium, Firefox, and WebKit end-to-end tests. It writes `reports/offline-ci.json` and `reports/browser-e2e.json`.
 
-The cache-only audit proves what the local npm advisory cache knows. It does not prove that the advisory data is current. A release owner may run a fresh `npm audit` separately only after authorizing disclosure of the dependency manifest to the npm advisory service, then record that result alongside the offline report.
+The cache-only audit proves what the local npm advisory cache knows. It does not prove that the advisory data is current. Run `npm run audit:record` with approved network access to record separate current production and full dependency results in `reports/dependency-audit.json`.
+
+Run `npm run gate:node` once under Node.js 22 and once under Node.js 24. These quick exact-SHA gates write `reports/node-22.json` and `reports/node-24.json`. A completed manual browser and source review is recorded with `npm run accessibility:record`; the command validates an exact-SHA review input before writing `reports/accessibility-review.json`.
 
 For a faster pre-commit check that omits browsers:
 
@@ -34,6 +36,7 @@ Before merge, a maintainer records:
 - Exact Git SHA and clean working-tree state.
 - Node version, operating system, and architecture.
 - `reports/offline-ci.json`.
+- Separate browser, accessibility, Node 22, Node 24, and online dependency reports.
 - Coverage summary.
 - Dependency audit result.
 - SBOM and license report hashes.

@@ -1,10 +1,16 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const evidenceOutput = process.env.PRD_GENIE_BROWSER_EVIDENCE_RAW;
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? [['html'], ['github']] : 'list',
+  reporter: evidenceOutput
+    ? [['list'], ['json', { outputFile: evidenceOutput }]]
+    : process.env.CI
+      ? [['html'], ['github']]
+      : 'list',
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'on-first-retry',

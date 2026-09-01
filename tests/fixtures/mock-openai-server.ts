@@ -18,7 +18,7 @@ const server = createServer(async (request, response) => {
         prompt.match(
           /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): Problem/i,
         )?.[1] ?? 'Problem';
-      const chunkId = prompt.match(/source chunk=\\?"([^"\\]+)/i)?.[1];
+      const chunkId = prompt.match(/chunkId\\?":\\?"([^"\\]+)/i)?.[1];
       completion(response, {
         summary:
           'The Problem section lacks a clear consequence for the affected user, which weakens prioritisation. Add the observed review delay without introducing an unsupported business claim.',

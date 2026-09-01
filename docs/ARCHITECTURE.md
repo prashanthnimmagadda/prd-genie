@@ -22,7 +22,9 @@ The persistence model assumes one server process owns an application data direct
 
 Each PRD is an ordered list of stable-ID sections. A save creates a monotonically increasing project revision and an immutable JSON snapshot. AI findings and handoffs target a section ID and source revision. A later save marks open findings and outstanding handoffs stale.
 
-Portable archive format version 2 contains project metadata, the current PRD, revision snapshots, source metadata and binaries, extracted locations, chunks, AI runs, durable citation snapshots, and review findings. Session credentials, embeddings, and open ChatGPT handoffs are omitted. Restore validates paths, entry counts, expanded byte limits, hashes, reference integrity, and schema before an atomic identifier-remapped insert. Embeddings are regenerated locally after restore.
+Portable archive format version 3 contains project metadata, the current PRD, revision snapshots, source metadata and binaries, extracted locations, reconstructable chunk metadata, AI runs, durable citation snapshots, review findings, and applied ChatGPT handoffs. Exact application records retain the proposed and accepted text for RC.3 handoffs. Applied handoffs created before that record existed carry an explicit legacy-provenance limitation. Session credentials, embeddings, and unapplied ChatGPT handoffs are omitted. Restore accepts format version 2, validates paths, entry counts, expanded byte limits, hashes, reference integrity, and schema, then performs an atomic identifier-remapped insert and recomputes handoff digests. Embeddings are regenerated locally after restore.
+
+Before applying pending SQLite migrations to an existing database, the server creates a mode-0600 snapshot beside the database with a `.pre-<migration>.backup` suffix. Keep that snapshot until the upgraded application and archives are verified. Rolling back application code after RC.3 data has been written requires restoring both the matching database backup and source directory backup; an older binary must not be treated as a schema downgrade tool.
 
 ## Retrieval
 
@@ -53,6 +55,7 @@ The ChatGPT path is a separate manual handoff, not provider API access. A handof
 - Schema validation at route boundaries.
 - Upload size and file-signature validation.
 - HTTPS or loopback HTTP for custom model endpoints.
+- Public-address validation, DNS pinning, and redirect rejection for remote custom endpoints.
 - Credential redaction in logs and errors.
 - Content Security Policy with local scripts, styles, and fonts only.
 - No telemetry.

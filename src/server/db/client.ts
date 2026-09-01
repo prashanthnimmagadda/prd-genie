@@ -32,6 +32,7 @@ function migrationFiles(): Array<{ name: string; path: string }> {
 
 export function createDatabase(databasePath = config.databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+  const existingDatabase = databasePath !== ':memory:' && fs.existsSync(databasePath);
   const sqlite = new Database(databasePath);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
@@ -51,8 +52,11 @@ export function createDatabase(databasePath = config.databasePath) {
       }>
     ).map((row) => row.name),
   );
-  for (const migration of migrationFiles()) {
-    if (applied.has(migration.name)) continue;
+  const pendingMigrations = migrationFiles().filter((migration) => !applied.has(migration.name));
+  if (existingDatabase && pendingMigrations.length > 0) {
+    createPreMigrationBackup(sqlite, databasePath, pendingMigrations[0]!.name);
+  }
+  for (const migration of pendingMigrations) {
     const sql = fs.readFileSync(migration.path, 'utf8');
     sqlite.transaction(() => {
       sqlite.exec(sql);
@@ -84,6 +88,62 @@ export function createDatabase(databasePath = config.databasePath) {
   };
   drainPendingFileDeletions(database);
   return database;
+}
+
+function createPreMigrationBackup(
+  sqlite: Database.Database,
+  databasePath: string,
+  firstPendingMigration: string,
+): void {
+  const backupPath = `${databasePath}.pre-${firstPendingMigration}.backup`;
+  const expectedMigrations = migrationNames(sqlite);
+  if (fs.existsSync(backupPath)) {
+    if (validMigrationBackup(backupPath, expectedMigrations, firstPendingMigration)) {
+      fs.chmodSync(backupPath, 0o600);
+      return;
+    }
+    fs.unlinkSync(backupPath);
+  }
+  const temporaryPath = `${backupPath}.${crypto.randomUUID()}.tmp`;
+  try {
+    sqlite.prepare('VACUUM INTO ?').run(temporaryPath);
+    fs.chmodSync(temporaryPath, 0o600);
+    if (!validMigrationBackup(temporaryPath, expectedMigrations, firstPendingMigration)) {
+      throw new Error('The pre-migration database backup failed integrity validation.');
+    }
+    fs.renameSync(temporaryPath, backupPath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
+}
+
+function migrationNames(sqlite: Database.Database): string[] {
+  return (
+    sqlite.prepare('SELECT name FROM app_migrations ORDER BY name').all() as Array<{ name: string }>
+  ).map((row) => row.name);
+}
+
+function validMigrationBackup(
+  backupPath: string,
+  expectedMigrations: string[],
+  firstPendingMigration: string,
+): boolean {
+  let backup: Database.Database | undefined;
+  try {
+    backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+    const integrity = backup.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
+    const migrations = migrationNames(backup);
+    return (
+      integrity.length === 1 &&
+      integrity[0]?.quick_check === 'ok' &&
+      !migrations.includes(firstPendingMigration) &&
+      JSON.stringify(migrations) === JSON.stringify(expectedMigrations)
+    );
+  } catch {
+    return false;
+  } finally {
+    backup?.close();
+  }
 }
 
 export type AppDatabase = ReturnType<typeof createDatabase>;
