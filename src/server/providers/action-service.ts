@@ -177,7 +177,12 @@ export class ActionService {
               const safeProposedMarkdown =
                 item.proposedMarkdown === null ||
                 containsNumericTargetProposal(item.proposedMarkdown) ||
-                containsNewNumericValue(item.proposedMarkdown, trustedReviewContent)
+                containsNewNumericValue(item.proposedMarkdown, trustedReviewContent) ||
+                containsUnsupportedProposalClaim(
+                  item.proposedMarkdown,
+                  [scopedContent, ...evidence.map((citation) => citation.excerpt)],
+                  request.instruction ?? '',
+                )
                   ? null
                   : item.proposedMarkdown;
               const patch: SectionPatch | null =

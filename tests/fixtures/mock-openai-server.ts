@@ -30,16 +30,14 @@ const server = createServer(async (request, response) => {
             rationale:
               'The evidence establishes repeated draft loss and reconstruction time, but the user consequence is not explicit.',
             citationChunkIds: chunkId ? [chunkId] : [],
-            proposedMarkdown:
-              'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.',
+            proposedMarkdown: 'Eight of twelve product managers lost an unsaved PRD draft.',
           },
         ],
       });
       return;
     }
 
-    const proposal =
-      'Product managers lose unsaved PRD work while preparing stakeholder reviews, forcing them to reconstruct decisions and delaying review readiness.';
+    const proposal = 'Eight of twelve product managers lost an unsaved PRD draft.';
     if (body.stream === true) {
       streamCompletion(response, proposal);
     } else {

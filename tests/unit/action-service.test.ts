@@ -536,6 +536,40 @@ describe('ActionService', () => {
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
+  it('withholds an unsupported review patch while retaining the inspectable finding', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The Problem section needs clearer evidence attribution.',
+        findings: [
+          {
+            category: 'evidence',
+            severity: 'warning',
+            targetSectionId: sectionId,
+            rationale: 'The current claim should cite the supplied interview.',
+            citationChunkIds: ['chunk-id'],
+            proposedMarkdown:
+              'Five participants lost unsaved drafts, forcing launch delays for every team.',
+          },
+        ],
+      },
+    });
+
+    const response = await service.run(
+      'session',
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('clearer evidence attribution');
+    expect(repository.storeFinding).toHaveBeenCalledWith(
+      expect.objectContaining({ proposedPatch: null }),
+    );
+  });
+
   it('fails a local review after three malformed responses without storing findings', async () => {
     aiMocks.generateText.mockResolvedValue({ text: 'not json' });
     const response = await service.run(

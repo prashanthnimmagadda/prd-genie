@@ -46,16 +46,20 @@ test('exports current AI evidence immediately and clears handoff selection bound
   request,
 }, testInfo) => {
   testInfo.setTimeout(60_000);
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
   const projectName = `Evidence handoff ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const alternateName = `Evidence alternate ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const created = await request.post('/api/projects', {
     data: { name: projectName, description: 'Synthetic evidence handoff fixture' },
   });
-  const project = (await created.json()) as { id: string };
+  const createdBody = await created.text();
+  expect(created.ok(), `${created.status()} ${createdBody}`).toBe(true);
+  const project = JSON.parse(createdBody) as { id: string };
   const alternate = await request.post('/api/projects', {
     data: { name: alternateName, description: 'Synthetic project switch fixture' },
   });
-  expect(created.ok()).toBe(true);
   expect(alternate.ok()).toBe(true);
 
   await page.goto('/');
@@ -264,7 +268,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByRole('status')).toContainText('proposal changed');
   await page.unroute('**/api/projects/*/ai-runs/*/apply');
   await expect(page.getByLabel('Section content').first()).toContainText(
-    'Product managers lose unsaved PRD work',
+    'Eight of twelve product managers lost an unsaved PRD draft',
   );
   const persisted = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
     sections: Array<{ title: string; body: string }>;
