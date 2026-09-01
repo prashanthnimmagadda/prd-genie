@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDatabase } from '../../src/server/db/client.js';
 import { createDatabase } from '../../src/server/db/client.js';
 import { Repository } from '../../src/server/db/repository.js';
@@ -72,6 +72,29 @@ describe('ProposalService', () => {
     expect(repository.getPrd(project.id).sections[0]?.body).toBe('');
     expect(repository.listRevisions(project.id)).toHaveLength(1);
     expect(repository.getAiRun(project.id, runId).appliedRevision).toBeNull();
+  });
+
+  it('rejects a proposal with deleted evidence before reading or changing the PRD', () => {
+    const getPrd = vi.fn();
+    const saveAiRunApplication = vi.fn();
+    const staleRepository = {
+      getAiRun: vi.fn(() => ({
+        status: 'completed',
+        outputText: 'Evidence-backed replacement.',
+        appliedRevision: null,
+        action: 'rewrite',
+        citations: [{ available: false }],
+      })),
+      getPrd,
+      saveAiRunApplication,
+    };
+    const staleProposals = new ProposalService(staleRepository as unknown as Repository);
+
+    expect(() => staleProposals.apply('project', 'run', 0)).toThrow(
+      'evidence that is no longer available',
+    );
+    expect(getPrd).not.toHaveBeenCalled();
+    expect(saveAiRunApplication).not.toHaveBeenCalled();
   });
 
   it('replaces only a unique selected span and rejects changed selections', () => {

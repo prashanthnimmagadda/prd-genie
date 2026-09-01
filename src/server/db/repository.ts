@@ -734,6 +734,22 @@ export class Repository {
     reason: string,
   ): PrdDocument {
     return this.database.sqlite.transaction(() => {
+      const unavailableCitation = this.database.sqlite
+        .prepare(
+          `SELECT 1
+           FROM citations
+           INNER JOIN ai_runs ON ai_runs.id = citations.ai_run_id
+           WHERE citations.ai_run_id = ? AND ai_runs.project_id = ? AND citations.available != 1
+           LIMIT 1`,
+        )
+        .get(runId, projectId);
+      if (unavailableCitation) {
+        throw new ApiError(
+          409,
+          'stale_evidence',
+          'This proposal cites evidence that is no longer available.',
+        );
+      }
       const saved = this.savePrd(projectId, expectedRevision, sections, reason);
       this.markAiRunApplied(projectId, runId, saved.revision);
       return saved;

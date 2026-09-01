@@ -127,7 +127,7 @@ export class ActionService {
                               prompt:
                                 attempt === 0
                                   ? prompt
-                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array.`,
+                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims.`,
                               providerOptions: localProviderOptions(request.provider),
                               abortSignal: signal,
                               maxOutputTokens: 3000,
@@ -159,6 +159,35 @@ export class ActionService {
                   invalidStructuredReview();
                 }
                 resolvedFindings = resolveReviewFindings(validated.data, prd, request, citationIds);
+                const reviewPassages = [
+                  scopedContent,
+                  ...evidence.map((citation) => citation.excerpt),
+                ];
+                if (
+                  containsUnsupportedReviewClaim(
+                    validated.data.summary,
+                    reviewPassages,
+                    request.instruction ?? '',
+                  ) ||
+                  resolvedFindings.some(({ item, section }) =>
+                    containsUnsupportedReviewClaim(
+                      item.rationale,
+                      [
+                        `${section.title} section ${section.body.trim() ? 'contains the supplied text' : 'is empty'}`,
+                        section.body,
+                        ...item.citationChunkIds.flatMap((chunkId) => {
+                          const citation = evidence.find(
+                            (candidate) => candidate.chunkId === chunkId,
+                          );
+                          return citation ? [citation.excerpt] : [];
+                        }),
+                      ],
+                      request.instruction ?? '',
+                    ),
+                  )
+                ) {
+                  invalidStructuredReview();
+                }
                 output = validated.data;
                 break;
               } catch (error) {
@@ -504,6 +533,129 @@ export function containsUnsupportedProposalClaim(
   );
 }
 
+const reviewAnalysisVocabulary = [
+  'acceptance',
+  'accepted',
+  'address',
+  'approved',
+  'assumption',
+  'attribution',
+  'available',
+  'cannot',
+  'citation',
+  'cited',
+  'claim',
+  'clarity',
+  'clearer',
+  'complete',
+  'completeness',
+  'consequence',
+  'content',
+  'context',
+  'contradiction',
+  'criterion',
+  'criteria',
+  'current',
+  'define',
+  'dependency',
+  'describe',
+  'document',
+  'documented',
+  'does',
+  'empty',
+  'evidence',
+  'fail',
+  'finding',
+  'found',
+  'gap',
+  'goal',
+  'identify',
+  'incomplete',
+  'interview',
+  'journey',
+  'lack',
+  'leave',
+  'local',
+  'locally',
+  'longer',
+  'loss',
+  'measure',
+  'measurable',
+  'missing',
+  'need',
+  'needs',
+  'no',
+  'non-goal',
+  'not',
+  'objective',
+  'observed',
+  'one',
+  'open',
+  'outcome',
+  'paragraph',
+  'prevent',
+  'problem',
+  'question',
+  'rationale',
+  'requirement',
+  'research',
+  'removed',
+  'review',
+  'reviewer',
+  'risk',
+  'rollout',
+  'scope',
+  'section',
+  'solution',
+  'source',
+  'specification',
+  'state',
+  'stated',
+  'statement',
+  'success',
+  'supplied',
+  'supplies',
+  'support',
+  'supported',
+  'target',
+  'testable',
+  'text',
+  'tie',
+  'trace',
+  'unavailable',
+  'unclear',
+  'unsupported',
+  'validate',
+  'verification',
+  'verify',
+  'wording',
+  'grounded',
+  'running',
+].join(' ');
+
+export function containsUnsupportedReviewClaim(
+  generated: string,
+  trustedPassages: string[],
+  authorizedInstruction = '',
+): boolean {
+  const instructionTokens = claimClauses(authorizedInstruction).flat();
+  const vocabularyTokens = claimClauses(reviewAnalysisVocabulary).flat();
+  const excludedTokens = instructionExclusionTokens(authorizedInstruction);
+  const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
+  const supportingClauses = [[], ...trustedClauses].map((clause) => [
+    ...new Set([...instructionTokens, ...vocabularyTokens, ...clause]),
+  ]);
+  const trustedTokens = new Set(supportingClauses.flat());
+  return claimClauses(generated).some(
+    (generatedClause) =>
+      generatedClause.some((token) => excludedTokens.has(token)) ||
+      generatedClause.some((token) => !trustedTokens.has(token)) ||
+      !supportingClauses.some((supportingClause) =>
+        generatedClause.every((token) => supportingClause.includes(token)),
+      ),
+  );
+}
+
 function instructionExclusionTokens(value: string): Set<string> {
   const noise = new Set(['add', 'claim', 'effect', 'include', 'invent', 'mention', 'requirement']);
   const excluded = new Set<string>();
@@ -742,7 +894,7 @@ function reviewSystemPrompt(): string {
     'Use only section IDs and citation chunk IDs supplied in the prompt.',
     'Every factual, causal, normative, and qualifying statement must be supported by the scoped PRD or a retrieved source excerpt. Before labeling a claim unsupported, compare it against every supplied excerpt, including exact numbers and measurements. Do not invent metrics, targets, thresholds, risks, assumptions, impact, consistency, or urgency. When content is missing, identify the gap only. Never propose an example, sample value, or numeric target. Do not use the phrases e.g., for example, for instance, or such as unless that exact content is supplied. Avoid words such as consistent, significant, critical, severe, or urgent unless trusted evidence uses that exact qualifier for the same fact.',
     'A proposed change is a preview and must never be described as already applied.',
-    'The summary must use one to three complete sentences naming the affected section, its specific defect, and why it matters. Do not use vague labels, examples, or restate the review request.',
+    'The summary must use one to three complete sentences naming the affected section and its specific observable defect. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims. Do not use vague labels, examples, or restate the review request.',
     'Return no more than three findings. Put the highest-priority findings first and do not create more than one finding per category.',
     'Keep the summary under 120 words and each rationale under 120 words.',
     'A proposed Markdown patch must contain only a concise replacement for its target section. Use null when a safe concise patch is not possible.',

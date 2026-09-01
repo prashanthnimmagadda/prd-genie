@@ -120,14 +120,20 @@ describe('database migrations', () => {
                  'dismissed', ?)`,
       )
       .run(findingId, runId, projectId, sectionId, JSON.stringify([citationId]), timestamp);
+    const backupPath = `${databasePath}.pre-0002_durable_evidence.backup`;
+    legacy.prepare('VACUUM INTO ?').run(backupPath);
+    const retryProjectId = crypto.randomUUID();
+    legacy
+      .prepare(
+        `INSERT INTO projects
+         (id, name, description, selected_provider, selected_model, created_at, updated_at)
+         VALUES (?, 'Added before retry', '', NULL, NULL, ?, ?)`,
+      )
+      .run(retryProjectId, timestamp, timestamp);
     legacy.close();
-
-    const incompleteBackupPath = `${databasePath}.pre-0002_durable_evidence.backup`;
-    fs.writeFileSync(incompleteBackupPath, 'incomplete backup');
 
     const upgraded = createDatabase(databasePath);
     try {
-      const backupPath = `${databasePath}.pre-0002_durable_evidence.backup`;
       expect(fs.existsSync(backupPath)).toBe(true);
       expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
       const backup = new Database(backupPath, { readonly: true });
@@ -136,6 +142,9 @@ describe('database migrations', () => {
           backup.prepare("PRAGMA table_info('chatgpt_handoffs')").all() as Array<{ name: string }>
         ).some((row) => row.name === 'application_json'),
       ).toBe(false);
+      expect(backup.prepare('SELECT name FROM projects WHERE id = ?').get(retryProjectId)).toEqual({
+        name: 'Added before retry',
+      });
       backup.close();
       const citation = upgraded.sqlite
         .prepare(
@@ -210,6 +219,27 @@ describe('database migrations', () => {
         upgraded.sqlite.prepare('SELECT status FROM review_findings WHERE id = ?').get(findingId),
       ).toEqual({ status: 'dismissed' });
       expect(upgraded.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally {
+      upgraded.close();
+    }
+  });
+
+  it('replaces a corrupt pre-migration sidecar with a valid current snapshot', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-migration-corrupt-'));
+    directories.push(directory);
+    const databasePath = path.join(directory, 'upgrade.sqlite');
+    const existing = new Database(databasePath);
+    existing.exec('CREATE TABLE app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    existing.close();
+    const backupPath = `${databasePath}.pre-0000_initial.backup`;
+    fs.writeFileSync(backupPath, 'incomplete backup');
+
+    const upgraded = createDatabase(databasePath);
+    try {
+      const backup = new Database(backupPath, { readonly: true });
+      expect(backup.pragma('quick_check', { simple: true })).toBe('ok');
+      expect(backup.prepare('SELECT name FROM app_migrations').all()).toEqual([]);
+      backup.close();
     } finally {
       upgraded.close();
     }

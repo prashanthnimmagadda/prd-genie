@@ -40,6 +40,7 @@ import {
   containsNewNumericValue,
   containsNumericTargetProposal,
   containsUnsupportedProposalClaim,
+  containsUnsupportedReviewClaim,
   normalizeReviewSummary,
   parseOllamaReviewJson,
 } from '../../src/server/providers/action-service.js';
@@ -576,6 +577,86 @@ describe('ActionService', () => {
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
+  it('retries an Ollama review with unsupported cited claims before persisting', async () => {
+    aiMocks.generateText
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'The cited research proves every team will miss its release.',
+          findings: [
+            {
+              category: 'risk',
+              severity: 'blocking',
+              targetSectionId: sectionId,
+              rationale: 'Every user must delay launch because draft loss causes missed releases.',
+              citationChunkIds: ['chunk-id'],
+              proposedMarkdown: null,
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'The Problem section lacks cited support.',
+          findings: [
+            {
+              category: 'evidence',
+              severity: 'warning',
+              targetSectionId: sectionId,
+              rationale: 'Tie the current claim to the supplied research evidence.',
+              citationChunkIds: ['chunk-id'],
+              proposedMarkdown: null,
+            },
+          ],
+        }),
+      });
+
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    expect(body).not.toContain('miss its release');
+    expect(body).toContain('lacks cited support');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
+      'Every summary and rationale clause must be traceable',
+    );
+    expect(repository.storeFinding).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unsupported hosted review claims without storing findings', async () => {
+    aiMocks.generateText.mockResolvedValue({
+      output: {
+        summary: 'The cited research proves every team will miss its release.',
+        findings: [
+          {
+            category: 'risk',
+            severity: 'blocking',
+            targetSectionId: sectionId,
+            rationale: 'Every user must delay launch because draft loss causes missed releases.',
+            citationChunkIds: ['chunk-id'],
+            proposedMarkdown: null,
+          },
+        ],
+      },
+    });
+
+    const response = await service.run(
+      'session',
+      request({
+        action: 'review',
+        scope: 'document',
+        targetSectionId: undefined,
+        provider: 'openai',
+      }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('malformed_output');
+    expect(repository.storeFinding).not.toHaveBeenCalled();
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', 'malformed_output');
+  });
+
   it('withholds an unsupported review patch while retaining the inspectable finding', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
@@ -585,7 +666,7 @@ describe('ActionService', () => {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The current claim should cite the supplied interview.',
+            rationale: 'The current claim lacks cited support from the supplied interview.',
             citationChunkIds: ['chunk-id'],
             proposedMarkdown:
               'Five participants lost unsaved drafts, forcing launch delays for every team.',
@@ -971,6 +1052,26 @@ describe('proposal grounding guard', () => {
         'Do not invent percentages, time savings, targets, or financial effects.',
       ),
     ).toBe(true);
+  });
+});
+
+describe('structured review grounding guard', () => {
+  it('rejects unsupported causal, universal, and obligation claims despite cited evidence', () => {
+    expect(
+      containsUnsupportedReviewClaim(
+        'Every user must delay launch because draft loss causes missed releases.',
+        ['People lose unsaved drafts.', 'Five participants lost unsaved drafts.'],
+      ),
+    ).toBe(true);
+  });
+
+  it('allows observable review language grounded in one supplied passage', () => {
+    expect(
+      containsUnsupportedReviewClaim(
+        'The current claim needs cited support from the supplied research evidence.',
+        ['Five participants lost unsaved drafts.'],
+      ),
+    ).toBe(false);
   });
 });
 

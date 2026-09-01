@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { sources, sourceLocations, chunks } from '../../src/server/db/schema.js';
 import type { ChatGptHandoffResponse } from '../../src/shared/types.js';
 import { config } from '../../src/server/config.js';
+import { ProposalService } from '../../src/server/providers/proposal-service.js';
 
 describe('Repository', () => {
   let database: AppDatabase;
@@ -614,6 +615,28 @@ describe('Repository', () => {
       unavailabilityReason: null,
     });
     repository.completeAiRun(runId, undefined, 'Historical answer');
+    const proposalRunId = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: repository.getPrd(project.id).sections[0]!.id,
+    });
+    repository.storeCitation({
+      aiRunId: proposalRunId,
+      sourceId,
+      locationId,
+      chunkId,
+      sourceName: 'deleted-source.txt',
+      locator: 'Paragraph 1',
+      excerpt: 'Evidence',
+      evidenceStatus: 'supported',
+      available: true,
+      unavailabilityReason: null,
+    });
+    repository.completeAiRun(proposalRunId, undefined, 'Evidence-backed proposal.');
     const exportedHandoff = repository.createChatGptHandoff({
       projectId: project.id,
       revision: 0,
@@ -675,6 +698,27 @@ describe('Repository', () => {
     expect(repository.listFindings(project.id)).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: openFinding.id, status: 'stale' })]),
     );
+    expect(() => new ProposalService(repository).apply(project.id, proposalRunId, 0)).toThrow(
+      'evidence that is no longer available',
+    );
+    expect(repository.getPrd(project.id).revision).toBe(0);
+    expect(repository.getAiRun(project.id, proposalRunId).appliedRevision).toBeNull();
+    const currentSections = repository.getPrd(project.id).sections.map((section) => ({
+      ...section,
+      body:
+        section.id === repository.getPrd(project.id).sections[0]!.id ? 'Rejected.' : section.body,
+    }));
+    expect(() =>
+      repository.saveAiRunApplication(
+        project.id,
+        proposalRunId,
+        0,
+        currentSections,
+        'Synthetic apply after source deletion',
+      ),
+    ).toThrow('evidence that is no longer available');
+    expect(repository.getPrd(project.id).revision).toBe(0);
+    expect(repository.listRevisions(project.id)).toHaveLength(1);
     database.sqlite
       .prepare("UPDATE review_findings SET status = 'open' WHERE id = ?")
       .run(openFinding.id);

@@ -21,6 +21,13 @@ export class ProposalService {
     if (run.action === 'ask' || run.action === 'review') {
       throw new ApiError(400, 'proposal_not_applicable', 'This AI action cannot change the PRD.');
     }
+    if (run.citations.some((citation) => !citation.available)) {
+      throw new ApiError(
+        409,
+        'stale_evidence',
+        'This proposal cites evidence that is no longer available.',
+      );
+    }
     const current = this.repository.getPrd(projectId);
     if (current.revision !== expectedRevision || run.sourceRevision !== expectedRevision) {
       throw new ApiError(409, 'stale_proposal', 'This proposal targets an older PRD revision.');

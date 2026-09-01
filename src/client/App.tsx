@@ -518,6 +518,7 @@ function Workbench({
       (proposalContext.action !== 'draft' && proposalContext.action !== 'rewrite') ||
       proposalContext.sourceRevision !== prd.revision ||
       !output.trim() ||
+      citations.some((citation) => !citation.available) ||
       dirty ||
       documentMutationRef.current
     )
@@ -1324,6 +1325,11 @@ function Workbench({
                             ? `. Selected text: "${truncateText(proposalContext.selectionText)}"`
                             : ''}
                         </p>
+                        {citations.some((citation) => !citation.available) && (
+                          <p className="proposal-provenance" role="alert">
+                            This proposal cannot be applied because its source evidence was deleted.
+                          </p>
+                        )}
                         {!busy && (
                           <details className="proposal-revision">
                             <summary>Revise proposal before applying</summary>
@@ -1344,6 +1350,7 @@ function Workbench({
                             disabled={
                               !proposalContext.runId ||
                               proposalContext.sourceRevision !== prd.revision ||
+                              citations.some((citation) => !citation.available) ||
                               busy ||
                               dirty ||
                               documentMutationBusy
@@ -1873,7 +1880,8 @@ function Workbench({
                               ? {
                                   runId:
                                     run.appliedRevision === null &&
-                                    run.sourceRevision === prd.revision
+                                    run.sourceRevision === prd.revision &&
+                                    run.citations.every((citation) => citation.available)
                                       ? run.id
                                       : null,
                                   sourceRevision: run.sourceRevision,

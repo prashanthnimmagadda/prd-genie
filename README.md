@@ -80,7 +80,7 @@ For an AI action, the server sends only:
 2. The selected PRD scope.
 3. Up to eight retrieved source excerpts within the action budget.
 
-Before provider setup, the interface shows the provider hostname and these data classes. Session keys are held in server memory behind an opaque, HttpOnly, same-site cookie. They expire after eight idle hours and disappear on server restart, browser-session expiry, or explicit clearing.
+Before provider setup, the interface shows the provider hostname and these data classes. Session keys are held in server memory behind an opaque, HttpOnly, same-site cookie. Closing the browser removes the session cookie and access to its entry. The in-memory entry is removed on explicit clearing, server restart, or the next access after eight idle hours.
 
 Keys are not written to SQLite, browser storage, URLs, logs, analytics, exports, or error responses. There is no telemetry and there are no third-party runtime scripts or fonts.
 

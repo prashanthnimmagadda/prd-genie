@@ -5,7 +5,10 @@ import { execFileSync } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/server/app.js';
 import { config } from '../src/server/config.js';
-import { containsNumericTargetProposal } from '../src/server/providers/action-service.js';
+import {
+  containsNumericTargetProposal,
+  containsUnsupportedReviewClaim,
+} from '../src/server/providers/action-service.js';
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
 
@@ -328,6 +331,18 @@ try {
           ) &&
           (finding.citations.length > 0 ||
             (reviewProject.sectionBodies.get(finding.targetSectionId)?.trim() ?? '') === ''),
+      ),
+    groundsReviewProse:
+      !containsUnsupportedReviewClaim(review.text, [
+        ...reviewProject.sectionBodies.values(),
+        ...findings.flatMap((finding) => finding.citations.map((citation) => citation.excerpt)),
+      ]) &&
+      findings.every(
+        (finding) =>
+          containsUnsupportedReviewClaim(finding.rationale, [
+            reviewProject.sectionBodies.get(finding.targetSectionId) ?? '',
+            ...finding.citations.map((citation) => citation.excerpt),
+          ]) === false,
       ),
     avoidsUnsupportedReviewQualifiers: !containsUnsupportedQualifier(
       `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings

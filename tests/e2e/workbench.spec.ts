@@ -155,6 +155,41 @@ test('exports current AI evidence immediately and clears handoff selection bound
   await page.getByRole('button', { name: 'Delete handoff-evidence.md' }).click();
   await expect(page.getByText('handoff-evidence.md', { exact: true })).toHaveCount(0);
   await expect(page.locator('.handoff-row').first()).toContainText('stale');
+  const runsAfterDeletion = (await (
+    await request.get(`/api/projects/${project.id}/ai-runs`)
+  ).json()) as {
+    runs: Array<{
+      id: string;
+      action: string;
+      sourceRevision: number;
+      outputText: string | null;
+    }>;
+  };
+  const deletedEvidenceProposal = runsAfterDeletion.runs.find((run) => run.action === 'rewrite');
+  expect(deletedEvidenceProposal).toBeTruthy();
+  const rejectedApply = await request.post(
+    `/api/projects/${project.id}/ai-runs/${deletedEvidenceProposal!.id}/apply`,
+    {
+      data: {
+        revision: deletedEvidenceProposal!.sourceRevision,
+        proposedMarkdown: deletedEvidenceProposal!.outputText,
+      },
+    },
+  );
+  expect(rejectedApply.status()).toBe(409);
+  expect((await rejectedApply.json()) as { error: { code: string } }).toMatchObject({
+    error: { code: 'stale_evidence' },
+  });
+  const deletedEvidenceRun = page
+    .locator('.history-row')
+    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'synthetic-prd-model' })
+    .first();
+  await deletedEvidenceRun.getByRole('button', { name: 'Inspect' }).click();
+  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeDisabled();
+  await expect(
+    page.getByText('This proposal cannot be applied because its source evidence was deleted.'),
+  ).toBeVisible();
 });
 
 test('completes the provider, evidence, proposal, review, undo, and export workflow', async ({
@@ -326,7 +361,9 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
 
   await page.getByRole('tab', { name: 'review' }).click();
   await page.getByRole('button', { name: 'Run review' }).click();
-  await expect(page.getByText('The evidence establishes repeated draft loss')).toBeVisible();
+  await expect(
+    page.getByText('The cited evidence states reconstruction took 23 minutes on average.'),
+  ).toBeVisible();
   await page.getByRole('tab', { name: 'history' }).click();
   const durableReview = page
     .locator('.history-row')

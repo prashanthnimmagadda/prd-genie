@@ -37,6 +37,8 @@ Session credentials are held in server memory. They are not persisted in:
 - Exports.
 - Error payloads.
 
+The opaque cookie is session-only. Closing the browser removes access to its in-memory entry. The server removes that entry on explicit clearing, restart, or the next attempted access after eight idle hours.
+
 Environment variables can provide fallback credentials. Protect the process environment and terminal history.
 
 ## Telemetry

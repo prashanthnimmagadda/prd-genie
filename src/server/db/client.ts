@@ -97,13 +97,6 @@ function createPreMigrationBackup(
 ): void {
   const backupPath = `${databasePath}.pre-${firstPendingMigration}.backup`;
   const expectedMigrations = migrationNames(sqlite);
-  if (fs.existsSync(backupPath)) {
-    if (validMigrationBackup(backupPath, expectedMigrations, firstPendingMigration)) {
-      fs.chmodSync(backupPath, 0o600);
-      return;
-    }
-    fs.unlinkSync(backupPath);
-  }
   const temporaryPath = `${backupPath}.${crypto.randomUUID()}.tmp`;
   try {
     sqlite.prepare('VACUUM INTO ?').run(temporaryPath);
@@ -111,6 +104,8 @@ function createPreMigrationBackup(
     if (!validMigrationBackup(temporaryPath, expectedMigrations, firstPendingMigration)) {
       throw new Error('The pre-migration database backup failed integrity validation.');
     }
+    // Always replace an earlier sidecar. A previous failed upgrade can leave a valid but stale
+    // backup behind, and the user may have written more data before retrying the upgrade.
     fs.renameSync(temporaryPath, backupPath);
   } finally {
     if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);

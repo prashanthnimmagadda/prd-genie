@@ -24,6 +24,9 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Rejected cross-project evidence lookups and repaired corrupt reused content-addressed binaries.
 - Prevented synchronous provider construction failures from leaving orphaned AI runs.
 - Added fault-injection proof for review, direct AI, and ChatGPT application transactions.
+- Rejected structured-review summaries and rationales that are not traceable to the reviewed PRD or cited evidence.
+- Replaced valid but stale pre-migration sidecars with a fresh current-database snapshot on every upgrade attempt.
+- Prevented direct AI proposals from being applied after any cited source evidence is deleted.
 - Pinned GitHub workflow actions and the Node container base to immutable identities.
 - Corrected security reporting, archive retention, rollback, and release-evidence documentation.
 
