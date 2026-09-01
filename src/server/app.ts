@@ -44,7 +44,11 @@ export async function buildApp(
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'"],
+        styleSrc: [
+          "'self'",
+          "'unsafe-hashes'",
+          "'sha256-PlumsSlvJ7vvWzjqibGAYKq92O3y/4JTxWWsWJvyUYA='",
+        ],
         fontSrc: ["'self'", 'data:'],
         imgSrc: ["'self'", 'data:', 'blob:'],
         connectSrc: ["'self'"],

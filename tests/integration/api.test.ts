@@ -62,6 +62,15 @@ describe('API', () => {
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
   });
 
+  it('permits only the pinned scroll-container style without enabling arbitrary inline CSS', async () => {
+    const response = await app.inject({ method: 'GET', url: '/' });
+    const policy = response.headers['content-security-policy'];
+    expect(response.statusCode).toBe(200);
+    expect(policy).toContain("style-src 'self' 'unsafe-hashes'");
+    expect(policy).toContain("'sha256-PlumsSlvJ7vvWzjqibGAYKq92O3y/4JTxWWsWJvyUYA='");
+    expect(policy).not.toContain("'unsafe-inline'");
+  });
+
   it('rejects DNS-rebinding hosts and cross-origin browser requests', async () => {
     const rebound = await app.inject({
       method: 'GET',
