@@ -1003,5 +1003,8 @@ describe('review numeric grounding', () => {
     ).toBe(true);
     expect(containsNumericTargetProposal('Success criterion: under 23 minutes.')).toBe(true);
     expect(containsNumericTargetProposal('The evidence reports a 23 minute baseline.')).toBe(false);
+    expect(
+      containsNumericTargetProposal('The product addresses the observed 23-minute baseline.'),
+    ).toBe(false);
   });
 });

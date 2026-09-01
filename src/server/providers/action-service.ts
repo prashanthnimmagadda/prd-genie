@@ -400,7 +400,7 @@ export function containsNewNumericValue(generated: string, trustedContent: strin
 export function containsNumericTargetProposal(value: string): boolean {
   if (extractNumericValues(value).length === 0) return false;
   return (
-    /\b(?:add|set|define|recommend|propose|reduce|increase)\w*\b.{0,100}\b(?:target|threshold|success criterion|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\b/i.test(
+    /\b(?:adds?|added|adding|sets?|setting|defines?|defined|defining|recommends?|recommended|recommending|proposes?|proposed|proposing|reduces?|reduced|reducing|increases?|increased|increasing)\b.{0,100}\b(?:target|threshold|success criterion|seconds?|minutes?|hours?|days?|weeks?|months?|years?)\b/i.test(
       value,
     ) ||
     /\b(?:target|threshold|success criterion)\b.{0,100}(?:[≤≥<>%]|\b(?:under|over|at least|at most|no more than|less than|greater than)\b|\d)/i.test(
