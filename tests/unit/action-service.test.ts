@@ -497,7 +497,47 @@ describe('ActionService', () => {
     expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
       'The previous response was invalid.',
     );
+    expect(
+      promptTaskData((aiMocks.generateText.mock.calls[0]?.[0] as { prompt: string }).prompt),
+    ).toMatchObject({ allowedCitationChunkIds: ['chunk-id'] });
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries an Ollama review with an unknown citation using an explicit allowlist', async () => {
+    const finding = {
+      category: 'evidence',
+      severity: 'warning',
+      targetSectionId: sectionId,
+      rationale: 'The claim needs the supplied interview evidence.',
+      proposedMarkdown: null,
+    } as const;
+    aiMocks.generateText
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'The Problem section lacks a cited source.',
+          findings: [{ ...finding, citationChunkIds: ['invented-chunk'] }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'The Problem section lacks a cited source.',
+          findings: [{ ...finding, citationChunkIds: ['chunk-id'] }],
+        }),
+      });
+
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('lacks a cited source');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
+      'The only allowed citationChunkIds are ["chunk-id"]',
+    );
+    expect(repository.storeFinding).toHaveBeenCalledWith(
+      expect.objectContaining({ citationIds: ['stored-citation'] }),
+    );
   });
 
   it('retries unsafe Ollama review language before persisting findings', async () => {

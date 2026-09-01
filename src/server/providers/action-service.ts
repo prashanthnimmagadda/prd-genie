@@ -113,6 +113,7 @@ export class ActionService {
             let output: GeneratedReview | undefined;
             let resolvedFindings: ResolvedReviewFinding[] | undefined;
             const attempts = request.provider === 'ollama' ? 3 : 1;
+            const allowedCitationChunkIds = [...citationIds.keys()];
             for (let attempt = 0; attempt < attempts; attempt += 1) {
               try {
                 const generatedReview =
@@ -126,7 +127,7 @@ export class ActionService {
                               prompt:
                                 attempt === 0
                                   ? prompt
-                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. Use only supplied section IDs and citation chunk IDs.`,
+                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array.`,
                               providerOptions: localProviderOptions(request.provider),
                               abortSignal: signal,
                               maxOutputTokens: 3000,
@@ -662,6 +663,7 @@ function buildPrompt(
     scopedPrdContent: scopedContent,
     sectionBoundary: boundaryGuidance,
     userInstruction: instruction?.trim() ?? '',
+    allowedCitationChunkIds: citations.map((citation) => citation.chunkId),
     evidence: citations.map((citation) => ({
       chunkId: citation.chunkId,
       sourceName: citation.sourceName,
