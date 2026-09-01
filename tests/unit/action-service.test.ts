@@ -841,7 +841,7 @@ describe('ActionService', () => {
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
-  it('canonicalizes only empty-section facts after the final Ollama review retry', async () => {
+  it('canonicalizes only empty-section facts on the first Ollama review response', async () => {
     repository.getPrd.mockReturnValueOnce({
       ...prd,
       sections: [{ ...prd.sections[0]!, body: '' }],
@@ -869,7 +869,7 @@ describe('ActionService', () => {
       new AbortController().signal,
     );
     const body = await response.text();
-    expect(aiMocks.generateText).toHaveBeenCalledTimes(3);
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
     expect(body).toContain('The Problem section is empty.');
     expect(body).not.toContain('prevent every team');
     expect(body).not.toContain('project failure');

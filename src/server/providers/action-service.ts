@@ -179,7 +179,7 @@ export class ActionService {
                   request,
                   citationIds,
                 );
-                if (request.provider === 'ollama' && attempt === attempts - 1) {
+                if (request.provider === 'ollama') {
                   normalizedReview = canonicalizeEmptySectionReview(
                     normalizedReview,
                     resolvedFindings,
