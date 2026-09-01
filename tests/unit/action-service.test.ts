@@ -500,6 +500,42 @@ describe('ActionService', () => {
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
 
+  it('retries unsafe Ollama review language before persisting findings', async () => {
+    aiMocks.generateText
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'Critical gaps exist in the Problem section.',
+          findings: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'The Problem section lacks a cited consequence.',
+          findings: [
+            {
+              category: 'evidence',
+              severity: 'warning',
+              targetSectionId: sectionId,
+              rationale: 'The current text does not state an observed consequence.',
+              citationChunkIds: [],
+              proposedMarkdown: null,
+            },
+          ],
+        }),
+      });
+
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    expect(body).not.toContain('Critical gaps');
+    expect(body).toContain('lacks a cited consequence');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
+    expect(repository.storeFinding).toHaveBeenCalledTimes(1);
+  });
+
   it('fails a local review after three malformed responses without storing findings', async () => {
     aiMocks.generateText.mockResolvedValue({ text: 'not json' });
     const response = await service.run(

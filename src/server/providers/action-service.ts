@@ -105,6 +105,11 @@ export class ActionService {
               data: { stage: 'review', detail: 'Reviewing the current revision' },
             });
             const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
+            const trustedReviewContent = [
+              scopedContent,
+              request.instruction ?? '',
+              ...evidence.map((item) => item.excerpt),
+            ].join('\n');
             let output: GeneratedReview | undefined;
             let resolvedFindings: ResolvedReviewFinding[] | undefined;
             const attempts = request.provider === 'ollama' ? 3 : 1;
@@ -149,6 +154,9 @@ export class ActionService {
                   findings: generatedReview.data.findings,
                 });
                 if (!validated.success) invalidStructuredReview();
+                if (containsUnsafeReviewLanguage(validated.data)) {
+                  invalidStructuredReview();
+                }
                 resolvedFindings = resolveReviewFindings(validated.data, prd, request, citationIds);
                 output = validated.data;
                 break;
@@ -165,10 +173,6 @@ export class ActionService {
               }
             }
             if (!output || !resolvedFindings) invalidStructuredReview();
-            const trustedReviewContent = [
-              scopedContent,
-              ...evidence.map((item) => item.excerpt),
-            ].join('\n');
             for (const { item, section } of resolvedFindings) {
               const safeProposedMarkdown =
                 item.proposedMarkdown === null ||
@@ -396,6 +400,18 @@ export function containsNumericTargetProposal(value: string): boolean {
     /\b(?:target|threshold|success criterion)\b.{0,100}(?:[≤≥<>%]|\b(?:under|over|at least|at most|no more than|less than|greater than)\b|\d)/i.test(
       value,
     )
+  );
+}
+
+function containsUnsafeReviewLanguage(output: GeneratedReview): boolean {
+  const combined = [
+    output.summary,
+    ...output.findings.flatMap((finding) => [finding.rationale, finding.proposedMarkdown ?? '']),
+  ].join('\n');
+  return (
+    /\b(?:consistent|significant|critical|severe|urgent|always|guarantee|mandatory|revenue)\b/i.test(
+      combined,
+    ) || /(?:\be\.g\.|\b(?:for example|for instance|such as)\b)/i.test(combined)
   );
 }
 
