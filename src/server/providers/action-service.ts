@@ -225,7 +225,6 @@ export class ActionService {
             const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
             const trustedProposalPassages = [
               scopedContent,
-              request.instruction ?? '',
               ...evidence
                 .filter((item) => !isInstructionLikeEvidence(item.excerpt))
                 .map((item) => item.excerpt),
@@ -240,14 +239,20 @@ export class ActionService {
                   prompt:
                     attempt === 0
                       ? prompt
-                      : `${prompt}\n\nThe previous proposal introduced content that was not traceable to one supplied passage. Use only content words and claims present together in userInstruction, the scoped PRD, or one source excerpt. Do not combine a modal, causal, impact, risk, or recommendation phrase from one fact with another.`,
+                      : `${prompt}\n\nThe previous proposal introduced content that was not traceable to one supplied passage. For each clause, copy factual wording from userInstruction plus one scoped PRD or source passage. Do not paraphrase with synonyms or combine a modal, causal, impact, risk, or recommendation phrase from one fact with another.`,
                   providerOptions: localProviderOptions(request.provider),
                   abortSignal: signal,
                   maxOutputTokens: outputTokenLimit(request.action, request.scope),
                   temperature: attempt * 0.2,
                 });
                 const candidate = normalizeGeneratedProposal(prd, request, result.text);
-                if (containsUnsupportedProposalClaim(candidate, trustedProposalPassages)) {
+                if (
+                  containsUnsupportedProposalClaim(
+                    candidate,
+                    trustedProposalPassages,
+                    request.instruction ?? '',
+                  )
+                ) {
                   throw new ApiError(
                     502,
                     'malformed_output',
@@ -400,6 +405,7 @@ const nonClaimWords = new Set([
   'be',
   'been',
   'before',
+  'based',
   'being',
   'but',
   'by',
@@ -453,14 +459,19 @@ const irregularClaimTokens = new Map([
 export function containsUnsupportedProposalClaim(
   generated: string,
   trustedPassages: string[],
+  authorizedInstruction = '',
 ): boolean {
   const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
-  const trustedTokens = new Set(trustedClauses.flat());
+  const instructionTokens = claimClauses(authorizedInstruction).flat();
+  const supportingClauses = [instructionTokens, ...trustedClauses].map((clause) => [
+    ...new Set([...instructionTokens, ...clause]),
+  ]);
+  const trustedTokens = new Set(supportingClauses.flat());
   return claimClauses(generated).some(
     (generatedClause) =>
       generatedClause.some((token) => !trustedTokens.has(token)) ||
-      !trustedClauses.some((trustedClause) =>
-        generatedClause.every((token) => trustedClause.includes(token)),
+      !supportingClauses.some((supportingClause) =>
+        generatedClause.every((token) => supportingClause.includes(token)),
       ),
   );
 }

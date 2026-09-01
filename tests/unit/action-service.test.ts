@@ -811,6 +811,25 @@ describe('proposal grounding guard', () => {
   ])('allows a claim traceable to one supplied passage: %s', (generated, trusted) => {
     expect(containsUnsupportedProposalClaim(generated, trusted)).toBe(false);
   });
+
+  it('allows authorized instruction wording to qualify one supporting passage', () => {
+    expect(
+      containsUnsupportedProposalClaim(
+        'Study A has a 42 percent activation rate.',
+        ['Study A observed that 42 percent of users completed setup.'],
+        'State the observed activation rate.',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not pool modal wording across unrelated evidence passages', () => {
+    expect(
+      containsUnsupportedProposalClaim('Exports must include secrets.', [
+        'Admins must authenticate.',
+        'Exports include secrets.',
+      ]),
+    ).toBe(true);
+  });
 });
 
 describe('review numeric grounding', () => {
