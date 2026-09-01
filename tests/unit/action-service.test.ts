@@ -622,7 +622,54 @@ describe('ActionService', () => {
     expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
       'Every summary and rationale clause must be traceable',
     );
+    expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
+      'The <exact section title> section is empty.',
+    );
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
+  });
+
+  it('canonicalizes only empty-section facts after the final Ollama review retry', async () => {
+    repository.getPrd.mockReturnValueOnce({
+      ...prd,
+      sections: [{ ...prd.sections[0]!, body: '' }],
+    });
+    retrieval.retrieve.mockResolvedValue([]);
+    aiMocks.generateText.mockResolvedValue({
+      text: JSON.stringify({
+        summary: 'The empty Problem section will prevent every team from shipping.',
+        findings: [
+          {
+            category: 'risk',
+            severity: 'blocking',
+            targetSectionId: sectionId,
+            rationale: 'The missing problem guarantees severe project failure.',
+            citationChunkIds: [],
+            proposedMarkdown: 'Every team loses revenue.',
+          },
+        ],
+      }),
+    });
+
+    const response = await service.run(
+      'session',
+      request({ action: 'review', scope: 'document', targetSectionId: undefined }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(3);
+    expect(body).toContain('The Problem section is empty.');
+    expect(body).not.toContain('prevent every team');
+    expect(body).not.toContain('project failure');
+    expect(body).not.toContain('loses revenue');
+    expect(repository.storeFinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'completeness',
+        severity: 'warning',
+        rationale: 'The Problem section is empty.',
+        citationIds: [],
+        proposedPatch: null,
+      }),
+    );
   });
 
   it('rejects unsupported hosted review claims without storing findings', async () => {

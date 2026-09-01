@@ -180,6 +180,7 @@ try {
         id: string;
         revision: number;
         sectionIds: Set<string>;
+        sectionTitles: Map<string, string>;
         sectionBodies: Map<string, string>;
       }
     | undefined;
@@ -268,6 +269,7 @@ try {
         id: project.id,
         revision: appliedDocument.revision,
         sectionIds: new Set(initial.sections.map((section) => section.id)),
+        sectionTitles: new Map(initial.sections.map((section) => [section.id, section.title])),
         sectionBodies: new Map(
           appliedDocument.sections.map((section) => [section.id, section.body]),
         ),
@@ -334,16 +336,26 @@ try {
       ),
     groundsReviewProse:
       !containsUnsupportedReviewClaim(review.text, [
-        ...reviewProject.sectionBodies.values(),
+        [...reviewProject.sectionIds]
+          .map((sectionId) => {
+            const title = reviewProject.sectionTitles.get(sectionId) ?? '';
+            const body = reviewProject.sectionBodies.get(sectionId) ?? '';
+            return `## ${title}\n${body}`;
+          })
+          .join('\n\n'),
         ...findings.flatMap((finding) => finding.citations.map((citation) => citation.excerpt)),
       ]) &&
-      findings.every(
-        (finding) =>
+      findings.every((finding) => {
+        const title = reviewProject.sectionTitles.get(finding.targetSectionId) ?? '';
+        const body = reviewProject.sectionBodies.get(finding.targetSectionId) ?? '';
+        return (
           containsUnsupportedReviewClaim(finding.rationale, [
-            reviewProject.sectionBodies.get(finding.targetSectionId) ?? '',
+            `${title} section ${body.trim() ? 'contains the supplied text' : 'is empty'}`,
+            body,
             ...finding.citations.map((citation) => citation.excerpt),
-          ]) === false,
-      ),
+          ]) === false
+        );
+      }),
     avoidsUnsupportedReviewQualifiers: !containsUnsupportedQualifier(
       `${review.text} ${findings.map((finding) => finding.rationale).join(' ')} ${findings
         .map((finding) => finding.proposedPatch?.afterMarkdown ?? '')

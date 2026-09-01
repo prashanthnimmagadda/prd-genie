@@ -127,7 +127,7 @@ export class ActionService {
                               prompt:
                                 attempt === 0
                                   ? prompt
-                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims.`,
+                                  : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims. For a finding about an empty section, use only "The <exact section title> section is empty." as its rationale and use an empty citationChunkIds array. Do not explain consequences, solutions, audiences, needs, obstacles, outcomes, project hazards, or what the empty section prevents, leaves, or omits.`,
                               providerOptions: localProviderOptions(request.provider),
                               abortSignal: signal,
                               maxOutputTokens: 3000,
@@ -155,17 +155,35 @@ export class ActionService {
                   findings: generatedReview.data.findings,
                 });
                 if (!validated.success) invalidStructuredReview();
-                if (containsUnsafeReviewLanguage(validated.data)) {
+                let normalizedReview = validated.data;
+                resolvedFindings = resolveReviewFindings(
+                  normalizedReview,
+                  prd,
+                  request,
+                  citationIds,
+                );
+                if (request.provider === 'ollama' && attempt === attempts - 1) {
+                  normalizedReview = canonicalizeEmptySectionReview(
+                    normalizedReview,
+                    resolvedFindings,
+                  );
+                  resolvedFindings = resolveReviewFindings(
+                    normalizedReview,
+                    prd,
+                    request,
+                    citationIds,
+                  );
+                }
+                if (containsUnsafeReviewLanguage(normalizedReview)) {
                   invalidStructuredReview();
                 }
-                resolvedFindings = resolveReviewFindings(validated.data, prd, request, citationIds);
                 const reviewPassages = [
                   scopedContent,
                   ...evidence.map((citation) => citation.excerpt),
                 ];
                 if (
                   containsUnsupportedReviewClaim(
-                    validated.data.summary,
+                    normalizedReview.summary,
                     reviewPassages,
                     request.instruction ?? '',
                   ) ||
@@ -188,7 +206,7 @@ export class ActionService {
                 ) {
                   invalidStructuredReview();
                 }
-                output = validated.data;
+                output = normalizedReview;
                 break;
               } catch (error) {
                 if (
@@ -381,6 +399,30 @@ function invalidStructuredReview(): never {
     'malformed_output',
     'The provider returned an invalid structured review.',
   );
+}
+
+function canonicalizeEmptySectionReview(
+  output: GeneratedReview,
+  resolvedFindings: ResolvedReviewFinding[],
+): GeneratedReview {
+  if (
+    resolvedFindings.length === 0 ||
+    resolvedFindings.some(({ section }) => section.body.trim().length > 0)
+  ) {
+    return output;
+  }
+  const findings = resolvedFindings.map(({ item, section }) => ({
+    ...item,
+    category: 'completeness' as const,
+    severity: 'warning' as const,
+    rationale: `The ${section.title} section is empty.`,
+    citationChunkIds: [],
+    proposedMarkdown: null,
+  }));
+  return {
+    summary: normalizeReviewSummary(findings.map((finding) => finding.rationale).join(' ')),
+    findings,
+  };
 }
 
 function resolveReviewFindings(
@@ -895,6 +937,7 @@ function reviewSystemPrompt(): string {
     'Every factual, causal, normative, and qualifying statement must be supported by the scoped PRD or a retrieved source excerpt. Before labeling a claim unsupported, compare it against every supplied excerpt, including exact numbers and measurements. Do not invent metrics, targets, thresholds, risks, assumptions, impact, consistency, or urgency. When content is missing, identify the gap only. Never propose an example, sample value, or numeric target. Do not use the phrases e.g., for example, for instance, or such as unless that exact content is supplied. Avoid words such as consistent, significant, critical, severe, or urgent unless trusted evidence uses that exact qualifier for the same fact.',
     'A proposed change is a preview and must never be described as already applied.',
     'The summary must use one to three complete sentences naming the affected section and its specific observable defect. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims. Do not use vague labels, examples, or restate the review request.',
+    'For a finding about an empty section, state only that the exact section title is empty and use an empty citationChunkIds array. Do not explain consequences, solutions, audiences, needs, obstacles, outcomes, project hazards, or what the empty section prevents, leaves, or omits.',
     'Return no more than three findings. Put the highest-priority findings first and do not create more than one finding per category.',
     'Keep the summary under 120 words and each rationale under 120 words.',
     'A proposed Markdown patch must contain only a concise replacement for its target section. Use null when a safe concise patch is not possible.',
