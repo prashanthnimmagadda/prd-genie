@@ -195,6 +195,10 @@ export class ActionService {
                   invalidStructuredReview();
                 }
                 const reviewPassages = [
+                  ...prd.sections.map(
+                    (section) =>
+                      `${section.title} section ${section.body.trim() ? 'contains the supplied text' : 'is empty'}`,
+                  ),
                   scopedContent,
                   ...evidence.map((citation) => citation.excerpt),
                 ];
@@ -516,6 +520,7 @@ const nonClaimWords = new Set([
   'are',
   'as',
   'at',
+  'about',
   'be',
   'been',
   'before',
@@ -592,104 +597,51 @@ export function containsUnsupportedProposalClaim(
   );
 }
 
-const reviewAnalysisVocabulary = [
-  'acceptance',
-  'accepted',
-  'address',
-  'approved',
-  'assumption',
+const reviewScaffoldingVocabulary = [
   'attribution',
-  'available',
-  'cannot',
   'citation',
   'cited',
   'claim',
   'clarity',
-  'clearer',
-  'complete',
   'completeness',
-  'consequence',
   'content',
-  'context',
   'contradiction',
   'criterion',
   'criteria',
   'current',
-  'define',
-  'dependency',
-  'describe',
   'document',
   'documented',
-  'does',
   'empty',
   'evidence',
-  'fail',
   'finding',
   'found',
   'gap',
-  'goal',
-  'identify',
+  'grounded',
   'incomplete',
-  'interview',
-  'journey',
   'lack',
-  'leave',
-  'local',
-  'locally',
-  'longer',
-  'loss',
   'measure',
   'measurable',
   'missing',
-  'need',
-  'needs',
-  'no',
-  'non-goal',
-  'not',
-  'objective',
   'observed',
   'one',
-  'open',
-  'outcome',
   'paragraph',
-  'prevent',
-  'problem',
-  'question',
   'rationale',
-  'requirement',
   'research',
-  'removed',
   'review',
   'reviewer',
-  'risk',
-  'rollout',
-  'scope',
   'section',
-  'solution',
   'source',
-  'specification',
-  'state',
   'stated',
   'statement',
-  'success',
   'supplied',
-  'supplies',
   'support',
   'supported',
-  'target',
   'testable',
   'text',
-  'tie',
   'trace',
-  'unavailable',
   'unclear',
   'unsupported',
-  'validate',
-  'verification',
-  'verify',
   'wording',
-  'grounded',
-  'running',
 ].join(' ');
 
 export function containsUnsupportedReviewClaim(
@@ -697,22 +649,31 @@ export function containsUnsupportedReviewClaim(
   trustedPassages: string[],
   authorizedInstruction = '',
 ): boolean {
-  const instructionTokens = claimClauses(authorizedInstruction).flat();
-  const vocabularyTokens = claimClauses(reviewAnalysisVocabulary).flat();
+  const instructionTokens = new Set(claimClauses(authorizedInstruction).flat());
+  const scaffoldingTokens = new Set(claimClauses(reviewScaffoldingVocabulary).flat());
   const excludedTokens = instructionExclusionTokens(authorizedInstruction);
   const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
-  const supportingClauses = [[], ...trustedClauses].map((clause) => [
-    ...new Set([...instructionTokens, ...vocabularyTokens, ...clause]),
-  ]);
-  const trustedTokens = new Set(supportingClauses.flat());
-  return claimClauses(generated).some(
-    (generatedClause) =>
-      generatedClause.some((token) => excludedTokens.has(token)) ||
-      generatedClause.some((token) => !trustedTokens.has(token)) ||
-      !supportingClauses.some((supportingClause) =>
-        generatedClause.every((token) => supportingClause.includes(token)),
-      ),
-  );
+  return claimClauses(generated).some((generatedClause) => {
+    if (generatedClause.some((token) => excludedTokens.has(token))) return true;
+    const anchoredTokens = generatedClause.filter(
+      (token) => !scaffoldingTokens.has(token) && !instructionTokens.has(token),
+    );
+    if (
+      anchoredTokens.length === 0 &&
+      !generatedClause.some((token) => instructionTokens.has(token))
+    ) {
+      return true;
+    }
+    return ![[], ...trustedClauses].some(
+      (supportingClause) =>
+        generatedClause.every(
+          (token) =>
+            scaffoldingTokens.has(token) ||
+            instructionTokens.has(token) ||
+            supportingClause.includes(token),
+        ) && anchoredTokens.every((token) => supportingClause.includes(token)),
+    );
+  });
 }
 
 function instructionExclusionTokens(value: string): Set<string> {

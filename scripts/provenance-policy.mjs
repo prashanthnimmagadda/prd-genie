@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 export const publicProductName = 'PRD Genie';
 export const publicReleaseTarget = 'https://github.com/prashanthnimmagadda/prd-genie';
@@ -132,6 +133,8 @@ export const requiredArtifactFiles = [
   'scripts/provenance.mjs',
   'scripts/provenance-policy.mjs',
   'scripts/record-container-smoke.mjs',
+  'scripts/record-test-coverage.mjs',
+  'scripts/verify-promotion-approval.mjs',
   'evaluations/ollama-qwen35-review.Modelfile',
   'reports/container-smoke.json',
   'reports/browser-e2e.json',
@@ -144,6 +147,7 @@ export const requiredArtifactFiles = [
   'reports/node-24.json',
   'reports/production-smoke.json',
   'reports/sbom.cdx.json',
+  'reports/test-coverage.json',
   'coverage/coverage-summary.json',
 ];
 export const requiredArtifactDirectories = ['dist/client', 'dist/server', 'drizzle'];
@@ -173,6 +177,7 @@ export function validateEvidenceReports(root, gitSha) {
   const node22 = readJson(root, 'reports/node-22.json');
   const node24 = readJson(root, 'reports/node-24.json');
   const productionSmoke = readJson(root, 'reports/production-smoke.json');
+  const testCoverage = readJson(root, 'reports/test-coverage.json');
   const model = readJson(root, 'reports/model-evaluation.json');
   const container = readJson(root, 'reports/container-smoke.json');
   if (
@@ -185,6 +190,22 @@ export function validateEvidenceReports(root, gitSha) {
     !hasExactPassedSteps(offline.results)
   ) {
     throw new Error('Offline CI evidence does not validate the clean current SHA.');
+  }
+  if (
+    !validSimpleEvidence(testCoverage, gitSha) ||
+    testCoverage.command !== 'vitest run --coverage --reporter=json' ||
+    testCoverage.exitCode !== 0 ||
+    !Number.isInteger(testCoverage.suites?.files) ||
+    testCoverage.suites.files < 1 ||
+    !Number.isInteger(testCoverage.tests?.total) ||
+    testCoverage.tests.total < 1 ||
+    testCoverage.tests.passed !== testCoverage.tests.total ||
+    testCoverage.tests.failed !== 0 ||
+    testCoverage.tests.pending !== 0 ||
+    testCoverage.tests.todo !== 0 ||
+    !validCoverageSummary(testCoverage.coverage)
+  ) {
+    throw new Error('Test and coverage evidence does not validate the clean current SHA.');
   }
   if (
     !validSimpleEvidence(browser, gitSha) ||
@@ -241,6 +262,20 @@ export function validateEvidenceReports(root, gitSha) {
   if (!validateContainerSmokeReport(container, gitSha)) {
     throw new Error('Container smoke evidence does not validate the clean current SHA.');
   }
+}
+
+function validCoverageSummary(coverage) {
+  return ['statements', 'branches', 'functions', 'lines'].every(
+    (name) =>
+      Number.isInteger(coverage?.[name]?.total) &&
+      coverage[name].total > 0 &&
+      Number.isInteger(coverage[name].covered) &&
+      coverage[name].covered >= 0 &&
+      coverage[name].covered <= coverage[name].total &&
+      typeof coverage[name].pct === 'number' &&
+      coverage[name].pct >= 80 &&
+      coverage[name].pct <= 100,
+  );
 }
 
 function validBrowserReport(report) {
@@ -326,39 +361,144 @@ function validNodeGate(report, gitSha, major) {
   });
 }
 
-export function validatePublicApproval({ approval, artifacts, gitSha, clean, tagSha }) {
-  if (approval?.approved !== true) throw new Error('Public promotion is not approved.');
-  if (approval.schemaVersion !== 1 || approval.approvalScope !== 'public-github-release') {
-    throw new Error('Approval has an unsupported schema or scope.');
+export function validatePublicProvenanceAuthorization({
+  authorization,
+  artifacts,
+  gitSha,
+  clean,
+  tagSha,
+}) {
+  if (authorization?.authorized !== true) {
+    throw new Error('Public provenance preparation is not authorized.');
   }
-  if (!/^[a-f0-9]{40}$/.test(approval.gitSha ?? '') || approval.gitSha !== gitSha) {
-    throw new Error('Approval does not match the current Git SHA.');
+  if (
+    authorization.schemaVersion !== 2 ||
+    authorization.approvalScope !== 'public-github-provenance-preparation'
+  ) {
+    throw new Error('Provenance authorization has an unsupported schema or scope.');
+  }
+  if (!/^[a-f0-9]{40}$/.test(authorization.gitSha ?? '') || authorization.gitSha !== gitSha) {
+    throw new Error('Provenance authorization does not match the current Git SHA.');
   }
   if (clean !== true) throw new Error('Public provenance requires a clean working tree.');
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(approval.tag ?? '')) {
-    throw new Error('Approval does not contain a valid release tag.');
+  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(authorization.tag ?? '')) {
+    throw new Error('Provenance authorization does not contain a valid release tag.');
   }
   if (tagSha !== gitSha)
+    throw new Error('The authorized release tag does not point to the current SHA.');
+  if (authorization.publicTarget !== publicReleaseTarget) {
+    throw new Error('Provenance authorization does not match the public release target.');
+  }
+  if (authorization.publicName !== publicProductName) {
+    throw new Error('Provenance authorization does not match the public product name.');
+  }
+  if (authorization.rightsConfirmed !== true) {
+    throw new Error('Provenance authorization does not confirm publication rights.');
+  }
+  if (authorization.validationStatus !== 'passed') {
+    throw new Error('Provenance authorization does not confirm a passing validation status.');
+  }
+  requireStringArray(authorization.knownLimitations, 'Known limitations', true);
+  requireStringArray(authorization.unresolvedIssues, 'Unresolved issues', true);
+  const actual = normalizeInventory(artifacts);
+  const authorized = normalizeInventory(authorization.artifacts);
+  if (JSON.stringify(authorized) !== JSON.stringify(actual)) {
+    throw new Error('Provenance authorization does not match the complete artifact inventory.');
+  }
+}
+
+export function validateFinalPromotionApproval({
+  approval,
+  releaseAssets,
+  gitSha,
+  clean,
+  tagSha,
+  tagObjectSha,
+}) {
+  if (approval?.approved !== true) throw new Error('Public promotion is not approved.');
+  if (approval.schemaVersion !== 2 || approval.approvalScope !== 'public-github-promotion') {
+    throw new Error('Promotion approval has an unsupported schema or scope.');
+  }
+  if (!/^[a-f0-9]{40}$/.test(approval.gitSha ?? '') || approval.gitSha !== gitSha) {
+    throw new Error('Promotion approval does not match the current Git SHA.');
+  }
+  if (clean !== true) throw new Error('Public promotion requires a clean working tree.');
+  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(approval.tag ?? '')) {
+    throw new Error('Promotion approval does not contain a valid release tag.');
+  }
+  if (tagSha !== gitSha) {
     throw new Error('The approved release tag does not point to the current SHA.');
+  }
+  if (
+    !/^[a-f0-9]{40}$/.test(approval.tagObjectSha ?? '') ||
+    approval.tagObjectSha !== tagObjectSha
+  ) {
+    throw new Error('Promotion approval does not match the annotated tag object.');
+  }
   if (approval.publicTarget !== publicReleaseTarget) {
-    throw new Error('Approval does not match the public release target.');
+    throw new Error('Promotion approval does not match the public release target.');
   }
   if (approval.publicName !== publicProductName) {
-    throw new Error('Approval does not match the public product name.');
+    throw new Error('Promotion approval does not match the public product name.');
   }
   if (approval.rightsConfirmed !== true) {
-    throw new Error('Approval does not confirm publication rights.');
+    throw new Error('Promotion approval does not confirm publication rights.');
   }
   if (approval.validationStatus !== 'passed') {
-    throw new Error('Approval does not confirm a passing validation status.');
+    throw new Error('Promotion approval does not confirm a passing validation status.');
   }
   requireStringArray(approval.knownLimitations, 'Known limitations', true);
   requireStringArray(approval.unresolvedIssues, 'Unresolved issues', true);
-  const actual = normalizeInventory(artifacts);
-  const approved = normalizeInventory(approval.artifacts);
+  const actual = normalizeInventory(releaseAssets);
+  const approved = normalizeInventory(approval.releaseAssets);
   if (JSON.stringify(approved) !== JSON.stringify(actual)) {
-    throw new Error('Approval does not match the complete artifact inventory.');
+    throw new Error('Promotion approval does not match every final release asset byte.');
   }
+}
+
+export function collectFinalReleaseAssets({ releaseDirectory, gitSha, tag }) {
+  if (!/^[a-f0-9]{40}$/.test(gitSha ?? '')) {
+    throw new Error('Final release inventory requires an exact Git SHA.');
+  }
+  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag ?? '')) {
+    throw new Error('Final release inventory requires a valid tag.');
+  }
+  const expectedNames = [
+    'SHA256SUMS.txt',
+    `prd-genie-${gitSha.slice(0, 12)}.tar.gz`,
+    `prd-genie-${tag}-evidence.tar.gz`,
+    `prd-genie-${tag}-licenses.json`,
+    `prd-genie-${tag}-provenance.json`,
+    `prd-genie-${tag}-sbom.cdx.json`,
+  ].sort();
+  const observedNames = fs
+    .readdirSync(releaseDirectory, { withFileTypes: true })
+    .map((entry) => {
+      const absolute = path.join(releaseDirectory, entry.name);
+      const stat = fs.lstatSync(absolute);
+      if (!entry.isFile() || stat.isSymbolicLink()) {
+        throw new Error(`Final release assets must be regular files: ${entry.name}`);
+      }
+      return entry.name;
+    })
+    .sort();
+  if (JSON.stringify(observedNames) !== JSON.stringify(expectedNames)) {
+    throw new Error('Final release directory does not contain the exact required asset inventory.');
+  }
+
+  const manifestName = 'SHA256SUMS.txt';
+  const payloadNames = expectedNames.filter((name) => name !== manifestName);
+  const hashFile = (name) =>
+    createHash('sha256')
+      .update(fs.readFileSync(path.join(releaseDirectory, name)))
+      .digest('hex');
+  const expectedManifest = `${payloadNames
+    .map((name) => `${hashFile(name)}  ${name}`)
+    .join('\n')}\n`;
+  if (fs.readFileSync(path.join(releaseDirectory, manifestName), 'utf8') !== expectedManifest) {
+    throw new Error('Final checksum manifest does not exactly bind every public payload.');
+  }
+  return expectedNames.map((name) => ({ path: name, sha256: hashFile(name) }));
 }
 
 export function validateContainerSmokeReport(container, gitSha) {

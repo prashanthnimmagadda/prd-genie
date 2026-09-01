@@ -32,6 +32,8 @@ The provider disclosure names the outbound host and data classes. Actions send o
 
 Source excerpts are labelled as untrusted evidence in system instructions. Recognized instruction-like excerpts and metadata are excluded from structured-review prompts, citations, and applyable patches. The detector is a conservative lexical boundary, not a general proof against every encoded or cross-chunk instruction. Human approval remains required for document changes.
 
+Structured-review prose also requires at least one clause anchor from scoped PRD or evidence text, an exact section-state observation, or the authorized user instruction. Neutral review scaffolding cannot supply the sole anchor. Causal or normative verbs cannot enter through generic review vocabulary and must instead occur in the same trusted clause or authorized instruction. This is a conservative lexical integrity check, not semantic proof that every model judgment is correct.
+
 ### Malicious uploads
 
 The server limits file size, checks supported extensions and file signatures, rejects encrypted PDFs, limits PDF pages and extracted text, and bounds DOCX entry count and declared expanded size. Portable restore rejects unsafe paths, unknown files, excessive entries, oversized streamed content, hash mismatches, and inconsistent references. Parsing libraries still process attacker-controlled formats, so only import files from sources you trust and keep dependencies updated.

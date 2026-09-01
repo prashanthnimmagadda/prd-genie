@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   collectArtifactPaths,
+  collectFinalReleaseAssets,
   containsInventedExample,
   containsUnsupportedQualifier,
   parseContainerSystemStatus,
@@ -22,7 +24,8 @@ import {
   requiredStructuredReviewChecks,
   validateContainerSmokeReport,
   validateEvidenceReports,
-  validatePublicApproval,
+  validateFinalPromotionApproval,
+  validatePublicProvenanceAuthorization,
 } from '../../scripts/provenance-policy.mjs';
 
 const gitSha = 'a'.repeat(40);
@@ -95,6 +98,7 @@ describe('release provenance policy', () => {
       'reports/node-22.json',
       'reports/node-24.json',
       'reports/production-smoke.json',
+      'reports/test-coverage.json',
     ]) {
       const report = JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8')) as Record<
         string,
@@ -146,6 +150,13 @@ describe('release provenance policy', () => {
     const missingProductionCheck = productionSmokeFixture();
     delete missingProductionCheck.checks.health;
     expectRejected('reports/production-smoke.json', missingProductionCheck);
+
+    const incorrectTestTotal = testCoverageFixture();
+    incorrectTestTotal.tests.passed -= 1;
+    expectRejected('reports/test-coverage.json', incorrectTestTotal);
+    const failedCoverage = testCoverageFixture();
+    failedCoverage.coverage.branches.pct = 79;
+    expectRejected('reports/test-coverage.json', failedCoverage);
   });
 
   it('recomputes every model-evaluation check instead of trusting its percentage', () => {
@@ -235,55 +246,203 @@ describe('release provenance policy', () => {
     expect(validateContainerSmokeReport(null, gitSha)).toBe(false);
   });
 
-  it('binds public approval to identity, rights, validation, issues, and artifacts', () => {
+  it('binds public provenance preparation to identity, rights, validation, and artifacts', () => {
     const artifacts = [
       { path: 'release.tar.gz', sha256: 'b'.repeat(64) },
       { path: 'sbom.json', sha256: 'c'.repeat(64) },
     ];
-    const valid = approvalFixture(artifacts);
+    const valid = provenanceAuthorizationFixture(artifacts);
     expect(() =>
-      validatePublicApproval({ approval: valid, artifacts, gitSha, clean: true, tagSha: gitSha }),
+      validatePublicProvenanceAuthorization({
+        authorization: valid,
+        artifacts,
+        gitSha,
+        clean: true,
+        tagSha: gitSha,
+      }),
     ).not.toThrow();
 
-    const mutations: Array<(approval: ReturnType<typeof approvalFixture>) => void> = [
-      (approval) => (approval.approved = false),
-      (approval) => (approval.schemaVersion = 2),
-      (approval) => (approval.approvalScope = 'private'),
-      (approval) => (approval.gitSha = 'c'.repeat(40)),
-      (approval) => (approval.tag = 'latest'),
-      (approval) => (approval.publicTarget = 'https://example.com/repo'),
-      (approval) => (approval.publicName = 'Different name'),
-      (approval) => (approval.rightsConfirmed = false),
-      (approval) => (approval.validationStatus = 'failed'),
-      (approval) => (approval.knownLimitations = []),
-      (approval) => approval.knownLimitations.push(approval.knownLimitations[0]!),
-      (approval) => (approval.unresolvedIssues = ['']),
-      (approval) => (approval.artifacts = []),
-      (approval) => (approval.artifacts[0]!.sha256 = 'e'.repeat(64)),
-      (approval) => (approval.artifacts = [artifacts[0]!, artifacts[0]!]),
-      (approval) => (approval.artifacts = [{ path: '../secret', sha256: 'e'.repeat(64) }]),
-      (approval) => (approval.artifacts = [{ path: '/tmp/file', sha256: 'e'.repeat(64) }]),
-      (approval) => (approval.artifacts = [{ path: 'bad\\path', sha256: 'e'.repeat(64) }]),
+    const mutations: Array<
+      (authorization: ReturnType<typeof provenanceAuthorizationFixture>) => void
+    > = [
+      (authorization) => (authorization.authorized = false),
+      (authorization) => (authorization.schemaVersion = 1),
+      (authorization) => (authorization.approvalScope = 'private'),
+      (authorization) => (authorization.gitSha = 'c'.repeat(40)),
+      (authorization) => (authorization.tag = 'latest'),
+      (authorization) => (authorization.publicTarget = 'https://example.com/repo'),
+      (authorization) => (authorization.publicName = 'Different name'),
+      (authorization) => (authorization.rightsConfirmed = false),
+      (authorization) => (authorization.validationStatus = 'failed'),
+      (authorization) => (authorization.knownLimitations = []),
+      (authorization) => authorization.knownLimitations.push(authorization.knownLimitations[0]!),
+      (authorization) => (authorization.unresolvedIssues = ['']),
+      (authorization) => (authorization.artifacts = []),
+      (authorization) => (authorization.artifacts[0]!.sha256 = 'e'.repeat(64)),
+      (authorization) => (authorization.artifacts = [artifacts[0]!, artifacts[0]!]),
+      (authorization) =>
+        (authorization.artifacts = [{ path: '../secret', sha256: 'e'.repeat(64) }]),
+      (authorization) =>
+        (authorization.artifacts = [{ path: '/tmp/file', sha256: 'e'.repeat(64) }]),
+      (authorization) =>
+        (authorization.artifacts = [{ path: 'bad\\path', sha256: 'e'.repeat(64) }]),
     ];
     for (const mutate of mutations) {
-      const approval = structuredClone(valid);
-      mutate(approval);
+      const authorization = structuredClone(valid);
+      mutate(authorization);
       expect(() =>
-        validatePublicApproval({ approval, artifacts, gitSha, clean: true, tagSha: gitSha }),
+        validatePublicProvenanceAuthorization({
+          authorization,
+          artifacts,
+          gitSha,
+          clean: true,
+          tagSha: gitSha,
+        }),
       ).toThrow();
     }
     expect(() =>
-      validatePublicApproval({ approval: valid, artifacts, gitSha, clean: false, tagSha: gitSha }),
+      validatePublicProvenanceAuthorization({
+        authorization: valid,
+        artifacts,
+        gitSha,
+        clean: false,
+        tagSha: gitSha,
+      }),
     ).toThrow('clean working tree');
     expect(() =>
-      validatePublicApproval({
-        approval: valid,
+      validatePublicProvenanceAuthorization({
+        authorization: valid,
         artifacts,
         gitSha,
         clean: true,
         tagSha: 'd'.repeat(40),
       }),
     ).toThrow('does not point');
+  });
+
+  it('binds final promotion approval to the annotated tag and every finished asset byte', () => {
+    const releaseAssets = [
+      { path: 'SHA256SUMS.txt', sha256: 'b'.repeat(64) },
+      { path: 'prd-genie-a.tar.gz', sha256: 'c'.repeat(64) },
+      { path: 'prd-genie-v0.1.0-rc.3-provenance.json', sha256: 'd'.repeat(64) },
+    ];
+    const tagObjectSha = 'f'.repeat(40);
+    const valid = promotionApprovalFixture(releaseAssets, tagObjectSha);
+    expect(() =>
+      validateFinalPromotionApproval({
+        approval: valid,
+        releaseAssets,
+        gitSha,
+        clean: true,
+        tagSha: gitSha,
+        tagObjectSha,
+      }),
+    ).not.toThrow();
+
+    const mutations: Array<(approval: ReturnType<typeof promotionApprovalFixture>) => void> = [
+      (approval) => (approval.approved = false),
+      (approval) => (approval.schemaVersion = 1),
+      (approval) => (approval.approvalScope = 'public-github-release'),
+      (approval) => (approval.gitSha = 'c'.repeat(40)),
+      (approval) => (approval.tag = 'latest'),
+      (approval) => (approval.tagObjectSha = 'e'.repeat(40)),
+      (approval) => (approval.publicTarget = 'https://example.com/repo'),
+      (approval) => (approval.publicName = 'Different name'),
+      (approval) => (approval.rightsConfirmed = false),
+      (approval) => (approval.validationStatus = 'failed'),
+      (approval) => (approval.knownLimitations = []),
+      (approval) => (approval.unresolvedIssues = ['']),
+      (approval) => (approval.releaseAssets = []),
+      (approval) => (approval.releaseAssets[0]!.sha256 = 'a'.repeat(64)),
+      (approval) => (approval.releaseAssets = [releaseAssets[0]!, releaseAssets[0]!]),
+    ];
+    for (const mutate of mutations) {
+      const approval = structuredClone(valid);
+      mutate(approval);
+      expect(() =>
+        validateFinalPromotionApproval({
+          approval,
+          releaseAssets,
+          gitSha,
+          clean: true,
+          tagSha: gitSha,
+          tagObjectSha,
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      validateFinalPromotionApproval({
+        approval: valid,
+        releaseAssets,
+        gitSha,
+        clean: false,
+        tagSha: gitSha,
+        tagObjectSha,
+      }),
+    ).toThrow('clean working tree');
+    expect(() =>
+      validateFinalPromotionApproval({
+        approval: valid,
+        releaseAssets,
+        gitSha,
+        clean: true,
+        tagSha: 'e'.repeat(40),
+        tagObjectSha,
+      }),
+    ).toThrow('does not point');
+    expect(() =>
+      validateFinalPromotionApproval({
+        approval: valid,
+        releaseAssets,
+        gitSha,
+        clean: true,
+        tagSha: gitSha,
+        tagObjectSha: 'e'.repeat(40),
+      }),
+    ).toThrow('annotated tag object');
+  });
+
+  it('requires the exact six-file final inventory and a manifest for every public payload', () => {
+    const releaseDirectory = finalReleaseFixture();
+    directories.push(releaseDirectory);
+    const assets = collectFinalReleaseAssets({
+      releaseDirectory,
+      gitSha,
+      tag: 'v0.1.0-rc.3',
+    });
+    expect(assets).toHaveLength(6);
+    expect(assets.map((asset) => asset.path)).toContain('SHA256SUMS.txt');
+
+    fs.writeFileSync(path.join(releaseDirectory, 'prd-genie-v0.1.0-rc.3-licenses.json'), 'changed');
+    expect(() =>
+      collectFinalReleaseAssets({ releaseDirectory, gitSha, tag: 'v0.1.0-rc.3' }),
+    ).toThrow('checksum manifest');
+
+    const extraDirectory = finalReleaseFixture();
+    directories.push(extraDirectory);
+    fs.writeFileSync(path.join(extraDirectory, 'unexpected.txt'), 'unexpected');
+    expect(() =>
+      collectFinalReleaseAssets({
+        releaseDirectory: extraDirectory,
+        gitSha,
+        tag: 'v0.1.0-rc.3',
+      }),
+    ).toThrow('exact required asset inventory');
+
+    const linkedDirectory = finalReleaseFixture();
+    directories.push(linkedDirectory);
+    fs.rmSync(path.join(linkedDirectory, 'prd-genie-v0.1.0-rc.3-licenses.json'));
+    fs.symlinkSync(
+      path.join(linkedDirectory, 'prd-genie-v0.1.0-rc.3-provenance.json'),
+      path.join(linkedDirectory, 'prd-genie-v0.1.0-rc.3-licenses.json'),
+    );
+    expect(() =>
+      collectFinalReleaseAssets({
+        releaseDirectory: linkedDirectory,
+        gitSha,
+        tag: 'v0.1.0-rc.3',
+      }),
+    ).toThrow('regular files');
   });
 
   it.each(['consistent', 'significant', 'critical', 'severe', 'urgent', 'always', 'guarantee'])(
@@ -335,6 +494,7 @@ describe('release provenance policy', () => {
     writeJson(root, 'reports/node-22.json', nodeFixture(22));
     writeJson(root, 'reports/node-24.json', nodeFixture(24));
     writeJson(root, 'reports/production-smoke.json', productionSmokeFixture());
+    writeJson(root, 'reports/test-coverage.json', testCoverageFixture());
     writeJson(root, 'reports/model-evaluation.json', modelFixture());
     writeJson(root, 'reports/container-smoke.json', containerReportFixture());
   }
@@ -397,6 +557,25 @@ function productionSmokeFixture() {
     command: 'node dist/server/server/index.js',
     passed: true,
     checks: trueChecks(requiredProductionSmokeChecks) as Record<string, boolean | undefined>,
+  };
+}
+
+function testCoverageFixture() {
+  const metric = { total: 100, covered: 95, skipped: 0, pct: 95 };
+  return {
+    schemaVersion: 1,
+    git: { sha: gitSha, clean: true },
+    command: 'vitest run --coverage --reporter=json',
+    exitCode: 0,
+    passed: true,
+    suites: { files: 19, total: 45, passed: 45, failed: 0, pending: 0 },
+    tests: { total: 233, passed: 233, failed: 0, pending: 0, todo: 0 },
+    coverage: {
+      statements: { ...metric },
+      branches: { ...metric },
+      functions: { ...metric },
+      lines: { ...metric },
+    },
   };
 }
 
@@ -508,11 +687,11 @@ function trueChecks(names: string[]): Record<string, boolean> {
   return Object.fromEntries(names.map((name) => [name, true]));
 }
 
-function approvalFixture(artifacts: Array<{ path: string; sha256: string }>) {
+function provenanceAuthorizationFixture(artifacts: Array<{ path: string; sha256: string }>) {
   return {
-    schemaVersion: 1,
-    approvalScope: 'public-github-release',
-    approved: true,
+    schemaVersion: 2,
+    approvalScope: 'public-github-provenance-preparation',
+    authorized: true,
     gitSha,
     tag: 'v0.1.0-rc.2',
     publicTarget: publicReleaseTarget,
@@ -523,6 +702,50 @@ function approvalFixture(artifacts: Array<{ path: string; sha256: string }>) {
     unresolvedIssues: ['Native Windows validation is not yet recorded.'],
     artifacts,
   };
+}
+
+function promotionApprovalFixture(
+  releaseAssets: Array<{ path: string; sha256: string }>,
+  tagObjectSha: string,
+) {
+  return {
+    schemaVersion: 2,
+    approvalScope: 'public-github-promotion',
+    approved: true,
+    gitSha,
+    tag: 'v0.1.0-rc.3',
+    tagObjectSha,
+    publicTarget: publicReleaseTarget,
+    publicName: publicProductName,
+    rightsConfirmed: true,
+    validationStatus: 'passed',
+    knownLimitations: ['Native Windows validation is pending.'],
+    unresolvedIssues: ['Native Windows validation is not yet recorded.'],
+    releaseAssets,
+  };
+}
+
+function finalReleaseFixture(): string {
+  const releaseDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-release-'));
+  const tag = 'v0.1.0-rc.3';
+  const payloadNames = [
+    `prd-genie-${gitSha.slice(0, 12)}.tar.gz`,
+    `prd-genie-${tag}-evidence.tar.gz`,
+    `prd-genie-${tag}-licenses.json`,
+    `prd-genie-${tag}-provenance.json`,
+    `prd-genie-${tag}-sbom.cdx.json`,
+  ].sort();
+  for (const name of payloadNames) fs.writeFileSync(path.join(releaseDirectory, name), name);
+  const manifest = payloadNames
+    .map((name) => {
+      const sha256 = createHash('sha256')
+        .update(fs.readFileSync(path.join(releaseDirectory, name)))
+        .digest('hex');
+      return `${sha256}  ${name}`;
+    })
+    .join('\n');
+  fs.writeFileSync(path.join(releaseDirectory, 'SHA256SUMS.txt'), `${manifest}\n`);
+  return releaseDirectory;
 }
 
 function writeJson(root: string, relative: string, value: unknown): void {

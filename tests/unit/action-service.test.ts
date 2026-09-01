@@ -455,13 +455,14 @@ describe('ActionService', () => {
   it('reviews the complete document and persists grounded findings', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'One evidence gap was found. The Problem section lacks cited support.',
+        summary:
+          'The Problem section has one evidence gap. The Problem section lacks cited support.',
         findings: [
           {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'Tie the statement to the interview.',
+            rationale: 'Five participants lost unsaved drafts.',
             citationChunkIds: ['chunk-id'],
             proposedMarkdown: 'Five participants lost unsaved drafts.',
           },
@@ -486,7 +487,7 @@ describe('ActionService', () => {
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'e.g., for example, for instance, or such as',
     );
-    expect(body).toContain('One evidence gap was found.');
+    expect(body).toContain('The Problem section has one evidence gap.');
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
     const storedFinding = repository.storeFinding.mock.calls[0]?.[0] as
       { citationIds: string[]; proposedPatch: { sectionId: string } } | undefined;
@@ -495,7 +496,7 @@ describe('ActionService', () => {
     expect(repository.completeAiRun).toHaveBeenCalledWith(
       'run-id',
       undefined,
-      'One evidence gap was found. The Problem section lacks cited support.',
+      'The Problem section has one evidence gap. The Problem section lacks cited support.',
     );
   });
 
@@ -682,13 +683,13 @@ describe('ActionService', () => {
   it('retries one malformed Ollama review and persists only valid plain JSON', async () => {
     aiMocks.generateText.mockResolvedValueOnce({ text: '{"summary":' }).mockResolvedValueOnce({
       text: JSON.stringify({
-        summary: 'The Problem section lacks support. Reviewers cannot verify the current claim.',
+        summary: 'The Problem section lacks cited support.',
         findings: [
           {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The claim needs the supplied interview evidence.',
+            rationale: 'Five participants lost unsaved drafts.',
             citationChunkIds: ['chunk-id'],
             proposedMarkdown: 'Five participants lost unsaved drafts.',
           },
@@ -700,7 +701,7 @@ describe('ActionService', () => {
       request({ action: 'review', scope: 'document', targetSectionId: undefined }),
       new AbortController().signal,
     );
-    expect(await response.text()).toContain('The Problem section lacks support.');
+    expect(await response.text()).toContain('The Problem section lacks cited support.');
     expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
     expect(aiMocks.generateText.mock.calls[0]?.[0]).not.toHaveProperty('output');
     expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
@@ -721,7 +722,7 @@ describe('ActionService', () => {
       category: 'evidence',
       severity: 'warning',
       targetSectionId: sectionId,
-      rationale: 'The claim needs the supplied interview evidence.',
+      rationale: 'Five participants lost unsaved drafts.',
       proposedMarkdown: null,
     } as const;
     aiMocks.generateText
@@ -763,13 +764,13 @@ describe('ActionService', () => {
       })
       .mockResolvedValueOnce({
         text: JSON.stringify({
-          summary: 'The Problem section lacks a cited consequence.',
+          summary: 'The Problem section lacks a cited source.',
           findings: [
             {
               category: 'evidence',
               severity: 'warning',
               targetSectionId: sectionId,
-              rationale: 'The current text does not state an observed consequence.',
+              rationale: 'The Problem section lacks a cited source.',
               citationChunkIds: [],
               proposedMarkdown: null,
             },
@@ -784,7 +785,7 @@ describe('ActionService', () => {
     );
     const body = await response.text();
     expect(body).not.toContain('Critical gaps');
-    expect(body).toContain('lacks a cited consequence');
+    expect(body).toContain('lacks a cited source');
     expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
   });
@@ -814,7 +815,7 @@ describe('ActionService', () => {
               category: 'evidence',
               severity: 'warning',
               targetSectionId: sectionId,
-              rationale: 'Tie the current claim to the supplied research evidence.',
+              rationale: 'Five participants lost unsaved drafts.',
               citationChunkIds: ['chunk-id'],
               proposedMarkdown: null,
             },
@@ -919,13 +920,13 @@ describe('ActionService', () => {
   it('withholds an unsupported review patch while retaining the inspectable finding', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'The Problem section needs clearer evidence attribution.',
+        summary: 'The Problem section has unclear evidence attribution.',
         findings: [
           {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The current claim lacks cited support from the supplied interview.',
+            rationale: 'Five participants lost unsaved drafts.',
             citationChunkIds: ['chunk-id'],
             proposedMarkdown:
               'Five participants lost unsaved drafts, forcing launch delays for every team.',
@@ -944,7 +945,7 @@ describe('ActionService', () => {
       }),
       new AbortController().signal,
     );
-    expect(await response.text()).toContain('clearer evidence attribution');
+    expect(await response.text()).toContain('unclear evidence attribution');
     expect(repository.storeFinding).toHaveBeenCalledWith(
       expect.objectContaining({ proposedPatch: null }),
     );
@@ -967,14 +968,13 @@ describe('ActionService', () => {
   it('streams the repository evidence state when a review completes after deletion', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary:
-          'The evidence was removed while the review was running. The finding cannot be accepted without available support.',
+        summary: 'The Problem section has supplied evidence.',
         findings: [
           {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The cited evidence is no longer locally available.',
+            rationale: 'Five participants lost unsaved drafts.',
             citationChunkIds: ['chunk-id'],
             proposedMarkdown: null,
           },
@@ -1011,13 +1011,13 @@ describe('ActionService', () => {
   it('resolves a unique section title and supports findings without patches', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary: 'The Problem section needs evidence. Its current claim has no cited support.',
+        summary: 'The Problem section lacks cited support.',
         findings: [
           {
             category: 'evidence',
             severity: 'warning',
             targetSectionId: 'Problem',
-            rationale: 'The claim has no cited support.',
+            rationale: 'The Problem section lacks cited support.',
             citationChunkIds: [],
             proposedMarkdown: null,
           },
@@ -1120,14 +1120,13 @@ describe('ActionService', () => {
   it('drops a review patch that introduces a numeric value absent from trusted context', async () => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary:
-          'The Success measures section lacks an approved target. Reviewers cannot verify success without a grounded measure.',
+        summary: 'The Problem section lacks a grounded measure.',
         findings: [
           {
             category: 'success-measure',
             severity: 'warning',
             targetSectionId: sectionId,
-            rationale: 'The current context supplies no approved target.',
+            rationale: 'The Problem section lacks a grounded measure.',
             citationChunkIds: [],
             proposedMarkdown: 'Reduce recovery time from 23 minutes to under 5 minutes.',
           },
@@ -1324,12 +1323,41 @@ describe('structured review grounding guard', () => {
     ).toBe(true);
   });
 
-  it('allows observable review language grounded in one supplied passage', () => {
+  it.each([
+    'The solution prevents risk and needs validation.',
+    'The solution addresses risk and requires approval.',
+    'The solution causes an outcome and must be accepted.',
+    'The Problem section has a consequence.',
+  ])('rejects generic causal or normative review prose: %s', (generated) => {
+    expect(
+      containsUnsupportedReviewClaim(generated, [
+        'The solution documents the current risk.',
+        'Problem section contains the supplied text.',
+      ]),
+    ).toBe(true);
+  });
+
+  it('rejects review scaffolding that has no passage-specific anchor', () => {
     expect(
       containsUnsupportedReviewClaim(
-        'The current claim needs cited support from the supplied research evidence.',
+        'The current claim lacks cited support from the supplied research evidence.',
         ['Five participants lost unsaved drafts.'],
       ),
+    ).toBe(true);
+  });
+
+  it('allows observable review language with passage-specific anchors', () => {
+    expect(
+      containsUnsupportedReviewClaim(
+        'The statement about five participants losing unsaved drafts lacks cited support.',
+        ['Five participants lost unsaved drafts.'],
+      ),
+    ).toBe(false);
+  });
+
+  it('allows a canonical empty-section observation tied to the exact title', () => {
+    expect(
+      containsUnsupportedReviewClaim('The Goals section is empty.', ['Goals section is empty.']),
     ).toBe(false);
   });
 });

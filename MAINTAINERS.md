@@ -18,6 +18,8 @@ At least one maintainer review is required for ordinary changes. Security, persi
 
 A merge, tag, upload, release pull request, or submission is not approval for public availability. Release automation must remain disabled or private until the public-promotion approval is recorded.
 
+Preparing public provenance and finished checksums is a local-only authorization stage. A separate fresh approval must bind the annotated tag object and every final release asset byte before any public promotion.
+
 ## Decision records
 
 Material architecture or privacy changes belong in `docs/decisions` as a short decision record with context, decision, alternatives, risks, and rollback.

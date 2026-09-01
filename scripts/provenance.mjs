@@ -7,7 +7,7 @@ import {
   publicProductName,
   publicReleaseTarget,
   validateEvidenceReports,
-  validatePublicApproval,
+  validatePublicProvenanceAuthorization,
 } from './provenance-policy.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -29,13 +29,15 @@ const artifacts = collectArtifactPaths(root).map((relative) => ({
 validateEvidenceReports(root, gitSha);
 
 let releaseTag = null;
-let publicPromotionApproved = false;
-let publicApproval = null;
+let releasePreparationAuthorized = false;
+let publicAuthorization = null;
 if (sourceVisibility === 'public-github') {
-  const approvalPath = process.env.PRD_GENIE_PUBLIC_APPROVAL_FILE;
-  if (!approvalPath) throw new Error('Public GitHub provenance requires an approval file.');
-  const approval = JSON.parse(fs.readFileSync(path.resolve(approvalPath), 'utf8'));
-  const tag = typeof approval?.tag === 'string' ? approval.tag : '';
+  const authorizationPath = process.env.PRD_GENIE_PUBLIC_PROVENANCE_AUTHORIZATION_FILE;
+  if (!authorizationPath) {
+    throw new Error('Public GitHub provenance requires a preparation authorization file.');
+  }
+  const authorization = JSON.parse(fs.readFileSync(path.resolve(authorizationPath), 'utf8'));
+  const tag = typeof authorization?.tag === 'string' ? authorization.tag : '';
   const tagSha = (() => {
     try {
       return git(['rev-list', '-n', '1', tag]);
@@ -43,13 +45,20 @@ if (sourceVisibility === 'public-github') {
       throw new Error('The approved release tag does not exist.');
     }
   })();
-  validatePublicApproval({ approval, artifacts, gitSha, clean, tagSha });
+  validatePublicProvenanceAuthorization({
+    authorization,
+    artifacts,
+    gitSha,
+    clean,
+    tagSha,
+  });
   releaseTag = tag;
-  publicPromotionApproved = true;
-  publicApproval = approval;
+  releasePreparationAuthorized = true;
+  publicAuthorization = authorization;
 }
 
 const report = {
+  schemaVersion: 2,
   generatedAt: new Date().toISOString(),
   git: {
     sha: gitSha,
@@ -66,14 +75,15 @@ const report = {
     sourceVisibility,
     knownProtectedInputsDetected: false,
     publicationRightsAttestationRequired: true,
-    publicPromotionApproved,
+    releasePreparationAuthorized,
+    publicPromotionApprovalRequired: sourceVisibility === 'public-github',
     releaseTag,
-    publicTarget: publicPromotionApproved ? publicReleaseTarget : null,
-    publicName: publicPromotionApproved ? publicProductName : null,
-    rightsConfirmed: publicApproval?.rightsConfirmed === true,
-    validationStatus: publicApproval?.validationStatus ?? null,
-    knownLimitations: publicApproval?.knownLimitations ?? [],
-    unresolvedIssues: publicApproval?.unresolvedIssues ?? [],
+    publicTarget: releasePreparationAuthorized ? publicReleaseTarget : null,
+    publicName: releasePreparationAuthorized ? publicProductName : null,
+    rightsConfirmed: publicAuthorization?.rightsConfirmed === true,
+    validationStatus: publicAuthorization?.validationStatus ?? null,
+    knownLimitations: publicAuthorization?.knownLimitations ?? [],
+    unresolvedIssues: publicAuthorization?.unresolvedIssues ?? [],
   },
 };
 

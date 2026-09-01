@@ -29,6 +29,8 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 - Prevented direct AI proposals from being applied after any cited source evidence is deleted.
 - Pinned GitHub workflow actions and the Node container base to immutable identities.
 - Corrected security reporting, archive retention, rollback, and release-evidence documentation.
+- Required passage-specific anchors for review clauses and removed generic causal or normative support.
+- Split public provenance preparation from final promotion approval so approval binds every finished release asset byte and the annotated tag object.
 
 ## [0.1.0-rc.2] - 2026-08-30
 
