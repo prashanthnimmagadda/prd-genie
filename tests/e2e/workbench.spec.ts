@@ -506,9 +506,18 @@ for (const width of [320, 375, 414, 768]) {
       await page.getByLabel('Project name').fill(`Responsive ${width}`);
       await page.getByRole('button', { name: 'Create project' }).click();
     }
+    const outline = page.getByRole('navigation', { name: 'Document outline' });
+    const assistantTabs = page.getByRole('tablist', { name: 'Assistant panels' });
+    await expect(outline).toBeHidden();
+    await expect(assistantTabs).toBeHidden();
     await page.getByRole('button', { name: 'Open project navigation' }).click();
-    await expect(page.getByRole('navigation', { name: 'Document outline' })).toBeVisible();
+    await expect(outline).toBeVisible();
     await page.getByRole('button', { name: 'Close navigation' }).click();
+    await expect(outline).toBeHidden();
+    await page.getByRole('button', { name: 'Open assist and review panel' }).click();
+    await expect(assistantTabs).toBeVisible();
+    await page.getByRole('button', { name: 'Close panel' }).click();
+    await expect(assistantTabs).toBeHidden();
     await page.getByRole('button', { name: 'Configure model provider' }).click();
     await expect(page.getByRole('heading', { name: 'Model provider' })).toBeVisible();
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');

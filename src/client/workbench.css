@@ -1213,6 +1213,8 @@
     width: min(88vw, 21rem);
     transform: translateX(-105%);
     transition: transform var(--duration-panel) ease;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .left-rail {
@@ -1228,6 +1230,8 @@
   .left-rail.drawer-open,
   .right-panel.drawer-open {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .drawer-heading {
