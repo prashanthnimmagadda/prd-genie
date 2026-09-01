@@ -223,12 +223,13 @@ export class ActionService {
             this.repository.completeAiRun(runId, undefined, output);
           } else {
             const prompt = buildPrompt(prd, request, scopedContent, evidence, request.instruction);
-            const trustedProposalContent = [
+            const trustedProposalPassages = [
               scopedContent,
+              request.instruction ?? '',
               ...evidence
-                .filter((item) => !isHostileEvidence(item.excerpt))
+                .filter((item) => !isInstructionLikeEvidence(item.excerpt))
                 .map((item) => item.excerpt),
-            ].join('\n');
+            ].filter((item) => item.trim().length > 0);
             const attempts = request.provider === 'ollama' ? 3 : 1;
             let output: string | undefined;
             for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -239,18 +240,18 @@ export class ActionService {
                   prompt:
                     attempt === 0
                       ? prompt
-                      : `${prompt}\n\nThe previous proposal introduced unsupported evaluative or normative language. Return only the facts requested in userInstruction. Do not add a conclusion, consequence, evaluation, recommendation, or requirement.`,
+                      : `${prompt}\n\nThe previous proposal introduced content that was not traceable to one supplied passage. Use only content words and claims present together in userInstruction, the scoped PRD, or one source excerpt. Do not combine a modal, causal, impact, risk, or recommendation phrase from one fact with another.`,
                   providerOptions: localProviderOptions(request.provider),
                   abortSignal: signal,
                   maxOutputTokens: outputTokenLimit(request.action, request.scope),
                   temperature: attempt * 0.2,
                 });
                 const candidate = normalizeGeneratedProposal(prd, request, result.text);
-                if (containsUnsupportedProposalQualifier(candidate, trustedProposalContent)) {
+                if (containsUnsupportedProposalClaim(candidate, trustedProposalPassages)) {
                   throw new ApiError(
                     502,
                     'malformed_output',
-                    'The provider returned an unsupported evaluative or normative claim.',
+                    'The provider returned proposal content that was not traceable to one supplied passage.',
                   );
                 }
                 output = candidate;
@@ -389,35 +390,105 @@ export function containsNumericTargetProposal(value: string): boolean {
   );
 }
 
-const guardedProposalQualifiers = [
-  'always',
-  'consistent',
-  'critical',
-  'guarantee',
-  'guaranteed',
-  'must',
-  'severe',
-  'shall',
-  'should',
-  'significant',
-  'urgent',
-] as const;
+const nonClaimWords = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'been',
+  'before',
+  'being',
+  'but',
+  'by',
+  'can',
+  'could',
+  'each',
+  'for',
+  'from',
+  'had',
+  'has',
+  'have',
+  'if',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'may',
+  'might',
+  'of',
+  'on',
+  'only',
+  'or',
+  'that',
+  'the',
+  'their',
+  'them',
+  'these',
+  'they',
+  'this',
+  'those',
+  'to',
+  'was',
+  'were',
+  'which',
+  'while',
+  'who',
+  'will',
+  'with',
+  'without',
+  'would',
+]);
 
-export function containsUnsupportedProposalQualifier(
+const irregularClaimTokens = new Map([
+  ['lost', 'lose'],
+  ['losing', 'lose'],
+  ['losses', 'loss'],
+  ['people', 'person'],
+]);
+
+export function containsUnsupportedProposalClaim(
   generated: string,
-  trustedContent: string,
+  trustedPassages: string[],
 ): boolean {
-  return guardedProposalQualifiers.some(
-    (term) => containsWord(generated, term) && !containsWord(trustedContent, term),
+  const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
+  const trustedTokens = new Set(trustedClauses.flat());
+  return claimClauses(generated).some(
+    (generatedClause) =>
+      generatedClause.some((token) => !trustedTokens.has(token)) ||
+      !trustedClauses.some((trustedClause) =>
+        generatedClause.every((token) => trustedClause.includes(token)),
+      ),
   );
 }
 
-function containsWord(value: string, word: string): boolean {
-  return new RegExp(`\\b${word}\\b`, 'i').test(value);
+function claimClauses(value: string): string[][] {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .split(/(?:\r?\n)+|(?<=[.!?;:])\s+|\s+(?:and|but)\s+/i)
+    .map((clause) =>
+      (clause.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+        .map(normalizeClaimToken)
+        .filter((token) => token.length > 1 && !nonClaimWords.has(token)),
+    )
+    .filter((tokens) => tokens.length > 0);
 }
 
-function isHostileEvidence(value: string): boolean {
-  return /\b(?:untrusted|prompt[ -]?injection)\b|\bignore\b.{0,80}\b(?:task|instruction|prompt)\b/i.test(
+function normalizeClaimToken(token: string): string {
+  const irregular = irregularClaimTokens.get(token);
+  if (irregular) return irregular;
+  if (token.length > 5 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
+  if (token.length > 5 && token.endsWith('ing')) return token.slice(0, -3);
+  if (token.length > 4 && token.endsWith('ed')) return token.slice(0, -2);
+  if (token.length > 4 && token.endsWith('s')) return token.slice(0, -1);
+  return token;
+}
+
+function isInstructionLikeEvidence(value: string): boolean {
+  return /\b(?:untrusted|prompt[ -]?injection)\b|\b(?:ignore|disregard|forget)\b.{0,100}\b(?:previous|prior|above|task|instruction|prompt|system)\b|\b(?:reply|respond|output|return|print|say)\b.{0,60}\b(?:only|exactly|with)\b|\b(?:system|assistant|developer)\s*(?:message|prompt|instruction|:)\b|<\/?(?:system|assistant|developer|prompt)>|```(?:system|assistant|developer)/i.test(
     value,
   );
 }

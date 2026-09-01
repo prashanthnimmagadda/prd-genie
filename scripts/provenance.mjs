@@ -64,7 +64,8 @@ const report = {
   artifacts,
   claims: {
     sourceVisibility,
-    employerEraInputsCopied: false,
+    knownProtectedInputsDetected: false,
+    publicationRightsAttestationRequired: true,
     publicPromotionApproved,
     releaseTag,
     publicTarget: publicPromotionApproved ? publicReleaseTarget : null,

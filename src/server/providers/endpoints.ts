@@ -174,7 +174,9 @@ export function isPublicAddress(address: string): boolean {
   }
   const range = ipv6.range();
   if (range === 'rfc6052') {
-    return ipv6.match(ipaddr.parseCIDR('64:ff9b::/96'));
+    if (!ipv6.match(ipaddr.parseCIDR('64:ff9b::/96'))) return false;
+    const embedded = ipaddr.fromByteArray(ipv6.toByteArray().slice(12));
+    return embedded.kind() === 'ipv4' && isPublicAddress(embedded.toString());
   }
   return ['unicast', 'amt', 'as112v6', 'orchid2', 'droneRemoteIdProtocolEntityTags'].includes(
     range,
