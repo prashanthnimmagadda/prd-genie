@@ -88,6 +88,7 @@ export const requiredStructuredReviewChecks = [
   'bindsPatchTargets',
   'preservesPatchPreimages',
   'groundsFindingsInSourceOrPrd',
+  'groundsReviewProse',
   'avoidsUnsupportedReviewQualifiers',
   'avoidsUnsupportedTargetRecommendations',
   'avoidsInventedExamples',

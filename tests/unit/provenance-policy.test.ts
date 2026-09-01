@@ -168,6 +168,7 @@ describe('release provenance policy', () => {
       (report) => (report.scenarios[0]!.checks.mentionsInterviewBase = false),
       (report) => (report.scenarios[0]!.score.total += 1),
       (report) => delete report.structuredReview.checks.emitsSummary,
+      (report) => delete report.structuredReview.checks.groundsReviewProse,
       (report) => (report.structuredReview.checks.substitutedCheck = true),
       (report) => (report.structuredReview.checks.emitsSummary = false),
       (report) => (report.structuredReview.score.percentage = 99),
