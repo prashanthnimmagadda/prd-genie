@@ -248,6 +248,28 @@ describe('ActionService', () => {
     expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
   });
 
+  it('does not send or cite evidence for a category the user explicitly excluded', async () => {
+    retrieval.retrieve.mockResolvedValue([
+      evidence,
+      {
+        ...evidence,
+        chunkId: 'excluded-financial',
+        excerpt: 'The research did not measure financial impact.',
+      },
+    ]);
+
+    const response = await service.run(
+      'session',
+      request({ instruction: 'Improve clarity. Do not invent financial effects.' }),
+      new AbortController().signal,
+    );
+    const body = await response.text();
+    const prompt = (aiMocks.generateText.mock.calls[0]?.[0] as { prompt: string }).prompt;
+    expect(prompt).not.toContain('financial impact');
+    expect(body).not.toContain('excluded-financial');
+    expect(repository.storeCitation).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an unsupported proposal qualifier without silently editing hosted output', async () => {
     aiMocks.generateText.mockResolvedValue({ text: 'This is a critical user problem.' });
     const response = await service.run(

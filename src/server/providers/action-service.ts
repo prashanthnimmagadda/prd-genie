@@ -49,7 +49,11 @@ export class ActionService {
     }
     const scopedContent = scopeContent(prd, request);
     const query = [request.instruction, scopedContent].filter(Boolean).join('\n');
-    const evidence = await this.retrieval.retrieve(request.projectId, query);
+    const retrievedEvidence = await this.retrieval.retrieve(request.projectId, query);
+    const evidence =
+      request.action === 'draft' || request.action === 'rewrite'
+        ? filterExcludedProposalEvidence(retrievedEvidence, request.instruction ?? '')
+        : retrievedEvidence;
     const model = this.providers.model(sessionId, request.provider, request.model);
     const runId = this.repository.createAiRun({
       projectId: request.projectId,
@@ -489,6 +493,17 @@ function instructionExclusionTokens(value: string): Set<string> {
     }
   }
   return excluded;
+}
+
+function filterExcludedProposalEvidence(evidence: Citation[], instruction: string): Citation[] {
+  const excludedTokens = instructionExclusionTokens(instruction);
+  if (excludedTokens.size === 0) return evidence;
+  return evidence.filter(
+    (citation) =>
+      !claimClauses(citation.excerpt)
+        .flat()
+        .some((token) => excludedTokens.has(token)),
+  );
 }
 
 function claimClauses(value: string): string[][] {
