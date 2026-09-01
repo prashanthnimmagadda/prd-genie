@@ -830,6 +830,16 @@ describe('proposal grounding guard', () => {
       ]),
     ).toBe(true);
   });
+
+  it('omits categories excluded by the authorized instruction, including true caveats', () => {
+    expect(
+      containsUnsupportedProposalClaim(
+        'The research did not measure financial impact.',
+        ['The research did not measure financial impact.'],
+        'Do not invent percentages, time savings, targets, or financial effects.',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('review numeric grounding', () => {
