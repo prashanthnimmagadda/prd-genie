@@ -437,11 +437,14 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
   page,
   request,
 }, testInfo) => {
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
   const projectName = `Portable handoff ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const created = await request.post('/api/projects', {
     data: { name: projectName, description: 'Synthetic portable workflow' },
   });
-  expect(created.ok()).toBe(true);
+  expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
   await page.goto('/');
   await page.getByRole('button', { name: projectName, exact: true }).click();
   await page.getByRole('tab', { name: 'history' }).click();
@@ -533,6 +536,7 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
       return projects.projects.filter((item) => item.name === projectName).length;
     })
     .toBe(2);
+  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
