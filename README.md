@@ -2,7 +2,7 @@
 
 PRD Genie is a local-first workbench for turning source material and rough thinking into a review-ready product requirements document. It combines a structured editor, evidence retrieval, explicit AI proposals, and a revision-aware review workflow.
 
-This repository is an independent implementation with synthetic fixtures only.
+This repository is an independent implementation.
 
 ## What it does
 
@@ -62,16 +62,16 @@ Development opens at [http://127.0.0.1:5173](http://127.0.0.1:5173), with the AP
 
 Start after installation. Model downloads and provider response times may take longer.
 
-1. Enter **Draft recovery** as the project name and click **Create project**. You can also use **Import an existing PRD** with a Markdown, DOCX, or plain-text document.
-2. Select **Problem** in the document outline. Write a short draft, for example: “Product managers lose work when a draft is interrupted.” Save your edits using **Save**.
-3. Create a plain-text file named `research-notes.txt` with this synthetic practice evidence: “In a synthetic study, eight of twelve product managers lost an unsaved PRD draft. Participants asked to recover their last saved revision after restarting.” Use **Add source** to upload it. Wait for its status to become **ready**. The first upload may download the local embedding model. A partial status can mean incomplete extraction or unavailable semantic indexing. Read its warning; lexical search remains available when embeddings cannot load. Retry indexing after resolving the reported cause.
+1. Enter your project's name and click **Create project**. You can also use **Import an existing PRD** with a Markdown, DOCX, or plain-text document.
+2. Select **Problem** in the document outline. Describe the problem you want to address in one or two sentences. Save your edits using **Save**.
+3. Use **Add source** to upload a requirements brief, research notes, or a decision record you are permitted to use. Supported formats are PDF, DOCX, Markdown, and plain text. Choose material relevant to the problem you wrote; the app cannot ground a proposal in evidence you have not supplied. Wait for its status to become **ready**. The first upload may download the local embedding model. A partial status can mean incomplete extraction or unavailable semantic indexing. Read its warning; lexical search remains available when embeddings cannot load. Retry indexing after resolving the reported cause.
 4. Click **Configure model** in the top bar (accessible name: **Configure model provider**). Choose your provider, enter its API key under **Session key**, and click **Configure and discover**. Click **Choose a model**, select an available model, close the model chooser, and click **Use provider**. If discovery is unavailable, enter a valid model ID in **Or enter a model ID** before **Use provider**. For a local Ollama server, choose **Local Ollama**, use `http://127.0.0.1:11434/v1`, and select an already installed model. See the [provider matrix](#provider-matrix). A ChatGPT subscription is not an API key.
 5. In **assist**, choose **Rewrite**, set **Scope** to **Section**, and keep **Problem** selected. Enter: “Rewrite the problem using the evidence. Keep it concise and do not invent business impact.” Submit the instruction.
 6. Read the proposed text and its citations. Compare each cited excerpt with your source. Choose **Apply** (the accessible name identifies the target, such as **Apply to Problem**) to accept it, or dismiss it. The document changes only after acceptance. **Undo** is available for the immediately applied revision.
 7. Use **Export** to download Markdown, DOCX, or PDF. Use **Export archive** for a portable backup that includes sources and revision history. Inspect the exported document before sharing it.
 8. Stop and restart the app using the Quick start instructions. Reopen your project to confirm your saved work is present. Reconfigure the provider session before another AI action.
 
-Your practice source is synthetic. Replace it with evidence you are permitted to use. AI actions send the instruction, selected PRD scope, and retrieved excerpts to your selected provider. See [Privacy and outbound data](#privacy-and-outbound-data) before adding confidential material.
+AI actions send the instruction, selected PRD scope, and retrieved excerpts to your selected provider. See [Privacy and outbound data](#privacy-and-outbound-data) before adding confidential material.
 
 ## Provider matrix
 
@@ -178,7 +178,34 @@ If `git status` shows your own edits, preserve them before pulling. If `git pull
 
 To uninstall, stop the app and remove its cloned repository folder. Project data remains in the directory above. Remove that separate directory only if you intend to erase the projects and have checked your backups. An **Export archive** backup can be brought back with **Restore archive**.
 
-## Docker
+## Containers
+
+The same Dockerfile builds a Linux image with Apple Container or Docker. The Apple Container commands below select ARM64; Docker Compose builds for the Docker host's native architecture. The recorded container validation uses Apple Container on an Apple silicon Mac. See [verification coverage](docs/QUALITY.md#verification-coverage) for the exact execution boundaries.
+
+### Apple Container on macOS
+
+Use an Apple silicon Mac running macOS 26 and install Apple's signed [Container package](https://github.com/apple/container#initial-install). Clone this repository and enter `prd-genie` as in Quick start. Host Node and Docker Desktop are not required for this route.
+
+```bash
+container system start
+container build --platform linux/arm64 --tag prd-genie:local .
+container volume create prd-genie-data
+container volume create prd-genie-models
+container run --detach --name prd-genie --publish 127.0.0.1:3210:3210 --volume prd-genie-data:/data --volume prd-genie-models:/models prd-genie:local
+```
+
+Create the named volumes only on the first installation. If the container or volumes already exist, use the restart or update instructions below rather than recreating them. Open [http://127.0.0.1:3210](http://127.0.0.1:3210) and follow the first-PRD walkthrough. Configure your provider in the interface.
+
+- Logs: `container logs prd-genie`.
+- Stop: `container stop --signal SIGTERM --time 10 prd-genie`.
+- Resume: `container start prd-genie`.
+- Stop the engine after stopping its containers: `container system stop`. This affects all containers managed by that engine; leave it running if another application needs it.
+
+To update, export your project archives, stop `prd-genie`, and run `git pull --ff-only` in the repository. Rebuild with the `container build` command above, then run `container delete prd-genie` and repeat only the `container run` command. Deleting the stopped container retains the named data and model volumes. Do not delete those volumes during an update. Run `container system start` first if you previously stopped the engine.
+
+The automated maintainer check is `npm run container:record-smoke`. It uses isolated temporary names and removes only its own container, image, and volumes. It checks health, loopback Host rejection, unprivileged Node PID 1, restart persistence, graceful shutdown, and cleanup.
+
+### Docker Compose
 
 Install and start [Docker Engine or Docker Desktop with Compose](https://docs.docker.com/compose/install/). Verify `docker --version` and `docker compose version`. Clone the repository and enter `prd-genie` as in Quick start. Docker builds Node and dependencies inside the image; a host Node installation is not needed for this route.
 
@@ -190,7 +217,9 @@ Open [http://127.0.0.1:3210](http://127.0.0.1:3210) and follow the first-PRD wal
 
 Use `docker compose logs --tail=100 prd-genie` to inspect startup, `docker compose stop` to stop, and `docker compose start` to resume. To update, export project archives, stop the container, run `git pull --ff-only`, and run `docker compose up --build -d` again. `docker compose down` removes the container while retaining data volumes; adding `--volumes` deletes those backups of app state and must not be part of a routine update.
 
-Inside a container, `127.0.0.1` refers to the container itself. This configuration does not connect to Ollama on the host, and PRD Genie's endpoint policy rejects private non-loopback addresses. Use the native installation for a local host Ollama server. Docker requires additional disk space for images and build layers. The current onboarding verification covers native macOS; Docker instructions are supplied but this correction has not been verified with Docker Engine.
+### Container networking and storage
+
+Inside either container runtime, `127.0.0.1` refers to the container itself. These configurations do not connect to Ollama on the host, and PRD Genie's endpoint policy rejects private non-loopback addresses. Use the native installation for a local host Ollama server. Containers require additional disk space for images and build layers. Keep each runtime's data volumes separate; use **Export archive** and **Restore archive** to move projects between installations.
 
 ## Quality commands
 

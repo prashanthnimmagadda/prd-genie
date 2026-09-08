@@ -8,6 +8,8 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ### Fixed
 
+- Added an Apple Container installation, restart, and update guide and clarified the measured native and Linux-container verification coverage.
+- Changed the first-PRD walkthrough to use the reader's own requirements and evidence.
 - Corrected RC.3 release status and documented installation, the first PRD workflow, provider sessions, data locations, backups, updates, and Docker boundaries.
 - Updated the Tiptap family to 3.31.3 and pinned xmldom 0.8.15 and the development dependency qs 6.16.0 to address reported advisories.
 - Authorized viewport-dependent dialog scroll-lock styles with per-response CSP nonces while retaining restrictions on arbitrary inline scripts and styles.
