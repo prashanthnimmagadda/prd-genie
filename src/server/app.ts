@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply } from 'fastify';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
@@ -40,9 +40,12 @@ export async function buildApp(
   });
   await app.register(cookie);
   await app.register(helmet, {
+    enableCSPNonces: true,
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        // This app is served over loopback HTTP; WebKit otherwise upgrades its assets to HTTPS.
+        upgradeInsecureRequests: null,
         scriptSrc: ["'self'"],
         styleSrc: [
           "'self'",
@@ -103,14 +106,31 @@ export async function buildApp(
 
   const clientRoot = options.clientRoot ?? path.resolve(process.cwd(), 'dist/client');
   if (fs.existsSync(clientRoot)) {
-    await app.register(staticFiles, { root: clientRoot, wildcard: false });
+    const clientHtml = fs.readFileSync(path.join(clientRoot, 'index.html'), 'utf8');
+    const sendClient = (_request: unknown, reply: FastifyReply) => {
+      // Scroll-lock CSS varies with viewport geometry. Authorize its style element
+      // with a fresh nonce rather than permitting arbitrary inline styles.
+      const nonceMeta = `<meta name="csp-style-nonce" content="${reply.cspNonce.style}">`;
+      return reply
+        .header('Cache-Control', 'no-store')
+        .type('text/html')
+        .send(clientHtml.replace('<head>', `<head>${nonceMeta}`));
+    };
+    await app.register(staticFiles, {
+      root: clientRoot,
+      wildcard: false,
+      index: false,
+      globIgnore: ['index.html'],
+    });
+    app.get('/', sendClient);
+    app.get('/index.html', sendClient);
     app.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api/')) {
         return reply.code(404).send({
           error: { code: 'not_found', message: 'API route not found.', requestId: request.id },
         });
       }
-      return reply.type('text/html').sendFile('index.html');
+      return sendClient(request, reply);
     });
   }
 

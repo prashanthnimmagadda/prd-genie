@@ -18,7 +18,7 @@ This repository is an independent implementation with synthetic fixtures only.
 
 ## Status
 
-The public `v0.1.0-rc.2` release is an early candidate, not a finished product claim. RC.3 development changes are validated against an exact clean commit before any later candidate is proposed for promotion. See [Quality and model evaluation](docs/QUALITY.md) for the evidence rules and current limitations.
+The latest packaged release is [v0.1.0-rc.3](https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.3), an early candidate. The `main` branch includes subsequent onboarding, dependency, and browser fixes listed under [Unreleased](CHANGELOG.md#unreleased). The Quick start below installs `main`; RC.3 downloads do not contain those later fixes. See [Quality and model evaluation](docs/QUALITY.md) for evidence rules and limitations.
 
 No adoption, universal accuracy, native desktop packaging, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
@@ -26,27 +26,52 @@ No adoption, universal accuracy, native desktop packaging, or unattended documen
 
 ## Quick start
 
-Requirements:
-
-- Node.js 22 or 24
-- npm 10 or later
-- Enough disk space for the local embedding model cache
+Install [Git](https://git-scm.com/downloads) and [Node.js 22 or 24](https://nodejs.org/en/download) first. Node includes npm; use npm 10 or later. Open Terminal on macOS/Linux or PowerShell on Windows and check:
 
 ```bash
-npm ci
-npm run dev
+git --version
+node --version
+npm --version
 ```
 
-Open `http://127.0.0.1:5173`. The API listens on `http://127.0.0.1:3210` in development.
+Allow at least 1.5 GB of free disk space for a source installation, plus space for your documents. A measured macOS installation used about 945 MB for dependencies and 23 MB for the embedding model; sizes vary by platform. Internet access is required for installation and the model's first download. Provider API use needs that provider's credentials and may incur separate charges.
 
-For a production build:
+Run these commands one line at a time:
 
 ```bash
+git clone https://github.com/prashanthnimmagadda/prd-genie.git
+cd prd-genie
+npm ci
 npm run build
 npm start
 ```
 
-The production application listens only on `http://127.0.0.1:3210` by default.
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210) in a browser on the same computer. You should see **Start with the document, not a chat.** Keep the terminal running while using PRD Genie. This is a local browser app, not a desktop installer or hosted service.
+
+To stop, save your edits and press **Ctrl+C** in the terminal. To return, open a terminal in the `prd-genie` folder, run `npm start`, and reopen the URL. Projects persist; session provider keys must be configured again after a server restart.
+
+For code development with automatic reload, use this instead of `npm start`:
+
+```bash
+npm run dev
+```
+
+Development opens at [http://127.0.0.1:5173](http://127.0.0.1:5173), with the API on port 3210. Run only one server per data directory.
+
+## Your first PRD in about ten minutes
+
+Start after installation. Model downloads and provider response times may take longer.
+
+1. Enter **Draft recovery** as the project name and click **Create project**. You can also use **Import an existing PRD** with a Markdown, DOCX, or plain-text document.
+2. Select **Problem** in the document outline. Write a short draft, for example: “Product managers lose work when a draft is interrupted.” Save your edits using **Save**.
+3. Create a plain-text file named `research-notes.txt` with this synthetic practice evidence: “In a synthetic study, eight of twelve product managers lost an unsaved PRD draft. Participants asked to recover their last saved revision after restarting.” Use **Add source** to upload it. Wait for its status to become **ready**. The first upload may download the local embedding model. A partial status can mean incomplete extraction or unavailable semantic indexing. Read its warning; lexical search remains available when embeddings cannot load. Retry indexing after resolving the reported cause.
+4. Click **Configure model** in the top bar (accessible name: **Configure model provider**). Choose your provider, enter its API key under **Session key**, and click **Configure and discover**. Click **Choose a model**, select an available model, close the model chooser, and click **Use provider**. If discovery is unavailable, enter a valid model ID in **Or enter a model ID** before **Use provider**. For a local Ollama server, choose **Local Ollama**, use `http://127.0.0.1:11434/v1`, and select an already installed model. See the [provider matrix](#provider-matrix). A ChatGPT subscription is not an API key.
+5. In **assist**, choose **Rewrite**, set **Scope** to **Section**, and keep **Problem** selected. Enter: “Rewrite the problem using the evidence. Keep it concise and do not invent business impact.” Submit the instruction.
+6. Read the proposed text and its citations. Compare each cited excerpt with your source. Choose **Apply** (the accessible name identifies the target, such as **Apply to Problem**) to accept it, or dismiss it. The document changes only after acceptance. **Undo** is available for the immediately applied revision.
+7. Use **Export** to download Markdown, DOCX, or PDF. Use **Export archive** for a portable backup that includes sources and revision history. Inspect the exported document before sharing it.
+8. Stop and restart the app using the Quick start instructions. Reopen your project to confirm your saved work is present. Reconfigure the provider session before another AI action.
+
+Your practice source is synthetic. Replace it with evidence you are permitted to use. AI actions send the instruction, selected PRD scope, and retrieved excerpts to your selected provider. See [Privacy and outbound data](#privacy-and-outbound-data) before adding confidential material.
 
 ## Provider matrix
 
@@ -61,6 +86,8 @@ The production application listens only on `http://127.0.0.1:3210` by default.
 OpenAI-compatible endpoints use `OPENAI_COMPATIBLE_BASE_URL` as an optional environment fallback. Ollama uses `OLLAMA_BASE_URL` or `http://127.0.0.1:11434/v1`.
 
 The application talks directly to these providers. It does not use an intermediary model gateway.
+
+Session setup in the interface is the simplest option. Environment fallbacks are optional: `.env.example` is a reference, and PRD Genie does **not** automatically load a `.env` file. If you choose file-based configuration, copy `.env.example` to `.env`, remove unused empty entries, add only the required values, then start the built server with `node --env-file=.env dist/server/server/index.js`. Keep that file private; it contains plaintext credentials and is ignored by Git. For Docker, use the session interface unless you explicitly configure container environment variables.
 
 ## ChatGPT plan usage
 
@@ -115,7 +142,15 @@ The client, server, and shared contracts are one strict TypeScript package. Fast
 
 ## Data directories
 
-The default location follows the operating system application-data convention. Override it with:
+Default data locations (including the SQLite database, sources, and model cache):
+
+| System  | Directory                                           |
+| ------- | --------------------------------------------------- |
+| macOS   | `~/Library/Application Support/prd-genie-nodejs`    |
+| Linux   | `${XDG_DATA_HOME:-~/.local/share}/prd-genie-nodejs` |
+| Windows | `%LOCALAPPDATA%\prd-genie-nodejs\Data`              |
+
+Override it on macOS/Linux with:
 
 ```bash
 PRD_GENIE_DATA_DIR=/path/to/data npm start
@@ -123,13 +158,39 @@ PRD_GENIE_DATA_DIR=/path/to/data npm start
 
 Override the model cache separately with `PRD_GENIE_MODEL_CACHE_DIR`.
 
-## Docker
+In PowerShell, set `$env:PRD_GENIE_DATA_DIR = 'C:\path\to\data'` before `npm start`. Keep the same path on subsequent starts to reopen the same projects.
+
+### Back up, update, or uninstall
+
+Export a portable archive for each project before updating. For a complete backup, stop the server and copy the entire data directory to a private backup location. Include a separately configured model cache if you want to avoid downloading it again. Never copy an actively written SQLite database as your only backup.
+
+For the `main` installation above, stop the server, open the repository directory, and run:
 
 ```bash
-docker compose up --build
+git status --short
+git pull --ff-only
+npm ci
+npm run build
+npm start
 ```
 
-The compose file publishes the container only on `127.0.0.1`, and persists both `/data` and `/models`.
+If `git status` shows your own edits, preserve them before pulling. If `git pull` refuses, do not force it or reset your work. Review [CHANGELOG.md](CHANGELOG.md) before updating. Rollback requires the matching code and a backup of the database and sources from before the update; older code does not downgrade the database.
+
+To uninstall, stop the app and remove its cloned repository folder. Project data remains in the directory above. Remove that separate directory only if you intend to erase the projects and have checked your backups. An **Export archive** backup can be brought back with **Restore archive**.
+
+## Docker
+
+Install and start [Docker Engine or Docker Desktop with Compose](https://docs.docker.com/compose/install/). Verify `docker --version` and `docker compose version`. Clone the repository and enter `prd-genie` as in Quick start. Docker builds Node and dependencies inside the image; a host Node installation is not needed for this route.
+
+```bash
+docker compose up --build -d
+```
+
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210) and follow the first-PRD walkthrough. Configure provider keys in the interface. The compose file publishes only on `127.0.0.1` and persists `/data` and `/models` in named volumes. Do not run the native server on the same port at the same time.
+
+Use `docker compose logs --tail=100 prd-genie` to inspect startup, `docker compose stop` to stop, and `docker compose start` to resume. To update, export project archives, stop the container, run `git pull --ff-only`, and run `docker compose up --build -d` again. `docker compose down` removes the container while retaining data volumes; adding `--volumes` deletes those backups of app state and must not be part of a routine update.
+
+Inside a container, `127.0.0.1` refers to the container itself. This configuration does not connect to Ollama on the host, and PRD Genie's endpoint policy rejects private non-loopback addresses. Use the native installation for a local host Ollama server. Docker requires additional disk space for images and build layers. The current onboarding verification covers native macOS; Docker instructions are supplied but this correction has not been verified with Docker Engine.
 
 ## Quality commands
 
@@ -179,7 +240,15 @@ Inspect the structured `/api/health` response. If retrieval is degraded, the emb
 
 **A provider returns missing credentials**
 
-Open Model provider and configure a session key, or set the documented environment fallback before starting the server.
+Click **Configure model provider** and configure a session key, or set the documented environment fallback before starting the server. Keys expire after restart or eight idle hours; the saved model name does not mean the session credential is still available.
+
+**A command is not found or installation fails**
+
+Reopen the terminal after installing Git or Node and check the three versions in Quick start. Run commands from the cloned `prd-genie` directory. If a native dependency cannot download a prebuilt binary, it may require your platform's C/C++ build tools and Python. Report the first failing package and redacted error through [Support](SUPPORT.md).
+
+**The page will not open or the port is already in use**
+
+Keep the server terminal open and check its startup output. Use port 3210 for `npm start` and 5173 for `npm run dev`. Stop your other PRDG process before restarting; do not run native and Docker installations on port 3210 together.
 
 **A custom endpoint is rejected**
 

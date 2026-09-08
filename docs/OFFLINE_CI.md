@@ -21,6 +21,8 @@ The gate runs the content and history guard, formatting, lint, strict TypeScript
 
 The cache-only audit proves what the local npm advisory cache knows. It does not prove that the advisory data is current. Run `npm run audit:record` with approved network access to record separate current production and full dependency results in `reports/dependency-audit.json`.
 
+To run the same full gate against the built production app (including the provider-dialog CSP regression), use `PRD_GENIE_E2E_PRODUCTION=1 npm run ci:offline` on macOS/Linux. In PowerShell, set `$env:PRD_GENIE_E2E_PRODUCTION = '1'` before `npm run ci:offline`. Without this setting, browser tests exercise the development server and the production-only CSP test is skipped.
+
 Run `npm run gate:node` once under Node.js 22 and once under Node.js 24. These quick exact-SHA gates write `reports/node-22.json` and `reports/node-24.json`. A completed manual browser and source review is recorded with `npm run accessibility:record`; the command validates an exact-SHA review input before writing `reports/accessibility-review.json`.
 
 For a faster pre-commit check that omits browsers:

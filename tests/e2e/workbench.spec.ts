@@ -2,6 +2,56 @@ import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import fs from 'node:fs';
 
+test('production provider and model dialogs satisfy CSP and release scroll locks', async ({
+  page,
+  request,
+}) => {
+  test.skip(process.env.PRD_GENIE_E2E_PRODUCTION !== '1', 'Requires the production CSP header');
+  const violations: string[] = [];
+  await page.exposeFunction('recordCspViolation', (directive: string) =>
+    violations.push(directive),
+  );
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      void (
+        window as unknown as { recordCspViolation: (value: string) => Promise<void> }
+      ).recordCspViolation(event.violatedDirective);
+    });
+  });
+  const name = `CSP fixture ${crypto.randomUUID()}`;
+  const created = await request.post('/api/projects', { data: { name } });
+  expect(created.ok()).toBe(true);
+  await page.goto('/');
+  await page.getByRole('button', { name, exact: true }).click();
+  await page.getByRole('button', { name: 'Configure model provider' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Model provider', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+  const nonce = await page.locator('meta[name="csp-style-nonce"]').getAttribute('content');
+  expect(nonce).toBeTruthy();
+  await expect(page.locator('style[nonce]').first()).toBeAttached();
+  expect(
+    await page
+      .locator('style[nonce]')
+      .evaluateAll((styles) =>
+        styles.every(
+          (style) =>
+            (style as HTMLStyleElement).nonce.length > 0 &&
+            (style as HTMLStyleElement).sheet !== null,
+        ),
+      ),
+  ).toBe(true);
+  await dialog.getByRole('button', { name: 'Choose a model' }).click();
+  const modelDialog = page.getByRole('dialog', { name: 'Choose a model', exact: true });
+  await expect(modelDialog).toBeVisible();
+  await modelDialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('body')).not.toHaveAttribute('data-scroll-locked');
+  expect(violations).toEqual([]);
+});
+
 test('creates a project and exposes the document-first workbench', async ({
   page,
   request,

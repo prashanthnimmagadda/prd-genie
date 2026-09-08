@@ -6,6 +6,14 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ## Unreleased
 
+### Fixed
+
+- Corrected RC.3 release status and documented installation, the first PRD workflow, provider sessions, data locations, backups, updates, and Docker boundaries.
+- Updated the Tiptap family to 3.31.3 and pinned xmldom 0.8.15 and the development dependency qs 6.16.0 to address reported advisories.
+- Authorized viewport-dependent dialog scroll-lock styles with per-response CSP nonces while retaining restrictions on arbitrary inline scripts and styles.
+- Added production-browser coverage for provider and nested model dialogs, CSP violations, and scroll-lock cleanup.
+- Prevented WebKit from upgrading local HTTP assets to unavailable HTTPS endpoints.
+
 ## [0.1.0-rc.3] - 2026-09-01
 
 ### Added

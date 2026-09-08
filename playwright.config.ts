@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const evidenceOutput = process.env.PRD_GENIE_BROWSER_EVIDENCE_RAW;
+const production = process.env.PRD_GENIE_E2E_PRODUCTION === '1';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -12,7 +13,7 @@ export default defineConfig({
       ? [['html'], ['github']]
       : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: production ? 'http://127.0.0.1:3210' : 'http://127.0.0.1:5173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -24,8 +25,10 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: 'PRD_GENIE_DATA_DIR=/tmp/prd-genie-e2e PRD_GENIE_PORT=3210 npm run dev',
-      url: 'http://127.0.0.1:5173',
+      command: production
+        ? 'PRD_GENIE_DATA_DIR=/tmp/prd-genie-e2e-production PRD_GENIE_PORT=3210 npm start'
+        : 'PRD_GENIE_DATA_DIR=/tmp/prd-genie-e2e PRD_GENIE_PORT=3210 npm run dev',
+      url: production ? 'http://127.0.0.1:3210' : 'http://127.0.0.1:5173',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },

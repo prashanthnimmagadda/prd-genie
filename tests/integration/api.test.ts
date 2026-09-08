@@ -23,7 +23,7 @@ describe('API', () => {
     fs.mkdirSync(clientRoot);
     fs.writeFileSync(
       path.join(clientRoot, 'index.html'),
-      '<!doctype html><title>PRD Genie test client</title>',
+      '<!doctype html><html><head><title>PRD Genie test client</title></head><body></body></html>',
     );
     originalSourceDir = config.sourceDir;
     Object.assign(config, { sourceDir });
@@ -62,13 +62,27 @@ describe('API', () => {
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
   });
 
-  it('permits only the pinned scroll-container style without enabling arbitrary inline CSS', async () => {
+  it('authorizes dynamic modal styles with fresh nonces without arbitrary inline CSS', async () => {
     const response = await app.inject({ method: 'GET', url: '/' });
     const policy = response.headers['content-security-policy'];
     expect(response.statusCode).toBe(200);
     expect(policy).toContain("style-src 'self' 'unsafe-hashes'");
     expect(policy).toContain("'sha256-PlumsSlvJ7vvWzjqibGAYKq92O3y/4JTxWWsWJvyUYA='");
     expect(policy).not.toContain("'unsafe-inline'");
+    expect(policy).not.toContain('upgrade-insecure-requests');
+    const nonce = /name="csp-style-nonce" content="([^"]+)"/.exec(response.body)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(policy).toContain(`'nonce-${nonce}'`);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const next = await app.inject({ method: 'GET', url: '/' });
+    expect(next.body).not.toContain(`content="${nonce}"`);
+    for (const url of ['/index.html', '/workbench']) {
+      const html = await app.inject({ method: 'GET', url });
+      const pageNonce = /name="csp-style-nonce" content="([^"]+)"/.exec(html.body)?.[1];
+      expect(pageNonce).toBeTruthy();
+      expect(html.headers['content-security-policy']).toContain(`'nonce-${pageNonce}'`);
+      expect(html.headers['cache-control']).toBe('no-store');
+    }
   });
 
   it('rejects DNS-rebinding hosts and cross-origin browser requests', async () => {
