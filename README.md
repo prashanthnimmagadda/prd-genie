@@ -180,7 +180,7 @@ To uninstall, stop the app and remove its cloned repository folder. Project data
 
 ## Containers
 
-The same Dockerfile builds a Linux ARM64 image with Apple Container or Docker. The recorded container validation uses Apple Container on an Apple silicon Mac. See [verification coverage](docs/QUALITY.md#verification-coverage) for the exact execution boundaries.
+The same Dockerfile builds a Linux image with Apple Container or Docker. The Apple Container commands below select ARM64; Docker Compose builds for the Docker host's native architecture. The recorded container validation uses Apple Container on an Apple silicon Mac. See [verification coverage](docs/QUALITY.md#verification-coverage) for the exact execution boundaries.
 
 ### Apple Container on macOS
 
