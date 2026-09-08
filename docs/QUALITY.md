@@ -15,6 +15,23 @@ The complete offline gate runs:
 
 Results are release evidence only when they were produced from the exact documented Git SHA with a clean working tree. Counts and percentages from an earlier release candidate do not validate later uncommitted work. The release evidence bundle records the current test counts, coverage summary, browser matrix, dependency audit, license inventory, SBOM, container smoke test, and platform limitations.
 
+## Verification coverage
+
+The following executions passed on 8 September 2026 for runtime commit [`73dc7b9`](https://github.com/prashanthnimmagadda/prd-genie/commit/73dc7b9f5c0dc6e12d95e2a052f68e58e6e89e22). Subsequent documentation changes do not change that tested runtime.
+
+| Execution target                         | Recorded checks                                                                                                                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Native macOS ARM64, Node 24.15.0         | Full 12-step gate; 234 unit/integration tests; 30 production-browser tests across Chromium, Firefox, and WebKit; production restart and export smoke test                                               |
+| Native macOS ARM64, Node 22.23.2         | Clean install in a separate checkout; all 11 Node-gate steps, including the same 234 tests and production build                                                                                         |
+| Linux ARM64 image, Apple Container 1.0.0 | Dockerfile build with Node 22.23.2; health; loopback Host rejection; UID 1000 and Node PID 1; persistent data after restart; graceful SIGTERM; removal of exact temporary resources and engine shutdown |
+| Current dependency advisory data         | Zero findings in both production and full npm audits; generated license inventory and CycloneDX SBOM                                                                                                    |
+
+Apple Container consumes the repository's Dockerfile and runs its Linux image. That execution does not exercise Docker Engine or Compose orchestration, native Windows, or a Linux desktop installation. Those are separate execution targets, not interchangeable names for the measured environment. The [README](../README.md#containers) includes the Apple Container commands as well as the Compose recipe.
+
+The container smoke check starts with an empty model cache and no source document. Its initial `degraded` retrieval status means semantic indexing has not initialized; the smoke checks do not claim to evaluate retrieval quality. Source ingestion, citations, proposal acceptance, archive restore, and model behavior have their own browser and model checks.
+
+Automated regression tests use explicitly labelled synthetic fixtures so expected outputs and adverse cases are reproducible without committing private product data. A real-product evaluation is separate evidence: it must record the actual requirements, source provenance, model, accepted and rejected proposals, exports, and reviewer findings. Generating a plausible PRD alone does not establish factual source evidence or customer validation.
+
 ## Real-model evaluation
 
 `npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is an optional release gate that requires explicitly installed local models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
