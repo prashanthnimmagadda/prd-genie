@@ -75,7 +75,7 @@
     "@tiptap/markdown": "3.31.3",
     "@tiptap/react": "3.31.3",
     "@tiptap/starter-kit": "3.31.3",
-    "ai": "7.0.77",
+    "ai": "7.0.93",
     "archiver": "8.0.0",
     "better-sqlite3": "13.0.3",
     "class-variance-authority": "0.7.1",
