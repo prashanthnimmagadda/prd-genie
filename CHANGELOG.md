@@ -8,6 +8,8 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ### Fixed
 
+- Integrated reviewed production, development, and AI SDK 7 dependency updates, retaining TypeScript 6.0.3 for linter compatibility and grouping future coupled SDK updates.
+- Updated manual workflow actions using immutable commit pins and supplied explicit comparison refs for manual dependency review. GitHub Actions remain disabled.
 - Added an Apple Container installation, restart, and update guide and clarified the measured native and Linux-container verification coverage.
 - Changed the first-PRD walkthrough to use the reader's own requirements and evidence.
 - Corrected RC.3 release status and documented installation, the first PRD workflow, provider sessions, data locations, backups, updates, and Docker boundaries.
