@@ -57,11 +57,11 @@
     "check": "npm run content:check && npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "4.0.41",
-    "@ai-sdk/google": "4.0.26",
-    "@ai-sdk/openai": "4.0.22",
-    "@ai-sdk/openai-compatible": "3.0.16",
-    "@ai-sdk/react": "4.0.80",
+    "@ai-sdk/anthropic": "4.0.49",
+    "@ai-sdk/google": "4.0.64",
+    "@ai-sdk/openai": "4.0.60",
+    "@ai-sdk/openai-compatible": "3.0.44",
+    "@ai-sdk/react": "4.0.96",
     "@fastify/cookie": "11.1.2",
     "@fastify/helmet": "13.1.1",
     "@fastify/multipart": "10.1.1",
