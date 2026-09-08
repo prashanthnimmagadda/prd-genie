@@ -35,7 +35,7 @@ npm run ci:offline:quick
 
 GitHub Actions remain disabled. The checked-in manual workflows are optional maintainer recipes, not evidence of hosted runs. If a maintainer separately approves enabling them, use a trusted self-hosted Actions runner version 2.329.0 or later for the pinned Node 24 actions. The dependency-review workflow requires explicit base and candidate commit SHAs when dispatched.
 
-AI SDK core and provider updates are grouped so their protocol versions can be tested together. Development major updates require separate compatibility review. TypeScript remains at 6.0.3 because the current typescript-eslint 8.69.0 peer contract requires TypeScript below 6.1.0; do not bypass that contract with force or legacy peer resolution.
+AI SDK core and provider updates are grouped so their protocol versions can be tested together. Development major updates require separate compatibility review. TypeScript remains at 6.0.3 because the current typescript-eslint 8.69.0 peer contract requires TypeScript below 6.1.0; do not bypass that contract with force or legacy peer resolution. Dependabot ignores TypeScript versions at or above 6.1.0 until a compatible linter peer range is available and the ignore rule is reviewed.
 
 Before merge, a maintainer records:
 
