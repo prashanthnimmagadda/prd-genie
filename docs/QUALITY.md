@@ -17,7 +17,7 @@ Results are release evidence only when they were produced from the exact documen
 
 ## Verification coverage
 
-The following executions passed on 8 September 2026 for runtime commit [`73dc7b9`](https://github.com/prashanthnimmagadda/prd-genie/commit/73dc7b9f5c0dc6e12d95e2a052f68e58e6e89e22). Subsequent documentation changes do not change that tested runtime.
+The dependency-integrated runtime is identified by commit [`092b4cf`](https://github.com/prashanthnimmagadda/prd-genie/commit/092b4cffb42fafe16470233fb5f37f8f72e94354). The following checks were recorded on 8 September 2026. Reports retain the exact checked-out SHA; subsequent documentation-only changes do not change the runtime.
 
 | Execution target                         | Recorded checks                                                                                                                                                                                         |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -31,6 +31,14 @@ Apple Container consumes the repository's Dockerfile and runs its Linux image. T
 The container smoke check starts with an empty model cache and no source document. Its initial `degraded` retrieval status means semantic indexing has not initialized; the smoke checks do not claim to evaluate retrieval quality. Source ingestion, citations, proposal acceptance, archive restore, and model behavior have their own browser and model checks.
 
 Automated regression tests use explicitly labelled synthetic fixtures so expected outputs and adverse cases are reproducible without committing private product data. A real-product evaluation is separate evidence: it must record the actual requirements, source provenance, model, accepted and rejected proposals, exports, and reviewer findings. Generating a plausible PRD alone does not establish factual source evidence or customer validation.
+
+## Real-product workflow
+
+A private source-backed product case was exercised on 8 September 2026 at `4554cae`, before the URI lockfile correction. It used the compiled app, an isolated database, actual hybrid indexing, and the installed 4B Ollama drafting model. Twenty workflow assertions passed across import, source readiness, proposal staging, explicit acceptance, duplicate-apply rejection, Markdown/DOCX/PDF/archive export, archive restoration with handoff provenance, and restart persistence. The original source files and generated provider responses remain outside this public repository.
+
+The 4B proposal preserved the original problem wording unchanged. Whole-document reviews from the 4B and 9B local models failed validation; diagnostic output included incorrect citation identifiers and statements contradicted by the document. Those responses were rejected and not applied. A separate source-grounded file handoff was prepared in the authenticated assistant task, imported as a staged proposal, explicitly accepted, and supplemented through an explicit editor save after source review. This did not test ChatGPT browser login or plugin installation and did not use ChatGPT credentials as an API key.
+
+This case proves the recorded real-source workflow and rejection behavior, not reliable autonomous whole-document review by the tested local models. A valid handoff also remains subject to factual review before acceptance.
 
 ## Real-model evaluation
 

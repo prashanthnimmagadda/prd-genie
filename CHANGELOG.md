@@ -8,6 +8,7 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ### Fixed
 
+- Scoped patched URI dependencies by major version so the container's npm 10 and native npm 11 both resolve a valid lockfile.
 - Integrated reviewed production, development, and AI SDK 7 dependency updates, retaining TypeScript 6.0.3 for linter compatibility and grouping future coupled SDK updates.
 - Updated manual workflow actions using immutable commit pins and supplied explicit comparison refs for manual dependency review. GitHub Actions remain disabled.
 - Added an Apple Container installation, restart, and update guide and clarified the measured native and Linux-container verification coverage.
