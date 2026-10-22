@@ -91,8 +91,13 @@ test('creates a project and exposes the document-first workbench', async ({
   }
 });
 
-test('exports the latest editor text and reopens it locally', async ({ page, request }, testInfo) => {
-  await expect.poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 }).toBe(200);
+test('exports the latest editor text and reopens it locally', async ({
+  page,
+  request,
+}, testInfo) => {
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
   const name = `Latest export ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const created = await request.post('/api/projects', { data: { name } });
   expect(created.ok()).toBe(true);
@@ -108,11 +113,18 @@ test('exports the latest editor text and reopens it locally', async ({ page, req
   };
   expect(saved.sections[0]?.body).toContain('Latest unsaved requirement for the PDF.');
   await page.reload();
-  await expect(page.getByLabel('Section content').first()).toContainText('Latest unsaved requirement for the PDF.');
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Latest unsaved requirement for the PDF.',
+  );
 });
 
-test('saves and applies a custom project structure without dropping content', async ({ page, request }, testInfo) => {
-  await expect.poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 }).toBe(200);
+test('saves and applies a custom project structure without dropping content', async ({
+  page,
+  request,
+}, testInfo) => {
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
   const name = `Custom structure ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const created = await request.post('/api/projects', { data: { name } });
   expect(created.ok()).toBe(true);
@@ -123,13 +135,27 @@ test('saves and applies a custom project structure without dropping content', as
   await picker.locator('summary').click();
   await picker.getByRole('button', { name: 'Save or enter a structure' }).click();
   await picker.getByLabel('Name', { exact: true }).fill('Client brief');
-  await picker.getByLabel('Sections, one per line').fill('Problem | State the confirmed issue | required\nNext steps | Decisions and owners | optional');
+  await picker
+    .getByLabel('Sections, one per line')
+    .fill(
+      'Problem | State the confirmed issue | required\nNext steps | Decisions and owners | optional',
+    );
   await picker.getByRole('button', { name: 'Save structure' }).click();
-  await picker.locator('.structure-option').filter({ hasText: 'Client brief' }).getByRole('button', { name: 'Use' }).click();
-  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText('Next steps');
-  await expect(page.getByLabel('Section content').first()).toContainText('Keep this confirmed problem.');
+  await picker
+    .locator('.structure-option')
+    .filter({ hasText: 'Client brief' })
+    .getByRole('button', { name: 'Use' })
+    .click();
+  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
+    'Next steps',
+  );
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Keep this confirmed problem.',
+  );
   await page.reload();
-  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText('Next steps');
+  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
+    'Next steps',
+  );
 });
 
 test('isolates provider drafts and discloses active and pending outbound hosts', async ({
@@ -327,12 +353,17 @@ test('exports current AI evidence immediately and clears handoff selection bound
     ),
   });
   await expect
-    .poll(async () => {
-      const result = (await (await request.get(`/api/projects/${project.id}/sources`)).json()) as {
-        sources: Array<{ status: string }>;
-      };
-      return result.sources[0]?.status;
-    }, { timeout: 15_000 })
+    .poll(
+      async () => {
+        const result = (await (
+          await request.get(`/api/projects/${project.id}/sources`)
+        ).json()) as {
+          sources: Array<{ status: string }>;
+        };
+        return result.sources[0]?.status;
+      },
+      { timeout: 15_000 },
+    )
     .not.toBe('processing');
 
   await page.getByRole('button', { name: 'Configure model provider' }).click();
