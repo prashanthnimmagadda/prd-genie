@@ -6,21 +6,22 @@ This repository is an independent implementation.
 
 ## What it does
 
-- Creates a structured PRD with stable, reorderable sections.
+- Creates a structured PRD with stable, reorderable sections and reusable project structures.
 - Imports Markdown, DOCX, and plain-text PRDs.
-- Indexes PDF, DOCX, Markdown, and plain-text sources locally.
+- Indexes PDF, DOCX, PPTX, XLSX, JPEG, Markdown, and plain-text sources locally, with extraction warnings.
 - Combines lexical and local semantic retrieval, with an automatic lexical fallback.
 - Connects directly to a provider using a session key or environment fallback.
 - Previews every AI rewrite or review finding before it changes the PRD.
 - Records revisions, citations, provider, model, action, scope, and source revision.
 - Exports and restores a portable project archive with revision and evidence history.
 - Creates a revision-bound handoff for optional use with the included ChatGPT skills plugin.
+- Offers optional Sign in with ChatGPT plan usage for eligible users, separately from PRD Genie project access.
 
 ## Status
 
 The latest packaged release is [v0.1.0-rc.3](https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.3), an early candidate. The `main` branch includes subsequent onboarding, dependency, and browser fixes listed under [Unreleased](CHANGELOG.md#unreleased). The Quick start below installs `main`; RC.3 downloads do not contain those later fixes. See [Quality and model evaluation](docs/QUALITY.md) for evidence rules and limitations.
 
-No adoption, universal accuracy, native desktop packaging, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
+No adoption, universal accuracy, signed desktop distribution, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
 ![PRD Genie workbench with the document editor, source rail, and review panel](docs/screenshots/workbench.png)
 
@@ -46,7 +47,7 @@ npm run build
 npm start
 ```
 
-Open [http://127.0.0.1:3210](http://127.0.0.1:3210) in a browser on the same computer. You should see **Start with the document, not a chat.** Keep the terminal running while using PRD Genie. This is a local browser app, not a desktop installer or hosted service.
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210) in a browser on the same computer. You should see **Your ideas, shaped into a clear PRD.** Keep the terminal running while using PRD Genie.
 
 To stop, save your edits and press **Ctrl+C** in the terminal. To return, open a terminal in the `prd-genie` folder, run `npm start`, and reopen the URL. Projects persist; session provider keys must be configured again after a server restart.
 
@@ -58,30 +59,35 @@ npm run dev
 
 Development opens at [http://127.0.0.1:5173](http://127.0.0.1:5173), with the API on port 3210. Run only one server per data directory.
 
+### Build a local macOS app
+
+On a Mac with Xcode Command Line Tools installed, run `npm run build && npm run package:mac` after `npm ci`. This creates `dist/mac/PRD Genie.app` with a bundled Node runtime and local WebKit window. Open it from Finder. It starts and stops its own loopback server and uses the same local project data as the source installation. It needs no PRD Genie account or online service. This build is unsigned and has not been notarized or published as a download; signing, notarization and distribution are separate decisions.
+
 ## Your first PRD in about ten minutes
 
 Start after installation. Model downloads and provider response times may take longer.
 
-1. Enter your project's name and click **Create project**. You can also use **Import an existing PRD** with a Markdown, DOCX, or plain-text document.
+1. Explore the optional finished example, enter a project name and click **Create project**, or use **Import an existing PRD** with a Markdown, DOCX, or plain-text document. Creating a PRD immediately is optional.
 2. Select **Problem** in the document outline. Describe the problem you want to address in one or two sentences. Save your edits using **Save**.
-3. Use **Add source** to upload a requirements brief, research notes, or a decision record you are permitted to use. Supported formats are PDF, DOCX, Markdown, and plain text. Choose material relevant to the problem you wrote; the app cannot ground a proposal in evidence you have not supplied. Wait for its status to become **ready**. The first upload may download the local embedding model. A partial status can mean incomplete extraction or unavailable semantic indexing. Read its warning; lexical search remains available when embeddings cannot load. Retry indexing after resolving the reported cause.
-4. Click **Configure model** in the top bar (accessible name: **Configure model provider**). Choose your provider, enter its API key under **Session key**, and click **Configure and discover**. Click **Choose a model**, select an available model, close the model chooser, and click **Use provider**. If discovery is unavailable, enter a valid model ID in **Or enter a model ID** before **Use provider**. For a local Ollama server, choose **Local Ollama**, use `http://127.0.0.1:11434/v1`, and select an already installed model. See the [provider matrix](#provider-matrix). A ChatGPT subscription is not an API key.
+3. Use **Add source** to upload a requirements brief, research notes, or a decision record you are permitted to use. Supported formats are PDF, DOCX, PPTX, XLSX, JPEG, Markdown, and plain text. Choose material relevant to the problem you wrote; the app cannot ground a proposal in evidence you have not supplied. Wait for its status to become **ready** or **partial**. Read every extraction warning: scans, images, formulas and complex layouts may not be fully captured. The first upload may download the local embedding model. Lexical search remains available when embeddings cannot load.
+4. AI is optional. For an API provider, open AI settings, enter a session key, discover or enter a model ID, and select it. For local Ollama, select an already installed and running model. Eligible ChatGPT Plus and Pro users can choose **ChatGPT plan** and complete the separate OpenAI consent flow. A ChatGPT subscription is not an API key. See the [provider matrix](#provider-matrix).
 5. In **assist**, choose **Rewrite**, set **Scope** to **Section**, and keep **Problem** selected. Enter: “Rewrite the problem using the evidence. Keep it concise and do not invent business impact.” Submit the instruction.
 6. Read the proposed text and its citations. Compare each cited excerpt with your source. Choose **Apply** (the accessible name identifies the target, such as **Apply to Problem**) to accept it, or dismiss it. The document changes only after acceptance. **Undo** is available for the immediately applied revision.
-7. Use **Export** to download Markdown, DOCX, or PDF. Use **Export archive** for a portable backup that includes sources and revision history. Inspect the exported document before sharing it.
+7. Use **Export** to download the latest edits as Markdown, DOCX, or PDF. Use **Export archive** for a portable backup that includes sources, structures and revision history. Inspect the exported document before sharing it.
 8. Stop and restart the app using the Quick start instructions. Reopen your project to confirm your saved work is present. Reconfigure the provider session before another AI action.
 
 AI actions send the instruction, selected PRD scope, and retrieved excerpts to your selected provider. See [Privacy and outbound data](#privacy-and-outbound-data) before adding confidential material.
 
 ## Provider matrix
 
-| Provider          | Session key  | Environment fallback           | Model discovery | Custom model ID |
-| ----------------- | ------------ | ------------------------------ | --------------- | --------------- |
-| OpenAI            | Yes          | `OPENAI_API_KEY`               | Yes             | Yes             |
-| Anthropic         | Yes          | `ANTHROPIC_API_KEY`            | Yes             | Yes             |
-| Google Gemini     | Yes          | `GOOGLE_GENERATIVE_AI_API_KEY` | Yes             | Yes             |
-| OpenAI-compatible | Optional     | `OPENAI_COMPATIBLE_API_KEY`    | When supported  | Yes             |
-| Local Ollama      | Not required | Not required                   | Yes             | Yes             |
+| Provider          | Session key  | Environment fallback           | Model discovery  | Custom model ID |
+| ----------------- | ------------ | ------------------------------ | ---------------- | --------------- |
+| OpenAI            | Yes          | `OPENAI_API_KEY`               | Yes              | Yes             |
+| Anthropic         | Yes          | `ANTHROPIC_API_KEY`            | Yes              | Yes             |
+| Google Gemini     | Yes          | `GOOGLE_GENERATIVE_AI_API_KEY` | Yes              | Yes             |
+| OpenAI-compatible | Optional     | `OPENAI_COMPATIBLE_API_KEY`    | When supported   | Yes             |
+| Local Ollama      | Not required | Not required                   | Yes              | Yes             |
+| ChatGPT plan      | No API key   | None; optional OpenAI consent  | Account-specific | No              |
 
 OpenAI-compatible endpoints use `OPENAI_COMPATIBLE_BASE_URL` as an optional environment fallback. Ollama uses `OLLAMA_BASE_URL` or `http://127.0.0.1:11434/v1`.
 
@@ -91,11 +97,11 @@ Session setup in the interface is the simplest option. Environment fallbacks are
 
 ## ChatGPT plan usage
 
-A ChatGPT Plus, Pro, Business, Enterprise, or other ChatGPT plan does not provide API credentials or API usage to this standalone application. PRD Genie never asks for ChatGPT cookies or automates a ChatGPT browser session.
+Eligible ChatGPT Plus and Pro users can authorize the official open-source Sign in with ChatGPT flow in AI settings. This is an optional online AI provider, not a PRD Genie account. OpenAI determines eligibility, model availability and usage limits. PRD Genie never asks for ChatGPT cookies, treats sign-in as an API key, or silently switches to paid API usage.
 
 The repository includes a skills-only ChatGPT plugin and a manual, revision-bound file handoff. A user can choose the exact PRD sections and evidence excerpts to export, use the plugin in a supported ChatGPT surface, and import the response as a staged proposal. The local app validates project, revision, section hashes, evidence IDs, request digest, response size, and replay state before any proposal can be applied.
 
-See [ChatGPT integration](docs/CHATGPT_INTEGRATION.md) for installation boundaries, privacy, and limitations.
+See [ChatGPT integration](docs/CHATGPT_INTEGRATION.md) for consent, local credential storage, privacy and limitations.
 
 ## Privacy and outbound data
 
@@ -107,22 +113,22 @@ For an AI action, the server sends only:
 2. The selected PRD scope.
 3. Up to eight retrieved source excerpts within the action budget.
 
-Before provider setup, the interface shows the provider hostname and these data classes. Session keys are held in server memory behind an opaque, HttpOnly, same-site cookie. Closing the browser removes the session cookie and access to its entry. The in-memory entry is removed on explicit clearing, server restart, or the next access after eight idle hours.
+Before provider setup, the interface shows the provider destination and these data classes. API session keys are held in server memory behind an opaque, HttpOnly, same-site cookie. Closing the browser removes the session cookie and access to its entry. The in-memory entry is removed on explicit clearing, server restart, or the next access after eight idle hours. Optional ChatGPT authorization stores a separate owner-only local credential file; see the integration guide.
 
-Keys are not written to SQLite, browser storage, URLs, logs, analytics, exports, or error responses. There is no telemetry and there are no third-party runtime scripts or fonts.
+API keys are not written to SQLite, browser storage, URLs, logs, analytics, exports, or error responses. There is no telemetry and there are no third-party runtime scripts or fonts.
 
 Project files and SQLite data rely on operating-system disk protection. They are not independently encrypted. See [Privacy](docs/PRIVACY.md) and [Threat model](docs/THREAT_MODEL.md).
 
 ## Supported files
 
-| Operation       | Supported                                     |
-| --------------- | --------------------------------------------- |
-| PRD import      | Markdown, DOCX, plain text                    |
-| Evidence source | PDF, DOCX, Markdown, plain text               |
-| Export          | Markdown, DOCX, PDF, portable project archive |
-| Project restore | PRD Genie portable project archive            |
+| Operation       | Supported                                         |
+| --------------- | ------------------------------------------------- |
+| PRD import      | Markdown, DOCX, plain text                        |
+| Evidence source | PDF, DOCX, PPTX, XLSX, JPEG, Markdown, plain text |
+| Export          | Markdown, DOCX, PDF, portable project archive     |
+| Project restore | PRD Genie portable project archive                |
 
-Legacy Word files, spreadsheets, presentations, images, encrypted PDFs, mismatched file signatures, and unsupported archives are rejected with an explicit client error.
+Legacy Word `.doc` files, unsupported image formats, encrypted PDFs, mismatched file signatures, and unsupported archives are rejected with an explicit client error. JPEG text recognition uses the native macOS Vision helper in the local app. Visual meaning without recognized text is not claimed as extracted evidence.
 
 English is the v1 retrieval target.
 
@@ -257,7 +263,7 @@ The authoritative release gate runs outside GitHub Actions. Repository Actions r
 - Semantic retrieval downloads a pinned local model on first use.
 - If the model cannot initialise, retrieval continues in a clearly labelled lexical-only mode.
 - Imported legacy browser data is not migrated.
-- PRD Genie is a local browser application served by Node.js. It is not currently distributed as a signed macOS app, Windows installer, or Linux desktop package.
+- A local macOS app can be built from source. No signed, notarized macOS download or other desktop installer is distributed yet.
 - ChatGPT plugin availability and file handling vary by plan, region, workspace policy, and supported ChatGPT surface.
 - Output quality varies by provider and model. Every proposal requires human review and explicit acceptance.
 

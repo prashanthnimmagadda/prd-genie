@@ -27,6 +27,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite --host 127.0.0.1",
     "build": "npm run build:client && npm run build:server",
+    "package:mac": "node scripts/package-macos.mjs",
     "build:client": "vite build && node scripts/sanitize-build.mjs",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/server/index.js",
