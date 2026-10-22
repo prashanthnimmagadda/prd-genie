@@ -248,6 +248,51 @@ function inspectOoxml(
   };
 }
 
+/** ZIP directory sizes are untrusted; count bytes while each entry is inflated. */
+async function loadBoundedOoxml(
+  buffer: Buffer,
+  kind: 'DOCX' | 'PPTX' | 'XLSX',
+  requiredEntries: string[],
+): Promise<JSZip> {
+  const limitCode = kind === 'DOCX' ? 'docx_resource_limit' : 'office_resource_limit';
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    throw new ApiError(422, 'parse_failed', `The ${kind} file could not be parsed.`);
+  }
+  if (Object.keys(zip.files).length > config.maxDocxEntries) {
+    throw new ApiError(413, limitCode, `The expanded ${kind} file is too large.`);
+  }
+  if (requiredEntries.some((entry) => !zip.file(entry))) {
+    throw new ApiError(415, 'mime_mismatch', `The file signature does not match a ${kind} file.`);
+  }
+  let expandedBytes = 0;
+  try {
+    for (const entry of Object.values(zip.files)) {
+      if (entry.dir) continue;
+      await new Promise<void>((resolve, reject) => {
+        const stream = entry.nodeStream('nodebuffer') as NodeJS.ReadableStream & {
+          destroy(): void;
+        };
+        stream.on('data', (chunk: Buffer) => {
+          expandedBytes += chunk.length;
+          if (expandedBytes > config.maxDocxExpandedBytes) {
+            stream.destroy();
+            reject(new ApiError(413, limitCode, `The expanded ${kind} file is too large.`));
+          }
+        });
+        stream.on('error', reject);
+        stream.on('end', resolve);
+      });
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(422, 'parse_failed', `The ${kind} file could not be parsed.`);
+  }
+  return zip;
+}
+
 function decodeXml(value: string): string {
   return value.replace(
     /&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi,
@@ -309,11 +354,7 @@ async function readOfficeZip(
   ) {
     throw new ApiError(413, 'office_resource_limit', `The expanded ${kind} file is too large.`);
   }
-  try {
-    return await JSZip.loadAsync(buffer);
-  } catch {
-    throw new ApiError(422, 'parse_failed', `The ${kind} file could not be parsed.`);
-  }
+  return loadBoundedOoxml(buffer, kind, ['[Content_Types].xml', ...required]);
 }
 
 function numberedEntries(
@@ -502,11 +543,10 @@ async function parseJpeg(buffer: Buffer): Promise<ParsedDocument> {
   };
 }
 
-async function parseDocx(buffer: Buffer): Promise<ParsedDocument> {
+async function parseDocx(buffer: Buffer, zip: JSZip): Promise<ParsedDocument> {
   try {
     const converted = await mammoth.convertToHtml({ buffer });
     const content = htmlToMarkdownStructure(converted.value);
-    const zip = await JSZip.loadAsync(buffer);
     const warnings = converted.messages.map((message) => message.message);
     if (zip.file(/^word\/media\//).length)
       warnings.push('Embedded images in the DOCX were not read.');
@@ -588,7 +628,11 @@ export async function parseDocument(name: string, buffer: Buffer): Promise<Parse
     ) {
       throw new ApiError(413, 'docx_resource_limit', 'The expanded DOCX file is too large.');
     }
-    return parseDocx(buffer);
+    const zip = await loadBoundedOoxml(buffer, 'DOCX', [
+      '[Content_Types].xml',
+      'word/document.xml',
+    ]);
+    return parseDocx(buffer, zip);
   }
   if (extension === '.pptx' || extension === '.xlsx') {
     if (detected?.mime !== 'application/zip' && !detected?.mime?.includes('openxmlformats')) {

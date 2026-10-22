@@ -6,6 +6,18 @@ import JSZip from 'jszip';
 import { config } from '../../src/server/config.js';
 import { parseDocument } from '../../src/server/documents/parser.js';
 
+function understateCentralSize(original: Buffer, entryName: string): Buffer {
+  const buffer = Buffer.from(original);
+  for (let offset = 0; offset + 46 <= buffer.length; offset += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) continue;
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    if (buffer.toString('utf8', offset + 46, offset + 46 + nameLength) !== entryName) continue;
+    buffer.writeUInt32LE(1, offset + 24);
+    return buffer;
+  }
+  throw new Error(`Missing ZIP entry: ${entryName}`);
+}
+
 describe('parseDocument', () => {
   it('preserves Markdown headings and structural locations', async () => {
     const parsed = await parseDocument(
@@ -140,6 +152,102 @@ describe('parseDocument', () => {
     await expect(parseDocument('oversized.docx', buffer)).rejects.toMatchObject({
       code: 'docx_resource_limit',
     });
+  });
+
+  it('enforces expanded Office limits when ZIP directory sizes understate actual content', async () => {
+    const originalLimit = config.maxDocxExpandedBytes;
+    const content = 'A'.repeat(200_000);
+    const docx = Buffer.from(
+      await Packer.toBuffer(
+        new Document({ sections: [{ children: [new Paragraph({ text: content })] }] }),
+      ),
+    );
+    const presentation = new JSZip();
+    presentation.file('[Content_Types].xml', '<Types/>');
+    presentation.file('ppt/presentation.xml', '<presentation/>');
+    presentation.file('ppt/slides/slide1.xml', `<p:sld><a:t>${content}</a:t></p:sld>`);
+    const workbook = new JSZip();
+    workbook.file('[Content_Types].xml', '<Types/>');
+    workbook.file('xl/workbook.xml', '<workbook/>');
+    workbook.file(
+      'xl/worksheets/sheet1.xml',
+      `<worksheet><row><c><v>${content}</v></c></row></worksheet>`,
+    );
+    const cases = [
+      ['brief.docx', docx, 'word/document.xml', 'docx_resource_limit'],
+      [
+        'slides.pptx',
+        await presentation.generateAsync({ type: 'nodebuffer' }),
+        'ppt/slides/slide1.xml',
+        'office_resource_limit',
+      ],
+      [
+        'sheet.xlsx',
+        await workbook.generateAsync({ type: 'nodebuffer' }),
+        'xl/worksheets/sheet1.xml',
+        'office_resource_limit',
+      ],
+    ] as const;
+    try {
+      Object.assign(config, { maxDocxExpandedBytes: 100_000 });
+      for (const [name, buffer, entry, code] of cases) {
+        await expect(
+          parseDocument(name, understateCentralSize(buffer, entry)),
+        ).rejects.toMatchObject({
+          code,
+        });
+      }
+    } finally {
+      Object.assign(config, { maxDocxExpandedBytes: originalLimit });
+    }
+  });
+
+  it('counts the ZIP entries actually loaded instead of trusting an alternate directory', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<Types/>');
+    zip.file('ppt/presentation.xml', '<p/>');
+    zip.file('ppt/slides/slide1.xml', '<s><a:t>hello</a:t></s>');
+    zip.file('x0', 'x');
+    zip.file('x1', 'x');
+    const real = await zip.generateAsync({ type: 'nodebuffer' });
+    const eocd = real.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const start = real.readUInt32LE(eocd + 16);
+    const size = real.readUInt32LE(eocd + 12);
+    const records: Array<{ name: string; data: Buffer }> = [];
+    for (let offset = start; offset < start + size;) {
+      const length =
+        46 +
+        real.readUInt16LE(offset + 28) +
+        real.readUInt16LE(offset + 30) +
+        real.readUInt16LE(offset + 32);
+      records.push({
+        name: real.toString('utf8', offset + 46, offset + 46 + real.readUInt16LE(offset + 28)),
+        data: Buffer.from(real.subarray(offset, offset + length)),
+      });
+      offset += length;
+    }
+    const selected = ['[Content_Types].xml', 'ppt/presentation.xml', 'x0'].map(
+      (name) => records.find((record) => record.name === name)!.data,
+    );
+    const padding = size - selected.reduce((total, record) => total + record.length, 0);
+    selected[0]!.writeUInt16LE(padding, 32);
+    const fakeDirectory = Buffer.concat([
+      selected[0]!,
+      Buffer.alloc(padding),
+      ...selected.slice(1),
+    ]);
+    const prefix = Buffer.alloc(start + size);
+    real.copy(prefix, 0, 0, Math.min(100, start));
+    fakeDirectory.copy(prefix, start);
+    const originalLimit = config.maxDocxEntries;
+    try {
+      Object.assign(config, { maxDocxEntries: 3 });
+      await expect(
+        parseDocument('slides.pptx', Buffer.concat([prefix, real])),
+      ).rejects.toMatchObject({ code: 'office_resource_limit' });
+    } finally {
+      Object.assign(config, { maxDocxEntries: originalLimit });
+    }
   });
 
   it('enforces configured PDF page and extracted-text limits', async () => {
