@@ -413,7 +413,8 @@ export class ChatGptService {
         '<!doctype html><title>PRD Genie</title><p>ChatGPT connection saved. Return to PRD Genie.</p>',
       );
     } catch (error) {
-      this.lastError = error instanceof Error ? error.message : 'ChatGPT sign-in failed.';
+      this.lastError =
+        error instanceof ApiError ? error.message : 'ChatGPT sign-in could not finish. Try again.';
       response.writeHead(400, {
         'content-type': 'text/plain; charset=utf-8',
         'cache-control': 'no-store',
@@ -465,16 +466,26 @@ export class ChatGptService {
         Buffer.from(`${parts[0]}.${parts[1]}`),
         options,
         Buffer.from(parts[2]!, 'base64url'),
-      ) ||
-      claims.iss !== authOrigin ||
-      claims.aud !== clientId ||
-      claims.nonce !== nonce ||
-      typeof claims.exp !== 'number' ||
-      claims.exp <= Date.now() / 1000 ||
-      typeof claims.sub !== 'string'
+      )
     ) {
-      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity verification failed.');
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity signature did not verify.');
     }
+    if (claims.iss !== authOrigin)
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity issuer did not match.');
+    const audiences = typeof claims.aud === 'string' ? [claims.aud] : claims.aud;
+    if (
+      !Array.isArray(audiences) ||
+      audiences.length === 0 ||
+      !audiences.every((audience) => audience === clientId) ||
+      (claims.azp !== undefined && claims.azp !== clientId)
+    )
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity audience did not match.');
+    if (claims.nonce !== nonce)
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity nonce did not match.');
+    if (typeof claims.exp !== 'number' || claims.exp <= Date.now() / 1000 - 5)
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity token expired.');
+    if (typeof claims.sub !== 'string' || !claims.sub)
+      throw new ApiError(401, 'invalid_identity', 'ChatGPT identity subject is missing.');
     return {
       sub: claims.sub,
       ...(typeof claims.email === 'string' ? { email: claims.email } : {}),

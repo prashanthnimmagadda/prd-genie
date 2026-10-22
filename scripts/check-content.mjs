@@ -24,6 +24,7 @@ const secretPatterns = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
 ];
 const sourceSecretPattern = /(?:api[_-]?key|token|secret|password)\s*[:=]\s*["'][^"'$\s]{12,}["']/i;
+const packagedDependencyPrefix = 'dist/mac/PRD Genie.app/Contents/Resources/app/node_modules/';
 const textExtensions = new Set([
   '.cjs',
   '.css',
@@ -90,8 +91,13 @@ for (const relative of inventory()) {
   if (!textExtensions.has(path.extname(relative).toLowerCase())) continue;
   const content = fs.readFileSync(file, 'utf8');
   const lower = content.toLowerCase();
-  if (lower.includes(forbiddenProductTerm)) failures.push(`${relative}: reserved product term`);
-  if (content.includes(longDash)) failures.push(`${relative}: long dash character`);
+  // Prose-style restrictions apply to PRD Genie content, not copied dependency text.
+  // Hash, protected-term, and high-confidence secret checks still inspect the whole bundle.
+  // The broader assignment heuristic retains its existing first-party-only scope.
+  if (!relative.startsWith(packagedDependencyPrefix)) {
+    if (lower.includes(forbiddenProductTerm)) failures.push(`${relative}: reserved product term`);
+    if (content.includes(longDash)) failures.push(`${relative}: long dash character`);
+  }
   for (const term of protectedTerms) {
     if (lower.includes(term)) failures.push(`${relative}: protected organisation term`);
   }
