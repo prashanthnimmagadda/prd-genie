@@ -212,7 +212,6 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
   if (project.description)
     children.push(new Paragraph({ text: project.description, spacing: { after: 240 } }));
   for (const section of prd.sections) {
-    if (!section.body.trim()) continue;
     children.push(
       new Paragraph({
         text: section.title,
@@ -221,6 +220,15 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
         keepNext: true,
       }),
     );
+    if (!section.body.trim()) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: missingSectionText(section.required), italics: true })],
+          spacing: { after: 140 },
+        }),
+      );
+      continue;
+    }
     for (const block of bodyBlocks(section.body)) {
       if (block.kind === 'heading') {
         children.push(
@@ -367,9 +375,12 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
   write(project.name, 22, { heading: true, gap: 16 });
   if (project.description) write(project.description, 10, { gap: 15 });
   for (const section of prd.sections) {
-    if (!section.body.trim()) continue;
     ensureSpace(40);
     write(section.title, 14, { heading: true, gap: 9 });
+    if (!section.body.trim()) {
+      write(missingSectionText(section.required), 10);
+      continue;
+    }
     for (const block of bodyBlocks(section.body)) {
       if (block.kind === 'heading') {
         ensureSpace(34);
@@ -389,6 +400,10 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
     }
   }
   return Buffer.from(await document.save());
+}
+
+function missingSectionText(required: boolean | undefined): string {
+  return required ? 'Required section: information needed.' : 'No content provided.';
 }
 
 function wrapPdfText(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {

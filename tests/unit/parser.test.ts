@@ -80,6 +80,7 @@ describe('parseDocument', () => {
     expect(parsed.locations.map((location) => location.locator)).toEqual(['Page 1', 'Page 2']);
     expect(parsed.partial).toBe(true);
     expect(parsed.warnings[0]).toContain('no extractable text');
+    expect(parsed.warnings.join(' ')).toContain('visual table layout');
   });
 
   it('parses DOCX headings, paragraphs, lists, and inline formatting', async () => {

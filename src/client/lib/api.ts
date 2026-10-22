@@ -63,10 +63,13 @@ export const api = {
   importProject: (file: File) => {
     const data = new FormData();
     data.set('file', file);
-    return request<{ project: ProjectSummary; prd: PrdDocument }>('/api/projects/import', {
-      method: 'POST',
-      body: data,
-    });
+    return request<{ project: ProjectSummary; prd: PrdDocument; warnings: string[] }>(
+      '/api/projects/import',
+      {
+        method: 'POST',
+        body: data,
+      },
+    );
   },
   restoreProject: (file: File) => {
     const data = new FormData();

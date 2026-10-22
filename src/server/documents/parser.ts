@@ -175,12 +175,14 @@ async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
       mediaType: 'application/pdf',
       locations,
       partial: unreadablePages.length > 0,
-      warnings:
-        unreadablePages.length > 0
+      warnings: [
+        ...(unreadablePages.length > 0
           ? [
               `Page${unreadablePages.length === 1 ? '' : 's'} ${unreadablePages.join(', ')} contained no extractable text; scanned images on those pages were not read.`,
             ]
-          : [],
+          : []),
+        'Only PDF text was extracted. Images, diagrams, and visual table layout were not read; verify them visually.',
+      ],
     };
   } catch (error) {
     if (error instanceof ApiError) throw error;

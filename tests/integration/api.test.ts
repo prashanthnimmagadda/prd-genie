@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import JSZip from 'jszip';
+import { Document, Packer, Paragraph } from 'docx';
 import { buildApp } from '../../src/server/app.js';
 import { config } from '../../src/server/config.js';
 import type { EmbeddingService } from '../../src/server/retrieval/embedding-service.js';
@@ -140,6 +142,20 @@ describe('API', () => {
     });
     expect(crossOrigin.statusCode).toBe(403);
     expect(crossOrigin.json()).toMatchObject({ error: { code: 'invalid_origin' } });
+    const otherLocalPort = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { host: '127.0.0.1:3210', origin: 'http://127.0.0.1:9999' },
+      payload: { name: 'Blocked', description: '' },
+    });
+    expect(otherLocalPort.statusCode).toBe(403);
+    const browserWithoutOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { host: '127.0.0.1:3210', 'sec-fetch-site': 'same-site' },
+      payload: { name: 'Blocked', description: '' },
+    });
+    expect(browserWithoutOrigin.statusCode).toBe(403);
     expect(repository.listProjects()).toEqual([]);
   });
 
@@ -428,6 +444,24 @@ describe('API', () => {
       url: `/api/projects/${project.project.id}/sources/${sourceId}`,
     });
     expect(deleted.statusCode).toBe(204);
+  });
+
+  it('surfaces unread embedded images when importing a DOCX PRD', async () => {
+    const document = new Document({
+      sections: [{ children: [new Paragraph('A requirement with an embedded diagram.')] }],
+    });
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
+    zip.file('word/media/diagram.png', Buffer.from('synthetic image'));
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/projects/import',
+      headers: { 'content-type': 'multipart/form-data; boundary=binary-boundary' },
+      payload: multipartBuffer('brief.docx', await zip.generateAsync({ type: 'nodebuffer' })),
+    });
+    expect(imported.statusCode, imported.body).toBe(201);
+    expect(imported.json<{ warnings: string[] }>().warnings.join(' ')).toContain(
+      'Embedded images in the DOCX were not read.',
+    );
   });
 
   it('preserves repeated Markdown headings as separate ordered sections', async () => {

@@ -2,7 +2,7 @@ import Cocoa
 import Darwin
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private var window: NSWindow?
     private var server: Process?
     private var attempts = 0
@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 900, height: 650)
         let webView = WKWebView(frame: window.contentView!.bounds)
         webView.autoresizingMask = [.width, .height]
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
         window.contentView = webView
         window.makeKeyAndOrderFront(nil)
         self.window = window
@@ -88,6 +90,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .warning
         alert.runModal()
         NSApp.terminate(nil)
+    }
+
+    private func isAppURL(_ url: URL) -> Bool {
+        guard let address else { return false }
+        return url.scheme == address.scheme && url.host == address.host && url.port == address.port
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+        if isAppURL(url) || url.scheme == "about" { decisionHandler(.allow); return }
+        if url.scheme == "https" || url.scheme == "http" { NSWorkspace.shared.open(url) }
+        decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url, url.scheme == "https" || url.scheme == "http" {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let disposition = (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        decisionHandler(disposition.lowercased().contains("attachment") ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedFilename
+        guard let window else { completionHandler(nil); return }
+        panel.beginSheetModal(for: window) { result in
+            completionHandler(result == .OK ? panel.url : nil)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

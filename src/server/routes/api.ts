@@ -148,7 +148,11 @@ export function registerApi(app: FastifyInstance, services: Services): void {
       })),
       true,
     );
-    return reply.code(201).send({ project: services.repository.getProject(project.id), prd });
+    return reply.code(201).send({
+      project: services.repository.getProject(project.id),
+      prd,
+      warnings: parsed.warnings,
+    });
   });
   app.post('/api/projects/restore', async (request, reply) => {
     const part = await request.file({ limits: { files: 1, fileSize: 250 * 1024 * 1024 } });

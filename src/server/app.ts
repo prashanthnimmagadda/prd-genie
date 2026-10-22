@@ -70,7 +70,17 @@ export async function buildApp(
       return;
     }
     if (!isAllowedBrowserOrigin(request.headers.origin, request.headers.host)) {
-      done(new ApiError(403, 'invalid_origin', 'Browser requests must originate from loopback.'));
+      done(new ApiError(403, 'invalid_origin', 'Browser requests must use this local app origin.'));
+      return;
+    }
+    const fetchSite = request.headers['sec-fetch-site'];
+    if (
+      !request.headers.origin &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
+      fetchSite &&
+      fetchSite !== 'same-origin'
+    ) {
+      done(new ApiError(403, 'invalid_origin', 'Browser requests must use this local app origin.'));
       return;
     }
     done();

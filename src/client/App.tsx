@@ -81,6 +81,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [importWarnings, setImportWarnings] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     void api
@@ -112,9 +113,16 @@ export default function App() {
   }
 
   async function importProject(file: File) {
-    const { project } = file.name.toLowerCase().endsWith('.prdgenie.zip')
-      ? await api.restoreProject(file)
-      : await api.importProject(file);
+    let project: ProjectSummary;
+    if (file.name.toLowerCase().endsWith('.prdgenie.zip')) {
+      project = (await api.restoreProject(file)).project;
+    } else {
+      const imported = await api.importProject(file);
+      project = imported.project;
+      if (imported.warnings.length > 0) {
+        setImportWarnings((current) => ({ ...current, [project.id]: imported.warnings }));
+      }
+    }
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
   }
@@ -176,6 +184,14 @@ export default function App() {
         onProjectImport={importProject}
         onProjectChange={updateProject}
         onProjectDelete={deleteProject}
+        importWarnings={importWarnings[project.id] ?? []}
+        onDismissImportWarnings={() =>
+          setImportWarnings((current) => {
+            const next = { ...current };
+            delete next[project.id];
+            return next;
+          })
+        }
       />
     </TooltipProvider>
   );
@@ -290,6 +306,8 @@ interface WorkbenchProps {
   onProjectImport: (file: File) => Promise<void>;
   onProjectChange: (project: ProjectSummary) => void;
   onProjectDelete: (id: string) => Promise<void>;
+  importWarnings: string[];
+  onDismissImportWarnings: () => void;
 }
 
 function Workbench({
@@ -300,6 +318,8 @@ function Workbench({
   onProjectImport,
   onProjectChange,
   onProjectDelete,
+  importWarnings,
+  onDismissImportWarnings,
 }: WorkbenchProps) {
   const [prd, setPrd] = useState<PrdDocument | null>(null);
   const [savedPrd, setSavedPrd] = useState<PrdDocument | null>(null);
@@ -1139,6 +1159,20 @@ function Workbench({
       </aside>
 
       <main id="prd-editor" className="document-surface">
+        {importWarnings.length > 0 && (
+          <div className="inline-error" role="alert">
+            <CircleAlert aria-hidden="true" />
+            <span>Import needs a visual check: {importWarnings.join(' ')}</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Dismiss import warning"
+              onClick={onDismissImportWarnings}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          </div>
+        )}
         {undoRevision !== null && prd.revision === undoRevision + 1 && (
           <div className="undo-banner" role="status">
             <span>A proposal changed the current revision.</span>

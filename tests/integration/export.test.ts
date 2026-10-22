@@ -52,6 +52,22 @@ describe('ExportService', () => {
     expect(archive.body.subarray(0, 2).toString()).toBe('PK');
   });
 
+  it('keeps empty required structure headings visible in PDF and Word', async () => {
+    const docx = await exporter.create(projectId, 'docx');
+    const JSZip = (await import('jszip')).default;
+    const documentXml = await (
+      await JSZip.loadAsync(docx.body)
+    )
+      .file('word/document.xml')!
+      .async('string');
+    expect(documentXml).toContain('Required section: information needed.');
+    const pdf = await exporter.create(projectId, 'pdf');
+    const parsed = await parseDocument('export.pdf', pdf.body);
+    expect(parsed.locations.map((location) => location.content).join(' ')).toContain(
+      'Required section: information needed.',
+    );
+  });
+
   it('renders the latest saved edit as headings, lists, tables, and readable references', async () => {
     const current = repository.getPrd(projectId);
     repository.savePrd(
