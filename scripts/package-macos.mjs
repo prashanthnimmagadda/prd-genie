@@ -32,6 +32,7 @@ cpSync(path.join(root, 'dist/client'), path.join(appRoot, 'dist/client'), { recu
 cpSync(path.join(root, 'dist/server'), path.join(appRoot, 'dist/server'), { recursive: true });
 cpSync(path.join(root, 'drizzle'), path.join(appRoot, 'drizzle'), { recursive: true });
 cpSync(path.join(root, 'package.json'), path.join(appRoot, 'package.json'));
+cpSync(path.join(root, 'src/client/SHADCN-LICENSE.md'), path.join(resources, 'SHADCN-LICENSE.md'));
 cpSync(realpathSync(process.execPath), path.join(resources, 'node'));
 
 const installed = execFileSync('npm', ['ls', '--omit=dev', '--all', '--parseable'], {

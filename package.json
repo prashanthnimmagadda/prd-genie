@@ -15,12 +15,18 @@
     "brace-expansion": "5.0.12",
     "fast-uri@^3": "3.1.9",
     "fast-uri@^4": "4.1.5",
-    "hono": "4.13.5",
-    "js-yaml": "4.3.1",
+    "hono": "4.13.13",
+    "js-yaml": "4.3.2",
     "postcss": {
       "nanoid": "3.3.18"
     },
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
+    "proxy-addr": "2.0.8",
+    "ip-address": "10.7.4",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@hono/node-server": "2.1.5",
+    "argparse": "2.0.1"
   },
   "scripts": {
     "dev": "concurrently --kill-others --names server,client \"npm:dev:server\" \"npm:dev:client\"",
@@ -120,19 +126,18 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
-    "@vitest/coverage-v8": "5.0.0",
-    "concurrently": "10.0.5",
+    "@vitest/coverage-v8": "5.0.5",
+    "concurrently": "10.0.6",
     "eslint": "10.10.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.6",
     "jsdom": "30.0.1",
     "prettier": "3.9.6",
-    "shadcn": "4.21.0",
     "tailwindcss": "4.3.3",
     "tsx": "4.23.13",
     "typescript": "6.0.3",
     "typescript-eslint": "8.69.0",
-    "vite": "8.2.2",
-    "vitest": "5.0.0"
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   }
 }

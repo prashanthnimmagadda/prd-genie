@@ -59,4 +59,38 @@ describe('SessionStore', () => {
       baseUrl: '127.0.0.1',
     });
   });
+
+  it('keeps a returned credential separate from the in-memory copy', () => {
+    const store = new SessionStore();
+    const session = store.create();
+    const headers = { 'X-Workspace': 'one' };
+    store.setProvider(session.id, 'openai-compatible', {
+      baseUrl: 'https://models.example.test/v1',
+      headers,
+    });
+    const returned = store.resolve(session.id, 'openai-compatible');
+    returned.baseUrl = 'https://different.example.test/v1';
+    expect(store.resolve(session.id, 'openai-compatible').baseUrl).toBe(
+      'https://models.example.test/v1',
+    );
+    store.clearProvider('missing-session', 'openai-compatible');
+    expect(store.get(undefined)).toBeUndefined();
+  });
+
+  it('reports configured provider destinations without exposing invalid endpoint text', () => {
+    const store = new SessionStore();
+    const session = store.create();
+    store.setProvider(session.id, 'openai-compatible', { baseUrl: 'invalid endpoint' });
+    expect(store.state(session.id, 'openai-compatible')).toMatchObject({
+      configured: true,
+      baseUrl: null,
+    });
+    expect(store.state(undefined, 'chatgpt')).toMatchObject({
+      configured: false,
+      credentialSource: 'none',
+      baseUrl: 'api.openai.com',
+    });
+    expect(store.state(undefined, 'anthropic').baseUrl).toBe('api.anthropic.com');
+    expect(store.state(undefined, 'google').baseUrl).toBe('generativelanguage.googleapis.com');
+  });
 });

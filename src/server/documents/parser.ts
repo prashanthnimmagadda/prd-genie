@@ -293,7 +293,7 @@ async function loadBoundedOoxml(
   return zip;
 }
 
-function decodeXml(value: string): string {
+function unescapeXml(value: string): string {
   return value.replace(
     /&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi,
     (_whole, entity: string) => {
@@ -320,7 +320,7 @@ function xmlValues(xml: string, localName: string): string[] {
     `<(?:(?:[\\w.-]+):)?${localName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:(?:[\\w.-]+):)?${localName}>`,
     'gi',
   );
-  return [...xml.matchAll(pattern)].map((match) => decodeXml(match[1] ?? '').trim());
+  return [...xml.matchAll(pattern)].map((match) => unescapeXml(match[1] ?? '').trim());
 }
 
 function makeLocation(

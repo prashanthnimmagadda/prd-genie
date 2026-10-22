@@ -1,7 +1,7 @@
 import type { PrdDocument } from '@shared/types';
 
 export const exampleSourceName = 'sample-interview-notes.txt';
-export const exampleSource = `FICTIONAL EXAMPLE — meeting scheduling for a small internal team.
+export const exampleSource = `FICTIONAL EXAMPLE - meeting scheduling for a small internal team.
 
 Operations coordinator: "I spend time finding a slot that works across three calendars."
 Team lead: "I need to know when a proposed meeting has no available room."

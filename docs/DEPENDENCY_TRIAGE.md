@@ -10,21 +10,23 @@ Mammoth to 1.12.3, and the existing overrides for `adm-zip`, `brace-expansion`,
 `fast-uri`, and `sharp` to patched versions. The Mammoth patch addresses the
 upstream [crafted-DOCX parsing denial of service](https://github.com/mwilliamson/mammoth.js/blob/master/NEWS).
 
-The resulting `npm audit --omit=dev` reports **0 critical, 0 high, and 3
-moderate package findings**. All three are one dependency chain:
+The remaining production findings were one dependency chain:
 `mammoth → argparse → sprintf-js`. PRD Genie calls Mammoth's `convertToHtml`
-library API for DOCX input; `argparse` is imported by Mammoth's CLI, which the
-app does not invoke. The [sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)
-requires control of a format string and lists no patched version. npm suggests
-downgrading Mammoth to 0.3.29; that would replace the current parser with an
-older incompatible version, so it was not applied. The package finding remains
-visible rather than being suppressed.
+library API for DOCX input; `argparse` is imported by Mammoth's CLI. The
+[sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)
+lists no patched version. The existing `argparse` 1.x dependency is overridden
+to 2.0.1, which has no `sprintf-js` dependency. Both Mammoth's library parser
+tests and a real DOCX conversion through its CLI passed with this override.
+The CLI emits deprecation warnings for its older API, but its conversion works.
 
-The full installed tree still reports 3 critical, 11 high, and 9 moderate
-package findings in the latest audit. Its high and critical findings are outside
-the app's production dependency set. They remain relevant to development and
-build-tool maintenance; this production-focused remediation does not claim to
-clear the full audit.
+The full installed tree reported 3 critical, 11 high, and 9 moderate findings
+before development-tool updates. The unused `shadcn` CLI was removed from the
+development tree; its MIT-licensed CSS remains in the project with its license
+notice and is copied into the macOS bundle. Build and test tools were updated,
+along with narrow overrides for their vulnerable transitive packages. The
+resulting **full `npm audit` and production-only audit each report zero package
+findings** on 22 October 2026. This is an advisory database result, not proof
+that all dependencies are free of vulnerabilities.
 
 The package tree was reinstalled from the lockfile, the updated local embedding
 runtime produced a 384-dimensional vector for synthetic text, and the built

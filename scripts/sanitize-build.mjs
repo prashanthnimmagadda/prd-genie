@@ -3,6 +3,10 @@ import path from 'node:path';
 
 const assets = path.resolve(import.meta.dirname, '../dist/client/assets');
 if (!fs.existsSync(assets)) process.exit(0);
+fs.copyFileSync(
+  path.resolve(import.meta.dirname, '../src/client/SHADCN-LICENSE.md'),
+  path.resolve(import.meta.dirname, '../dist/client/SHADCN-LICENSE.md'),
+);
 
 for (const name of fs.readdirSync(assets)) {
   if (!name.endsWith('.js')) continue;

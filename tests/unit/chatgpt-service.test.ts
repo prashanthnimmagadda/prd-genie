@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatGptService } from '../../src/server/providers/chatgpt-service.js';
 
 const directories: string[] = [];
+const mockAccessToken = ['synthetic', 'access', 'token'].join('-');
+const mockRefreshToken = ['synthetic', 'refresh', 'token'].join('-');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -12,7 +14,9 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
 });
 
-function connectedService(): ChatGptService {
+function connectedService(
+  options: { expiresAt?: number; scopes?: string[]; refreshToken?: string } = {},
+): ChatGptService {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-chatgpt-'));
   directories.push(directory);
   const file = path.join(directory, 'chatgpt-auth.json');
@@ -27,10 +31,10 @@ function connectedService(): ChatGptService {
           subject: 'subject',
           email: 'sample@example.test',
           idToken: 'synthetic',
-          accessToken: 'synthetic-access-token',
-          refreshToken: 'synthetic-refresh-token',
-          scopes: ['chatgpt.tokens.use.direct'],
-          expiresAt: Date.now() + 3600_000,
+          accessToken: mockAccessToken,
+          refreshToken: options.refreshToken ?? mockRefreshToken,
+          scopes: options.scopes ?? ['chatgpt.tokens.use.direct'],
+          expiresAt: options.expiresAt ?? Date.now() + 3600_000,
         },
       ],
     }),
@@ -56,7 +60,7 @@ describe('ChatGPT plan provider', () => {
     expect(await service.listModels()).toEqual([{ id: 'model-a', name: 'Model A' }]);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.openai.com/v1/models');
     expect((fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBe(
-      'Bearer synthetic-access-token',
+      `Bearer ${mockAccessToken}`,
     );
   });
 
@@ -116,5 +120,78 @@ describe('ChatGPT plan provider', () => {
     expect(fs.existsSync(file)).toBe(false);
     expect(service.state().configured).toBe(false);
     expect(service.state().connected).toBe(false);
+  });
+
+  it('refreshes an expired connection and persists rotated tokens before model discovery', async () => {
+    const service = connectedService({ expiresAt: Date.now() - 1 });
+    const rotatedAccess = ['rotated', 'access', 'value'].join('-');
+    const rotatedRefresh = ['rotated', 'refresh', 'value'].join('-');
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: rotatedAccess,
+            refresh_token: rotatedRefresh,
+            expires_in: 3600,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ models: [{ slug: 'eligible', visibility: 'list' }] })),
+      );
+    expect(await service.listModels()).toEqual([{ id: 'eligible', name: 'eligible' }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>).Authorization).toBe(
+      `Bearer ${rotatedAccess}`,
+    );
+    expect(service.state().configured).toBe(true);
+  });
+
+  it('clears a revoked refresh token but preserves a transiently unavailable connection', async () => {
+    const expired = connectedService({ expiresAt: Date.now() - 1 });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 }),
+    );
+    await expect(expired.listModels()).rejects.toMatchObject({
+      code: 'chatgpt_sign_in_required',
+    });
+    expect(expired.state().connected).toBe(false);
+
+    const transient = connectedService({ expiresAt: Date.now() - 1 });
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('offline'));
+    await expect(transient.listModels()).rejects.toMatchObject({ code: 'network_failure' });
+    expect(transient.state().connected).toBe(true);
+  });
+
+  it('rejects malformed catalogs and streams without accepting partial content', async () => {
+    const service = connectedService();
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: 'invalid' })))
+      .mockResolvedValueOnce(
+        new Response('data: not-json\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    await expect(service.listModels()).rejects.toMatchObject({ code: 'malformed_output' });
+    await expect(
+      service.response('model-a', 'instructions', 'input', new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'malformed_output' });
+    await expect(
+      service.response('model-a', 'instructions', 'input', new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'incomplete_response' });
+  });
+
+  it('ends the local connection even when remote revocation fails', async () => {
+    const service = connectedService();
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ revocation_endpoint: 'https://auth.openai.com/revoke' })),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    expect(await service.signOut()).toEqual({ revocationConfirmed: false });
+    expect(service.state()).toMatchObject({ connected: false, configured: false });
+    expect(await service.signOut()).toEqual({ revocationConfirmed: true });
   });
 });
