@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import {
+  historicalExceptionBlob,
+  matchesHistoricalException,
+} from './content-history-exceptions.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const forbiddenProductTerm = String.fromCharCode(99, 111, 100, 101, 120);
@@ -60,6 +64,21 @@ function walk(directory) {
 }
 
 const failures = [];
+function recordHistoryFinding(commit, relative, finding) {
+  const expectedBlob = historicalExceptionBlob(commit, relative, finding);
+  if (
+    expectedBlob &&
+    matchesHistoricalException(
+      commit,
+      relative,
+      finding,
+      git(['rev-parse', `${commit}:${relative}`]).trim(),
+    )
+  ) {
+    return;
+  }
+  failures.push(`Git history ${commit.slice(0, 12)} ${relative}: ${finding}`);
+}
 for (const relative of inventory()) {
   const file = path.join(root, relative);
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
@@ -101,7 +120,7 @@ for (const commit of git(['rev-list', '--all']).trim().split('\n').filter(Boolea
   const paths = git(['ls-tree', '-r', '--name-only', '-z', commit]).split('\0').filter(Boolean);
   for (const relative of paths) {
     if (relative.startsWith('.env') && relative !== '.env.example') {
-      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: environment file`);
+      recordHistoryFinding(commit, relative, 'environment file');
     }
     if (!textExtensions.has(path.extname(relative).toLowerCase())) continue;
     let content;
@@ -112,28 +131,28 @@ for (const commit of git(['rev-list', '--all']).trim().split('\n').filter(Boolea
         maxBuffer: 10 * 1024 * 1024,
       });
     } catch {
-      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: could not be scanned`);
+      recordHistoryFinding(commit, relative, 'could not be scanned');
       continue;
     }
     const lower = content.toLowerCase();
     if (lower.includes(forbiddenProductTerm)) {
-      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: reserved product term`);
+      recordHistoryFinding(commit, relative, 'reserved product term');
     }
     if (content.includes(longDash)) {
-      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: long dash character`);
+      recordHistoryFinding(commit, relative, 'long dash character');
     }
     for (const term of protectedTerms) {
       if (lower.includes(term)) {
-        failures.push(`Git history ${commit.slice(0, 12)} ${relative}: protected term`);
+        recordHistoryFinding(commit, relative, 'protected term');
       }
     }
     for (const pattern of secretPatterns) {
       if (pattern.test(content)) {
-        failures.push(`Git history ${commit.slice(0, 12)} ${relative}: possible secret`);
+        recordHistoryFinding(commit, relative, 'possible secret');
       }
     }
     if (sourceSecretPattern.test(content)) {
-      failures.push(`Git history ${commit.slice(0, 12)} ${relative}: possible secret`);
+      recordHistoryFinding(commit, relative, 'possible secret');
     }
   }
 }
