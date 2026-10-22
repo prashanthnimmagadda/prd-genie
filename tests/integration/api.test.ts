@@ -62,6 +62,44 @@ describe('API', () => {
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
   });
 
+  it('creates and applies a reusable structure through the API', async () => {
+    const project = repository.createProject('Custom brief', '');
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/structures`,
+      payload: {
+        name: 'Decision memo',
+        sections: [
+          { title: 'Recommendation', purpose: 'State the decision and rationale.', required: true },
+          { title: 'Risks', purpose: 'Describe material risks.', required: false },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const structure = created.json<{ id: string }>();
+    const applied = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}/selected-structure`,
+      payload: { structureId: structure.id, revision: 0 },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json()).toMatchObject({
+      project: { selectedStructureId: structure.id },
+      prd: {
+        revision: 1,
+        sections: [
+          { title: 'Recommendation', required: true },
+          { title: 'Risks', required: false },
+        ],
+      },
+    });
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/structures`,
+    });
+    expect(listed.json<{ structures: unknown[] }>().structures).toHaveLength(2);
+  });
+
   it('authorizes dynamic modal styles with fresh nonces without arbitrary inline CSS', async () => {
     const response = await app.inject({ method: 'GET', url: '/' });
     const policy = response.headers['content-security-policy'];

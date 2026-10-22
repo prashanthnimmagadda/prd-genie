@@ -25,6 +25,7 @@ import {
 } from '@/components/ai-elements/model-selector';
 
 const providerLabels: Record<ProviderKind, string> = {
+  chatgpt: 'ChatGPT plan',
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   google: 'Google Gemini',
@@ -65,6 +66,19 @@ export function ProviderDialog({
       .finally(() => setStatesLoading(false));
   }, [open]);
 
+  useEffect(() => {
+    if (!open || provider !== 'chatgpt') return;
+    const refresh = () => {
+      void api
+        .providerStates()
+        .then(({ providers }) => setStates(providers))
+        .catch(() => undefined);
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 1800);
+    return () => window.clearInterval(interval);
+  }, [open, provider]);
+
   const currentState = states.find((state) => state.provider === provider);
   const typedBaseUrl = baseUrl.trim();
   const hasDraftConfiguration = Boolean(apiKey || typedBaseUrl || headersText.trim());
@@ -102,6 +116,12 @@ export function ProviderDialog({
     setBusy(true);
     setError('');
     try {
+      if (provider === 'chatgpt') {
+        const discovered = await api.models(provider);
+        setModels(discovered.models);
+        if (!model && discovered.models[0]) setModel(discovered.models[0].id);
+        return;
+      }
       let headers: Record<string, string> | undefined;
       if (headersText.trim()) {
         const parsed = JSON.parse(headersText) as unknown;
@@ -130,6 +150,43 @@ export function ProviderDialog({
       const discovered = await api.models(provider);
       setModels(discovered.models);
       if (!model && discovered.models[0]) setModel(discovered.models[0].id);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connectChatGpt(clientId?: string) {
+    const browser = window.open('about:blank', '_blank');
+    setBusy(true);
+    setError('');
+    try {
+      const { url } = await api.connectChatGpt(clientId);
+      if (browser) browser.location.replace(url);
+      else window.location.assign(url);
+    } catch (reason) {
+      browser?.close();
+      setError(messageFrom(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOutChatGpt() {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api.signOutChatGpt();
+      const refreshed = await api.providerStates();
+      setStates(refreshed.providers);
+      setModels([]);
+      setModel('');
+      if (!result.revocationConfirmed) {
+        setError(
+          'Signed out locally. Remote revocation could not be confirmed; disconnect PRD Genie in ChatGPT Settings if needed.',
+        );
+      }
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -185,8 +242,8 @@ export function ProviderDialog({
         <DialogHeader>
           <DialogTitle>Model provider</DialogTitle>
           <DialogDescription>
-            Credentials stay in server memory for this browser session and expire after eight idle
-            hours.
+            API keys stay in server memory for this browser session. ChatGPT connection credentials
+            are stored locally with owner-only access so you can reconnect after restart.
           </DialogDescription>
         </DialogHeader>
 
@@ -216,6 +273,109 @@ export function ProviderDialog({
           </select>
         </label>
 
+        {provider === 'chatgpt' && (
+          <div className="provider-disclosure" role="status">
+            <ShieldCheck aria-hidden="true" />
+            <div>
+              <strong>
+                {currentState?.configured
+                  ? 'ChatGPT plan ready'
+                  : currentState?.pending
+                    ? 'Complete sign-in in your browser'
+                    : currentState?.connected
+                      ? 'ChatGPT connected · plan use not enabled'
+                      : 'ChatGPT plan not connected'}
+              </strong>
+              <p>
+                {currentState?.account ? `Selected account: ${currentState.account}. ` : ''}ChatGPT
+                plan use is optional and online. Eligible accounts and models are decided by OpenAI.
+                This does not create a PRD Genie account or use an API key.
+              </p>
+              <div className="provider-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || currentState?.pending}
+                  onClick={() => void connectChatGpt(currentState?.activeClientId ?? undefined)}
+                >
+                  {currentState?.connected && !currentState.configured
+                    ? 'Enable ChatGPT plan use'
+                    : 'Continue with ChatGPT'}
+                </Button>
+                {currentState?.accounts && currentState.accounts.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={busy || currentState.pending}
+                    onClick={() => void connectChatGpt()}
+                  >
+                    Add another account
+                  </Button>
+                )}
+                {currentState?.connected && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void signOutChatGpt()}
+                  >
+                    Sign out
+                  </Button>
+                )}
+              </div>
+              {currentState?.accounts && currentState.accounts.length > 0 && (
+                <label className="field">
+                  <span>Saved ChatGPT account</span>
+                  <select
+                    value={currentState.activeClientId ?? ''}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const selected = currentState.accounts?.find(
+                        (item) => item.clientId === event.target.value,
+                      );
+                      if (!selected?.connected) {
+                        void connectChatGpt(event.target.value);
+                        return;
+                      }
+                      void api
+                        .selectChatGpt(event.target.value)
+                        .then(() => api.providerStates())
+                        .then(({ providers }) => {
+                          setStates(providers);
+                          setModels([]);
+                          setModel('');
+                        })
+                        .catch((reason: unknown) => setError(messageFrom(reason)));
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choose an account
+                    </option>
+                    {currentState.accounts.map((item) => (
+                      <option key={item.clientId} value={item.clientId}>
+                        {item.email ?? item.clientId}
+                        {item.connected ? '' : ' · reconnect'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {currentState?.error && (
+                <p className="form-error" role="alert">
+                  {currentState.error}
+                </p>
+              )}
+              <a
+                href="https://chatgpt.com/settings/usage"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View ChatGPT usage and access
+              </a>
+            </div>
+          </div>
+        )}
+
         {(provider === 'openai-compatible' || provider === 'ollama') && (
           <label className="field">
             <span>Endpoint</span>
@@ -233,7 +393,7 @@ export function ProviderDialog({
           </label>
         )}
 
-        {provider !== 'ollama' && (
+        {provider !== 'ollama' && provider !== 'chatgpt' && (
           <label className="field">
             <span>Session key</span>
             <div className="key-field">
@@ -292,7 +452,9 @@ export function ProviderDialog({
             disabled={
               busy ||
               statesLoading ||
+              (provider === 'chatgpt' && !currentState?.configured) ||
               (provider !== 'ollama' &&
+                provider !== 'chatgpt' &&
                 provider !== 'openai-compatible' &&
                 !apiKey &&
                 !currentState?.configured) ||
@@ -307,7 +469,7 @@ export function ProviderDialog({
             )}
             {currentState?.configured ? 'Refresh models' : 'Configure and discover'}
           </Button>
-          {currentState?.credentialSource === 'session' && (
+          {provider !== 'chatgpt' && currentState?.credentialSource === 'session' && (
             <Button
               type="button"
               variant="ghost"
@@ -330,7 +492,11 @@ export function ProviderDialog({
             <ModelSelectorContent title="Choose a model">
               <ModelSelectorInput placeholder="Search models" />
               <ModelSelectorList>
-                <ModelSelectorEmpty>No discovered models. Enter an ID below.</ModelSelectorEmpty>
+                <ModelSelectorEmpty>
+                  {provider === 'chatgpt'
+                    ? 'Connect ChatGPT and refresh the account model list.'
+                    : 'No discovered models. Enter an ID below.'}
+                </ModelSelectorEmpty>
                 <ModelSelectorGroup heading={providerLabels[provider]}>
                   {models.map((item) => (
                     <ModelSelectorItem
@@ -346,13 +512,15 @@ export function ProviderDialog({
               </ModelSelectorList>
             </ModelSelectorContent>
           </ModelSelector>
-          <Input
-            value={model}
-            disabled={busy}
-            placeholder="Or enter a model ID"
-            onChange={(event) => setModel(event.target.value)}
-            spellCheck={false}
-          />
+          {provider !== 'chatgpt' && (
+            <Input
+              value={model}
+              disabled={busy}
+              placeholder="Or enter a model ID"
+              onChange={(event) => setModel(event.target.value)}
+              spellCheck={false}
+            />
+          )}
         </div>
 
         {error && (
@@ -372,7 +540,13 @@ export function ProviderDialog({
           </Button>
           <Button
             type="button"
-            disabled={busy || statesLoading || hasDraftConfiguration || !model.trim()}
+            disabled={
+              busy ||
+              statesLoading ||
+              hasDraftConfiguration ||
+              !model.trim() ||
+              (provider === 'chatgpt' && !currentState?.configured)
+            }
             onClick={() => void saveSelection()}
           >
             Use provider

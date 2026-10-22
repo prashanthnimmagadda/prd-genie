@@ -7,6 +7,7 @@ import { ApiError } from '../../shared/api.js';
 import type { ProviderKind } from '../../shared/types.js';
 import { createGuardedProviderFetch, validateProviderEndpoint } from './endpoints.js';
 import type { ProviderCredential, SessionStore } from './session-store.js';
+import type { ChatGptService } from './chatgpt-service.js';
 
 interface ModelItem {
   id: string;
@@ -28,7 +29,20 @@ export class ProviderService {
   constructor(
     private readonly sessions: SessionStore,
     private readonly guardedFetch = createGuardedProviderFetch(),
+    readonly chatgpt?: ChatGptService,
   ) {}
+
+  async chatGptResponse(
+    _sessionId: string | undefined,
+    model: string,
+    instructions: string,
+    input: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    if (!this.chatgpt)
+      throw new ApiError(503, 'chatgpt_unavailable', 'ChatGPT sign-in is unavailable.');
+    return this.chatgpt.response(model, instructions, input, signal);
+  }
 
   model(sessionId: string | undefined, provider: ProviderKind, modelId: string): LanguageModel {
     const credential = this.sessions.resolve(sessionId, provider);
@@ -36,6 +50,12 @@ export class ProviderService {
       throw new ApiError(401, 'missing_credentials', 'Configure a provider key for this session.');
     }
     switch (provider) {
+      case 'chatgpt':
+        throw new ApiError(
+          400,
+          'chatgpt_adapter_required',
+          'ChatGPT plan usage requires the Responses adapter.',
+        );
       case 'openai':
         return createOpenAI({ apiKey: credential.apiKey }).chat(modelId);
       case 'anthropic':
@@ -74,6 +94,11 @@ export class ProviderService {
     provider: ProviderKind,
     signal?: AbortSignal,
   ): Promise<ModelItem[]> {
+    if (provider === 'chatgpt') {
+      if (!this.chatgpt)
+        throw new ApiError(503, 'chatgpt_unavailable', 'ChatGPT sign-in is unavailable.');
+      return this.chatgpt.listModels(signal);
+    }
     const credential = this.sessions.resolve(sessionId, provider);
     if (requiresKey(provider) && !credential.apiKey) {
       throw new ApiError(401, 'missing_credentials', 'Configure a provider key for this session.');
@@ -107,6 +132,12 @@ function modelRequest(
   credential: ProviderCredential,
 ): { url: string; headers: Record<string, string> } {
   switch (provider) {
+    case 'chatgpt':
+      throw new ApiError(
+        400,
+        'chatgpt_adapter_required',
+        'ChatGPT uses its account-specific model catalog.',
+      );
     case 'openai':
       return {
         url: 'https://api.openai.com/v1/models',

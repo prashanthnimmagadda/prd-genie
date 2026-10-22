@@ -78,7 +78,7 @@ export function normalizeSectionBody(output: string, title: string): string {
   const heading = /^#{1,2}[ \t]+([^\n]+)\n+/;
   const match = output.match(heading);
   if (!match) return output;
-  if (!sectionHeadingMatchesTitle(match[1] ?? '', title)) {
+  if (!sectionHeadingMatchesTitle(match[1] ?? '', title, true)) {
     throw new ApiError(
       502,
       'malformed_output',
@@ -88,7 +88,11 @@ export function normalizeSectionBody(output: string, title: string): string {
   return output.slice(match[0].length).trim();
 }
 
-function sectionHeadingMatchesTitle(heading: string, title: string): boolean {
+function sectionHeadingMatchesTitle(
+  heading: string,
+  title: string,
+  allowCompoundAbbreviation = false,
+): boolean {
   const normalize = (value: string) =>
     value
       .trim()
@@ -98,6 +102,7 @@ function sectionHeadingMatchesTitle(heading: string, title: string): boolean {
   const normalizedHeading = normalize(heading);
   const normalizedTitle = normalize(title);
   if (normalizedHeading === normalizedTitle) return true;
+  if (!allowCompoundAbbreviation) return false;
   return normalizedTitle
     .split(/\s+(?:and|&)\s+/)
     .filter((part) => part.length >= 4)
@@ -112,28 +117,40 @@ export function normalizeDocumentProposal(output: string, sections: PrdSection[]
 }
 
 export function parseDocumentProposal(output: string, sections: PrdSection[]): PrdSection[] {
-  const marker =
-    /<!--\s*section:([0-9a-f-]{36})\s*-->\s*\n##[ \t]+[^\n]*\n([\s\S]*?)(?=\n<!--\s*section:|\s*$)/gi;
-  const bodies = new Map<string, string>();
-  for (const match of output.matchAll(marker)) {
-    const id = match[1];
-    const body = match[2];
-    if (!id || body === undefined || bodies.has(id)) {
-      throw new ApiError(502, 'malformed_output', 'The document proposal has invalid sections.');
-    }
-    bodies.set(id, body.trim());
+  const blocks = output.trim().split(/(?=<!--\s*section:)/i);
+  if (blocks.length > sections.length) {
+    throw new ApiError(502, 'malformed_output', 'The document proposal has invalid sections.');
   }
-  const knownIds = new Set(sections.map((section) => section.id));
-  if (
-    bodies.size !== sections.length ||
-    [...bodies.keys()].some((id) => !knownIds.has(id)) ||
-    sections.some((section) => !bodies.has(section.id))
-  ) {
+  if (blocks.length !== sections.length) {
     throw new ApiError(
       502,
       'malformed_output',
       'The document proposal must contain every current section exactly once.',
     );
   }
-  return sections.map((section) => ({ ...section, body: bodies.get(section.id) ?? section.body }));
+  return sections.map((section, index) => {
+    const match = blocks[index]
+      ?.trim()
+      .match(/^<!--\s*section:([0-9a-f-]{36})\s*-->\s*\r?\n##[ \t]+([^\r\n]+)\r?\n([\s\S]*)$/i);
+    if (
+      !match ||
+      match[1] !== section.id ||
+      !sectionHeadingMatchesTitle(match[2] ?? '', section.title)
+    ) {
+      throw new ApiError(
+        502,
+        'malformed_output',
+        'The document proposal must follow the selected section headings and order exactly.',
+      );
+    }
+    const body = (match[3] ?? '').trim();
+    if (section.required && (!body || /^(?:tbd|todo|lorem ipsum|placeholder)\.?$/i.test(body))) {
+      throw new ApiError(
+        502,
+        'incomplete_proposal',
+        `The required "${section.title}" section is empty or a placeholder. The proposal is incomplete.`,
+      );
+    }
+    return { ...section, body };
+  });
 }

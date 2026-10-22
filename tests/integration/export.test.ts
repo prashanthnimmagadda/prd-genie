@@ -52,6 +52,38 @@ describe('ExportService', () => {
     expect(archive.body.subarray(0, 2).toString()).toBe('PK');
   });
 
+  it('renders the latest saved edit as headings, lists, tables, and readable references', async () => {
+    const current = repository.getPrd(projectId);
+    repository.savePrd(
+      projectId,
+      current.revision,
+      current.sections.map((section, index) => ({
+        ...section,
+        body:
+          index === 0
+            ? '### Recovery flow\n\n- Preserve the draft\n- Restore after a crash\n\n| Check | Expected |\n| --- | --- |\n| Reopen | Latest text |\n\nEvidence: [Interview notes](https://example.test/notes).'
+            : section.body,
+      })),
+      'Latest edit before export',
+    );
+    const docx = await exporter.create(projectId, 'docx');
+    const JSZip = (await import('jszip')).default;
+    const xml = await (await JSZip.loadAsync(docx.body)).file('word/document.xml')?.async('string');
+    expect(xml).toContain('Recovery flow');
+    expect(xml).toContain('w:tbl');
+    expect(xml).toContain('Preserve the draft');
+    expect(xml).toContain('Interview notes (https://example.test/notes)');
+    expect(xml).not.toContain('| --- |');
+
+    const pdf = await exporter.create(projectId, 'pdf');
+    const parsed = await parseDocument('export.pdf', pdf.body);
+    const text = parsed.locations.map((location) => location.content).join(' ');
+    expect(text).toContain('Recovery flow');
+    expect(text).toContain('Reopen Latest text');
+    expect(text).toContain('Interview notes (https://example.test/notes)');
+    expect(text).not.toContain('| --- |');
+  });
+
   it('rejects spreadsheet and unknown export requests', async () => {
     await expect(exporter.create(projectId, 'xlsx')).rejects.toMatchObject({
       code: 'unsupported_export',

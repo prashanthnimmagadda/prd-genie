@@ -24,7 +24,11 @@ export class SourceService {
     }
     const parsed = await parseDocument(name, buffer);
     if (parsed.locations.length === 0) {
-      throw new ApiError(422, 'empty_document', 'No extractable text was found in the source.');
+      throw new ApiError(
+        422,
+        'empty_document',
+        parsed.warnings[0] ?? 'No extractable text was found in the source.',
+      );
     }
     const hash = createHash('sha256').update(buffer).digest('hex');
     const duplicate = this.database.sqlite
@@ -143,9 +147,17 @@ export class SourceService {
     const items = this.database.sqlite
       .prepare('SELECT id, content FROM chunks WHERE source_id = ? ORDER BY ordinal')
       .all(sourceId) as Array<{ id: string; content: string }>;
-    this.updateStatus(sourceId, 'processing', null);
-    this.scheduleIndex(sourceId, items, false, []);
-    return { ...source, status: 'processing' as const, error: null };
+    const parseWarnings = (source.error ?? '')
+      .replace('Semantic indexing is unavailable. Lexical evidence search remains ready.', '')
+      .trim();
+    this.updateStatus(sourceId, 'processing', parseWarnings || null);
+    this.scheduleIndex(
+      sourceId,
+      items,
+      Boolean(parseWarnings),
+      parseWarnings ? [parseWarnings] : [],
+    );
+    return { ...source, status: 'processing' as const, error: parseWarnings || null };
   }
 
   async close(): Promise<void> {
@@ -215,7 +227,10 @@ export class SourceService {
         this.updateStatus(
           sourceId,
           'partial',
-          'Semantic indexing is unavailable. Lexical evidence search remains ready.',
+          [
+            ...parseWarnings,
+            'Semantic indexing is unavailable. Lexical evidence search remains ready.',
+          ].join(' '),
         );
       } catch {
         // The source or database may have been removed while the background job was finishing.

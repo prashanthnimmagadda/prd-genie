@@ -1,5 +1,9 @@
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileTypeFromBuffer } from 'file-type';
+import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { ApiError } from '../../shared/api.js';
@@ -23,15 +27,23 @@ export interface ParsedDocument {
   warnings: string[];
 }
 
-const supportedExtensions = new Set(['.pdf', '.docx', '.md', '.markdown', '.txt']);
+const supportedExtensions = new Set([
+  '.pdf',
+  '.docx',
+  '.md',
+  '.markdown',
+  '.txt',
+  '.pptx',
+  '.xlsx',
+  '.jpg',
+  '.jpeg',
+]);
 const maxLocationChars = 2 * 1024 * 1024;
 const maxLocationLabelChars = 500;
 const rejectedExtensions = new Map([
   ['.doc', 'Legacy Word files are not supported. Save the file as DOCX.'],
-  ['.xls', 'Spreadsheets are not supported.'],
-  ['.xlsx', 'Spreadsheets are not supported.'],
-  ['.ppt', 'Presentations are not supported.'],
-  ['.pptx', 'Presentations are not supported.'],
+  ['.xls', 'Legacy spreadsheets are not supported. Save the file as XLSX.'],
+  ['.ppt', 'Legacy presentations are not supported. Save the file as PPTX.'],
 ]);
 
 function assertText(buffer: Buffer): string {
@@ -122,6 +134,7 @@ async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
       );
     }
     const locations: ParsedLocation[] = [];
+    const unreadablePages: number[] = [];
     let offset = 0;
     let extractedTextChars = 0;
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -135,7 +148,10 @@ async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();
-      if (!content) continue;
+      if (!content) {
+        unreadablePages.push(pageNumber);
+        continue;
+      }
       extractedTextChars += content.length;
       if (extractedTextChars > config.maxPdfExtractedTextChars) {
         throw new ApiError(
@@ -158,9 +174,13 @@ async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
     return {
       mediaType: 'application/pdf',
       locations,
-      partial: locations.length < pdf.numPages,
+      partial: unreadablePages.length > 0,
       warnings:
-        locations.length < pdf.numPages ? ['One or more pages contained no extractable text.'] : [],
+        unreadablePages.length > 0
+          ? [
+              `Page${unreadablePages.length === 1 ? '' : 's'} ${unreadablePages.join(', ')} contained no extractable text; scanned images on those pages were not read.`,
+            ]
+          : [],
     };
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -177,14 +197,16 @@ async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
   }
 }
 
-function inspectDocxOoxml(buffer: Buffer): {
+function inspectOoxml(
+  buffer: Buffer,
+  requiredEntries: string[],
+): {
   valid: boolean;
   entryCount: number;
   expandedBytes: number;
 } {
   const invalid = { valid: false, entryCount: 0, expandedBytes: 0 };
   if (buffer.length < 22) return invalid;
-  const requiredEntries = ['[Content_Types].xml', 'word/document.xml'];
   const names = new Set<string>();
   let entryCount = 0;
   let expandedBytes = 0;
@@ -224,15 +246,273 @@ function inspectDocxOoxml(buffer: Buffer): {
   };
 }
 
+function decodeXml(value: string): string {
+  return value.replace(
+    /&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi,
+    (_whole, entity: string) => {
+      if (entity[0] === '#') {
+        const codePoint =
+          entity[1]?.toLowerCase() === 'x'
+            ? Number.parseInt(entity.slice(2), 16)
+            : Number.parseInt(entity.slice(1), 10);
+        return Number.isFinite(codePoint) && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : '';
+      }
+      return (
+        ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[
+          entity.toLowerCase()
+        ] ?? ''
+      );
+    },
+  );
+}
+
+function xmlValues(xml: string, localName: string): string[] {
+  const pattern = new RegExp(
+    `<(?:(?:[\\w.-]+):)?${localName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:(?:[\\w.-]+):)?${localName}>`,
+    'gi',
+  );
+  return [...xml.matchAll(pattern)].map((match) => decodeXml(match[1] ?? '').trim());
+}
+
+function makeLocation(
+  locator: string,
+  content: string,
+  ordinal: number,
+  offset: number,
+): ParsedLocation {
+  return {
+    id: crypto.randomUUID(),
+    locator,
+    heading: locator,
+    ordinal,
+    content,
+    startOffset: offset,
+    endOffset: offset + content.length,
+  };
+}
+
+async function readOfficeZip(
+  buffer: Buffer,
+  kind: 'PPTX' | 'XLSX',
+  required: string[],
+): Promise<JSZip> {
+  const inspected = inspectOoxml(buffer, ['[Content_Types].xml', ...required]);
+  if (!inspected.valid)
+    throw new ApiError(415, 'mime_mismatch', `The file signature does not match a ${kind} file.`);
+  if (
+    inspected.entryCount > config.maxDocxEntries ||
+    inspected.expandedBytes > config.maxDocxExpandedBytes
+  ) {
+    throw new ApiError(413, 'office_resource_limit', `The expanded ${kind} file is too large.`);
+  }
+  try {
+    return await JSZip.loadAsync(buffer);
+  } catch {
+    throw new ApiError(422, 'parse_failed', `The ${kind} file could not be parsed.`);
+  }
+}
+
+function numberedEntries(
+  zip: JSZip,
+  pattern: RegExp,
+): Array<{ number: number; file: JSZip.JSZipObject }> {
+  return Object.values(zip.files)
+    .flatMap((file) => {
+      const match = pattern.exec(file.name);
+      return match && !file.dir ? [{ number: Number(match[1]), file }] : [];
+    })
+    .sort((a, b) => a.number - b.number);
+}
+
+async function parsePptx(buffer: Buffer): Promise<ParsedDocument> {
+  const zip = await readOfficeZip(buffer, 'PPTX', ['ppt/presentation.xml']);
+  const slides = numberedEntries(zip, /^ppt\/slides\/slide(\d+)\.xml$/);
+  if (!slides.length)
+    throw new ApiError(422, 'empty_document', 'The presentation contains no slides.');
+  const locations: ParsedLocation[] = [];
+  const warnings: string[] = [];
+  let offset = 0;
+  for (const slide of slides) {
+    const xml = await slide.file.async('string');
+    const content = xmlValues(xml, 't').filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    const label = `Slide ${slide.number}`;
+    if (!content) warnings.push(`${label} contains no extractable text.`);
+    else {
+      for (const part of splitBoundedText(content, maxLocationChars)) {
+        locations.push(makeLocation(label, part, locations.length, offset));
+        offset += part.length + 1;
+      }
+    }
+    if (/<(?:[\w.-]+:)?(?:pic|graphicFrame|oleObj)\b/i.test(xml)) {
+      warnings.push(`${label} contains visual or embedded content that was not read.`);
+    }
+  }
+  if (zip.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).length) {
+    warnings.push('Presenter notes were not read.');
+  }
+  return {
+    mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    locations,
+    partial: warnings.length > 0,
+    warnings,
+  };
+}
+
+async function parseXlsx(buffer: Buffer): Promise<ParsedDocument> {
+  const zip = await readOfficeZip(buffer, 'XLSX', ['xl/workbook.xml']);
+  const sheets = numberedEntries(zip, /^xl\/worksheets\/sheet(\d+)\.xml$/);
+  if (!sheets.length)
+    throw new ApiError(422, 'empty_document', 'The spreadsheet contains no worksheets.');
+  const stringsXml = await zip.file('xl/sharedStrings.xml')?.async('string');
+  const sharedStrings = stringsXml
+    ? xmlValues(stringsXml, 'si').map((value) => xmlValues(value, 't').join(''))
+    : [];
+  const locations: ParsedLocation[] = [];
+  const warnings: string[] = [];
+  let offset = 0;
+  for (const sheet of sheets) {
+    const xml = await sheet.file.async('string');
+    const rows = [...xml.matchAll(/<(?:[\w.-]+:)?row\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?row>/gi)];
+    let hasFormulaWithoutValue = false;
+    const lines: string[] = [];
+    for (const row of rows) {
+      const cells: string[] = [];
+      for (const cell of (row[1] ?? '').matchAll(
+        /<(?:[\w.-]+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/gi,
+      )) {
+        const attributes = cell[1] ?? '';
+        const inner = cell[2] ?? '';
+        const address = /\br="([^"]+)"/.exec(attributes)?.[1] ?? 'Cell';
+        const type = /\bt="([^"]+)"/.exec(attributes)?.[1];
+        const raw = xmlValues(inner, 'v')[0];
+        const inline = xmlValues(inner, 't').join('');
+        const value =
+          type === 's'
+            ? sharedStrings[Number(raw)]
+            : type === 'inlineStr'
+              ? inline
+              : (raw ?? inline);
+        if (/<(?:[\w.-]+:)?f\b/i.test(inner) && !value) hasFormulaWithoutValue = true;
+        if (value) cells.push(`${address}: ${value}`);
+      }
+      if (cells.length) lines.push(cells.join(' | '));
+    }
+    const label = `Sheet ${sheet.number}`;
+    const content = lines.join('\n');
+    if (!content) warnings.push(`${label} contains no extractable cell values.`);
+    else {
+      for (const part of splitBoundedText(content, maxLocationChars)) {
+        locations.push(makeLocation(label, part, locations.length, offset));
+        offset += part.length + 1;
+      }
+    }
+    if (hasFormulaWithoutValue)
+      warnings.push(`${label} has formulas without cached values; those results were not read.`);
+  }
+  if (zip.file(/^xl\/(?:drawings|charts|media)\//).length)
+    warnings.push('Spreadsheet charts or images were not read.');
+  return {
+    mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    locations,
+    partial: warnings.length > 0,
+    warnings,
+  };
+}
+
+async function recognizeJpeg(buffer: Buffer): Promise<string> {
+  if (process.platform !== 'darwin') {
+    throw new ApiError(
+      422,
+      'ocr_unavailable',
+      'JPEG text recognition requires macOS Vision on this installation.',
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const helper = process.env.PRD_GENIE_OCR_HELPER;
+    const developmentSource = path.resolve(process.cwd(), 'scripts/mac/JpegOCR.swift');
+    if (!helper && (process.env.NODE_ENV === 'production' || !fs.existsSync(developmentSource))) {
+      reject(
+        new ApiError(
+          422,
+          'ocr_unavailable',
+          'The local JPEG text recognition helper is unavailable.',
+        ),
+      );
+      return;
+    }
+    const processHandle = spawn(helper || 'swift', helper ? [] : [developmentSource], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        SWIFT_MODULECACHE_PATH: path.join(os.tmpdir(), 'prd-genie-swift-cache'),
+        CLANG_MODULE_CACHE_PATH: path.join(os.tmpdir(), 'prd-genie-clang-cache'),
+      },
+    });
+    const output: Buffer[] = [];
+    const errors: Buffer[] = [];
+    let outputBytes = 0;
+    const timeout = setTimeout(() => processHandle.kill(), 60_000);
+    processHandle.stdout.on('data', (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > config.maxPdfExtractedTextChars) processHandle.kill();
+      else output.push(chunk);
+    });
+    processHandle.stderr.on('data', (chunk: Buffer) => {
+      if (errors.reduce((total, part) => total + part.length, 0) < 4096) errors.push(chunk);
+    });
+    processHandle.on('error', () => {
+      clearTimeout(timeout);
+      reject(
+        new ApiError(422, 'ocr_unavailable', 'macOS Vision text recognition could not start.'),
+      );
+    });
+    processHandle.on('close', (code) => {
+      clearTimeout(timeout);
+      if (outputBytes > config.maxPdfExtractedTextChars) {
+        reject(new ApiError(413, 'ocr_text_limit', 'The image contains too much recognized text.'));
+      } else if (code !== 0) {
+        reject(
+          new ApiError(
+            422,
+            'ocr_failed',
+            'Local text recognition could not read this JPEG. Review the image and try another source format.',
+          ),
+        );
+      } else resolve(Buffer.concat(output).toString('utf8').trim());
+    });
+    processHandle.stdin.end(buffer);
+  });
+}
+
+async function parseJpeg(buffer: Buffer): Promise<ParsedDocument> {
+  const content = await recognizeJpeg(buffer);
+  const warnings = [
+    'Only text recognized by local macOS Vision was extracted. Review the image: diagrams, layout and handwriting may be missing or misread.',
+  ];
+  if (!content) warnings.unshift('No text was recognized in this JPEG image.');
+  return {
+    mediaType: 'image/jpeg',
+    locations: content ? [makeLocation('Image text', content, 0, 0)] : [],
+    partial: true,
+    warnings,
+  };
+}
+
 async function parseDocx(buffer: Buffer): Promise<ParsedDocument> {
   try {
     const converted = await mammoth.convertToHtml({ buffer });
     const content = htmlToMarkdownStructure(converted.value);
+    const zip = await JSZip.loadAsync(buffer);
+    const warnings = converted.messages.map((message) => message.message);
+    if (zip.file(/^word\/media\//).length)
+      warnings.push('Embedded images in the DOCX were not read.');
     return {
       mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       locations: structuralTextLocations(content, true),
-      partial: converted.messages.some((message) => message.type === 'error'),
-      warnings: converted.messages.map((message) => message.message),
+      partial: warnings.length > 0,
+      warnings,
     };
   } catch {
     throw new ApiError(422, 'parse_failed', 'The DOCX file could not be parsed.');
@@ -245,6 +525,12 @@ function htmlToMarkdownStructure(html: string): string {
       return `\n\n${'#'.repeat(Number.parseInt(level, 10))} ${stripTags(value)}\n\n`;
     })
     .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_match, value: string) => `\n- ${stripTags(value)}`)
+    .replace(/<\/?(?:table|tbody|thead)[^>]*>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(
+      /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi,
+      (_match, value: string) => ` | ${stripTags(value)}`,
+    )
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
@@ -273,7 +559,7 @@ export async function parseDocument(name: string, buffer: Buffer): Promise<Parse
     throw new ApiError(
       415,
       'unsupported_file',
-      'Supported source formats are PDF, DOCX, Markdown, and plain text.',
+      'Supported source formats are PDF, DOCX, PPTX, XLSX, JPEG, Markdown, and plain text.',
     );
   }
 
@@ -285,7 +571,7 @@ export async function parseDocument(name: string, buffer: Buffer): Promise<Parse
     return parsePdf(buffer);
   }
   if (extension === '.docx') {
-    const docx = inspectDocxOoxml(buffer);
+    const docx = inspectOoxml(buffer, ['[Content_Types].xml', 'word/document.xml']);
     const validDocx =
       (detected?.mime ===
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -301,6 +587,22 @@ export async function parseDocument(name: string, buffer: Buffer): Promise<Parse
       throw new ApiError(413, 'docx_resource_limit', 'The expanded DOCX file is too large.');
     }
     return parseDocx(buffer);
+  }
+  if (extension === '.pptx' || extension === '.xlsx') {
+    if (detected?.mime !== 'application/zip' && !detected?.mime?.includes('openxmlformats')) {
+      throw new ApiError(
+        415,
+        'mime_mismatch',
+        `The file signature does not match a ${extension.slice(1).toUpperCase()} file.`,
+      );
+    }
+    return extension === '.pptx' ? parsePptx(buffer) : parseXlsx(buffer);
+  }
+  if (extension === '.jpg' || extension === '.jpeg') {
+    if (detected?.mime !== 'image/jpeg') {
+      throw new ApiError(415, 'mime_mismatch', 'The file signature does not match a JPEG image.');
+    }
+    return parseJpeg(buffer);
   }
   if (detected) {
     throw new ApiError(415, 'mime_mismatch', 'The file is binary and cannot be imported as text.');

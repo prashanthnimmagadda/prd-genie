@@ -145,6 +145,32 @@ describe('ProposalService', () => {
     );
   });
 
+  it('rejects reordered headings, unrelated prefaces, and empty required sections', () => {
+    const project = repository.createProject('Structured', '');
+    const [first, second] = repository.getPrd(project.id).sections;
+    const sections = [
+      { ...first!, required: true },
+      { ...second!, required: false },
+    ];
+    const valid = sections
+      .map(
+        (section) =>
+          `<!-- section:${section.id} -->\n## ${section.title}\nContent for ${section.title}`,
+      )
+      .join('\n\n');
+    expect(() => parseDocumentProposal(valid, sections)).not.toThrow();
+    expect(() => parseDocumentProposal(`Preface\n${valid}`, sections)).toThrow('invalid sections');
+    expect(() =>
+      parseDocumentProposal(valid.replace(`## ${first!.title}`, '## Other'), sections),
+    ).toThrow('selected section headings and order');
+    expect(() =>
+      parseDocumentProposal(valid.split('\n\n').reverse().join('\n\n'), sections),
+    ).toThrow('selected section headings and order');
+    expect(() =>
+      parseDocumentProposal(valid.replace(`Content for ${first!.title}`, 'TBD'), sections),
+    ).toThrow('required');
+  });
+
   it('rejects incomplete, non-applicable, stale, empty, and missing-target proposals', () => {
     const project = repository.createProject('Rejections', '');
     const section = repository.getPrd(project.id).sections[0]!;

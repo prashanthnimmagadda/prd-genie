@@ -29,7 +29,65 @@ describe('Repository', () => {
     expect(prd.revision).toBe(0);
     expect(prd.sections).toHaveLength(13);
     expect(prd.sections[0]?.title).toBe('Problem');
+    expect(prd.sections[0]?.purpose).toContain('specific user or business problem');
+    expect(prd.sections[0]?.required).toBe(true);
+    expect(repository.listStructures(project.id)).toHaveLength(1);
     expect(repository.listProjects()[0]?.id).toBe(project.id);
+  });
+
+  it('remembers multiple structures and preserves content during a safe selection', () => {
+    const project = repository.createProject('Client delivery', '');
+    const initial = repository.getPrd(project.id);
+    const problem = initial.sections[0]!;
+    const written = repository.savePrd(
+      project.id,
+      initial.revision,
+      initial.sections.map((section) =>
+        section.id === problem.id
+          ? { ...section, body: 'Teams cannot agree on approval.' }
+          : section,
+      ),
+      'Describe problem',
+    );
+    const client = repository.createStructure(project.id, 'Client format', [
+      { title: 'Decision', purpose: 'Record the decision to make.', required: true },
+      { title: 'Problem', purpose: 'Explain the client problem.', required: true },
+    ]);
+    expect(repository.listStructures(project.id).map((item) => item.name)).toEqual([
+      'Standard PRD',
+      'Client format',
+    ]);
+    const selected = repository.selectStructure(project.id, client.id, written.revision);
+    expect(selected.project.selectedStructureId).toBe(client.id);
+    expect(selected.prd.sections.map((section) => section.title)).toEqual(['Decision', 'Problem']);
+    expect(selected.prd.sections[1]?.body).toBe('Teams cannot agree on approval.');
+    expect(selected.prd.sections[1]?.id).toBe(problem.id);
+    expect(selected.prd.sections[0]?.purpose).toBe('Record the decision to make.');
+    expect(selected.prd.revision).toBe(written.revision + 1);
+    expect(() => repository.selectStructure(project.id, client.id, written.revision)).toThrow(
+      'changed since',
+    );
+  });
+
+  it('rejects structure changes that would discard populated sections', () => {
+    const project = repository.createProject('Preserve context', '');
+    const initial = repository.getPrd(project.id);
+    const written = repository.savePrd(
+      project.id,
+      0,
+      initial.sections.map((section) =>
+        section.position === 0 ? { ...section, body: 'Important problem statement.' } : section,
+      ),
+      'Write problem',
+    );
+    const alternative = repository.createStructure(project.id, 'Short brief', [
+      { title: 'Summary', purpose: 'State the brief.', required: true },
+    ]);
+    expect(() => repository.selectStructure(project.id, alternative.id, written.revision)).toThrow(
+      'would remove populated sections',
+    );
+    expect(repository.getPrd(project.id).revision).toBe(written.revision);
+    expect(repository.getProject(project.id).selectedStructureId).not.toBe(alternative.id);
   });
 
   it('saves, reorders, extends, and rejects stale revisions', () => {

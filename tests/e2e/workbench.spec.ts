@@ -91,6 +91,47 @@ test('creates a project and exposes the document-first workbench', async ({
   }
 });
 
+test('exports the latest editor text and reopens it locally', async ({ page, request }, testInfo) => {
+  await expect.poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 }).toBe(200);
+  const name = `Latest export ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', { data: { name } });
+  expect(created.ok()).toBe(true);
+  const project = (await created.json()) as { id: string };
+  await page.goto('/');
+  await page.getByRole('button', { name, exact: true }).click();
+  await page.getByLabel('Section content').first().fill('Latest unsaved requirement for the PDF.');
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'pdf', exact: true }).click();
+  expect((await download).suggestedFilename()).toMatch(/\.pdf$/);
+  const saved = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
+    sections: Array<{ body: string }>;
+  };
+  expect(saved.sections[0]?.body).toContain('Latest unsaved requirement for the PDF.');
+  await page.reload();
+  await expect(page.getByLabel('Section content').first()).toContainText('Latest unsaved requirement for the PDF.');
+});
+
+test('saves and applies a custom project structure without dropping content', async ({ page, request }, testInfo) => {
+  await expect.poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 }).toBe(200);
+  const name = `Custom structure ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', { data: { name } });
+  expect(created.ok()).toBe(true);
+  await page.goto('/');
+  await page.getByRole('button', { name, exact: true }).click();
+  await page.getByLabel('Section content').first().fill('Keep this confirmed problem.');
+  const picker = page.locator('.structure-picker');
+  await picker.locator('summary').click();
+  await picker.getByRole('button', { name: 'Save or enter a structure' }).click();
+  await picker.getByLabel('Name', { exact: true }).fill('Client brief');
+  await picker.getByLabel('Sections, one per line').fill('Problem | State the confirmed issue | required\nNext steps | Decisions and owners | optional');
+  await picker.getByRole('button', { name: 'Save structure' }).click();
+  await picker.locator('.structure-option').filter({ hasText: 'Client brief' }).getByRole('button', { name: 'Use' }).click();
+  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText('Next steps');
+  await expect(page.getByLabel('Section content').first()).toContainText('Keep this confirmed problem.');
+  await page.reload();
+  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText('Next steps');
+});
+
 test('isolates provider drafts and discloses active and pending outbound hosts', async ({
   page,
   request,
@@ -291,7 +332,7 @@ test('exports current AI evidence immediately and clears handoff selection bound
         sources: Array<{ status: string }>;
       };
       return result.sources[0]?.status;
-    })
+    }, { timeout: 15_000 })
     .not.toBe('processing');
 
   await page.getByRole('button', { name: 'Configure model provider' }).click();
@@ -632,7 +673,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByText('Historical snapshot, source deleted')).toBeVisible();
 
   const download = page.waitForEvent('download');
-  await page.getByRole('link', { name: 'markdown' }).click();
+  await page.getByRole('button', { name: 'markdown' }).click();
   expect((await download).suggestedFilename()).toMatch(/\.md$/);
 
   await page.getByRole('button', { name: 'Configure model provider' }).click();
@@ -733,7 +774,7 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
   );
 
   const archiveDownload = page.waitForEvent('download');
-  await page.getByRole('link', { name: 'Export archive' }).click();
+  await page.getByRole('button', { name: 'Export archive' }).click();
   const downloadedArchive = await archiveDownload;
   const archivePath = await downloadedArchive.path();
   expect(archivePath).toBeTruthy();

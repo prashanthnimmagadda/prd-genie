@@ -236,6 +236,46 @@
   padding: 0.8rem;
 }
 
+.structure-picker {
+  padding: 0.65rem 0.8rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.structure-picker summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.structure-picker p,
+.structure-picker small {
+  color: var(--muted-foreground);
+}
+
+.structure-option,
+.structure-form > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
+}
+
+.structure-form,
+.structure-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.structure-form input,
+.structure-form textarea {
+  width: 100%;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+}
+
 .project-lifecycle {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -244,7 +284,7 @@
   border-top: 1px solid var(--border);
 }
 
-.project-lifecycle a {
+.project-lifecycle > button:first-child {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -254,9 +294,12 @@
   color: var(--foreground);
   font-size: 0.75rem;
   text-decoration: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-.project-lifecycle a:hover {
+.project-lifecycle > button:first-child:hover {
   background: var(--secondary);
 }
 
@@ -1057,7 +1100,7 @@
   text-transform: uppercase;
 }
 
-.export-row a {
+.export-row button {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
@@ -1068,10 +1111,19 @@
   text-decoration: none;
   text-transform: uppercase;
   white-space: nowrap;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-.export-row a:hover {
+.export-row button:hover {
   background: var(--secondary);
+}
+
+.export-row button:disabled,
+.project-lifecycle button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .export-row svg {

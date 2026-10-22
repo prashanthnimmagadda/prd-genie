@@ -28,6 +28,7 @@ import type {
   Citation,
   PrdDocument,
   ProjectSummary,
+  ProviderState,
   ReviewFinding,
   RevisionSummary,
   SourceSummary,
@@ -58,6 +59,8 @@ import {
 import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources';
 import { SectionEditor } from '@/components/SectionEditor';
 import { ProviderDialog } from '@/components/ProviderDialog';
+import { StructurePanel } from '@/components/StructurePanel';
+import { exampleSource, exampleSourceName, fillExample } from '@/example-project';
 
 type PanelTab = 'assist' | 'review' | 'evidence' | 'history';
 
@@ -92,6 +95,18 @@ export default function App() {
 
   async function createProject(name: string) {
     const project = await api.createProject(name);
+    setProjects((current) => [project, ...current]);
+    setSelectedId(project.id);
+  }
+
+  async function createExampleProject() {
+    const project = await api.createProject('Explore: meeting scheduler', 'Fictional example');
+    const document = await api.prd(project.id);
+    await api.savePrd(project.id, document.revision, fillExample(document), 'Example PRD added');
+    await api.addSource(
+      project.id,
+      new File([exampleSource], exampleSourceName, { type: 'text/plain' }),
+    );
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
   }
@@ -138,7 +153,13 @@ export default function App() {
   }
 
   if (!selectedId) {
-    return <EmptyWorkspace onCreate={createProject} onImport={importProject} />;
+    return (
+      <EmptyWorkspace
+        onCreate={createProject}
+        onImport={importProject}
+        onExample={createExampleProject}
+      />
+    );
   }
 
   const project = projects.find((item) => item.id === selectedId);
@@ -163,9 +184,11 @@ export default function App() {
 function EmptyWorkspace({
   onCreate,
   onImport,
+  onExample,
 }: {
   onCreate: (name: string) => Promise<void>;
   onImport: (file: File) => Promise<void>;
+  onExample: () => Promise<void>;
 }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -178,7 +201,7 @@ function EmptyWorkspace({
         <BookOpenText aria-hidden="true" />
       </div>
       <p className="eyebrow">Local-first PRD workbench</p>
-      <h1>Start with the document, not a chat.</h1>
+      <h1>Your ideas, shaped into a clear PRD.</h1>
       <p className="onboarding-copy">
         Build a structured PRD, ground it in your source material, and review every AI proposal
         before it changes the document.
@@ -232,6 +255,20 @@ function EmptyWorkspace({
           }}
         />
       </div>
+      <Button
+        variant="ghost"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          setError('');
+          void onExample()
+            .catch((reason: unknown) => setError(messageFrom(reason)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <BookOpenText aria-hidden="true" />
+        Explore a finished example
+      </Button>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -282,9 +319,14 @@ function Workbench({
   const [railOpen, setRailOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [activeProviderState, setActiveProviderState] = useState<ProviderState | null>(null);
   const [action, setAction] = useState<AiAction>('ask');
   const [scope, setScope] = useState<ActionScope>('section');
   const [output, setOutput] = useState('');
+  const [prompt, setPrompt] = useState(
+    () => localStorage.getItem(`prd-genie-prompt:${project.id}`) ?? '',
+  );
+  const [interrupted, setInterrupted] = useState(false);
   const [proposalContext, setProposalContext] = useState<ProposalContext | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
@@ -306,6 +348,22 @@ function Workbench({
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const handoffInputRef = useRef<HTMLInputElement | null>(null);
   const documentMutationRef = useRef(false);
+
+  useEffect(() => {
+    if (providerOpen || !project.selectedProvider) return;
+    void api
+      .providerStates()
+      .then(({ providers }) => {
+        setActiveProviderState(
+          providers.find((item) => item.provider === project.selectedProvider) ?? null,
+        );
+      })
+      .catch(() => setActiveProviderState(null));
+  }, [providerOpen, project.selectedProvider]);
+
+  useEffect(() => {
+    localStorage.setItem(`prd-genie-prompt:${project.id}`, prompt);
+  }, [project.id, prompt]);
 
   useEffect(() => {
     const onOnline = () => setOffline(false);
@@ -407,6 +465,16 @@ function Workbench({
     }
   }
 
+  async function exportCurrent(format: 'markdown' | 'docx' | 'pdf' | 'archive') {
+    if (documentMutationRef.current || !prd) return;
+    if (dirty && !(await save('Saved before export'))) return;
+    const link = document.createElement('a');
+    link.href = `/api/projects/${project.id}/export?format=${format}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
+
   async function submitAction(
     instruction: string,
     override?: { action: AiAction; scope: ActionScope },
@@ -439,6 +507,7 @@ function Workbench({
     setBusy(true);
     setError('');
     setOutput('');
+    setInterrupted(false);
     setProposalContext(
       requestedAction === 'draft' || requestedAction === 'rewrite'
         ? {
@@ -500,10 +569,13 @@ function Workbench({
         controller.signal,
       );
       if (requestedAction === 'review') setTab('review');
+      return true;
     } catch (reasonCaught) {
+      setInterrupted(true);
       if (!(reasonCaught instanceof DOMException && reasonCaught.name === 'AbortError')) {
         setError(messageFrom(reasonCaught));
       }
+      return false;
     } finally {
       setBusy(false);
       setStatus('');
@@ -812,7 +884,11 @@ function Workbench({
             aria-label="Configure model provider"
           >
             <KeyRound aria-hidden="true" />
-            <span className="label-wide">{project.selectedModel ?? 'Configure model'}</span>
+            <span className="label-wide">
+              {project.selectedProvider
+                ? `${project.selectedProvider === 'ollama' ? 'Local' : 'Online'} · ${project.selectedModel ?? project.selectedProvider} · ${activeProviderState?.configured ? 'configured' : 'setup needed'}`
+                : 'AI optional · configure'}
+            </span>
           </Button>
           <Button disabled={!dirty || saveBusy || documentMutationBusy} onClick={() => void save()}>
             <Save aria-hidden="true" />
@@ -941,6 +1017,21 @@ function Workbench({
             </a>
           ))}
         </nav>
+        <StructurePanel
+          project={project}
+          document={prd}
+          onApply={async (structureId) => {
+            const current = dirty ? await save('Saved before structure change') : prd;
+            if (!current)
+              throw new Error('Save the current document before changing its structure.');
+            const result = await api.selectStructure(project.id, structureId, current.revision);
+            setPrd(result.prd);
+            setSavedPrd(result.prd);
+            setSelectedSectionId(result.prd.sections[0]?.id ?? '');
+            onProjectChange(result.project);
+            setRevisions((await api.revisions(project.id)).revisions);
+          }}
+        />
 
         <section className="source-rail" aria-labelledby="sources-heading">
           <div className="rail-label">
@@ -959,7 +1050,7 @@ function Workbench({
             className="visually-hidden"
             type="file"
             aria-label="Add source file"
-            accept=".pdf,.docx,.md,.markdown,.txt"
+            accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.md,.markdown,.txt"
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) void upload(file);
@@ -969,7 +1060,7 @@ function Workbench({
           {sources.length === 0 ? (
             <button className="empty-source" onClick={() => fileInputRef.current?.click()}>
               Add evidence
-              <small>PDF, DOCX, Markdown, or text</small>
+              <small>PDF, Word, slides, sheets, JPEG, or text</small>
             </button>
           ) : (
             sources.map((source) => (
@@ -1014,16 +1105,14 @@ function Workbench({
           )}
         </section>
         <section className="project-lifecycle" aria-label="Project data">
-          <a
-            href={`/api/projects/${project.id}/export?format=archive`}
-            aria-disabled={documentMutationBusy}
-            onClick={(event) => {
-              if (documentMutationBusy) event.preventDefault();
-            }}
+          <button
+            type="button"
+            disabled={documentMutationBusy || saveBusy}
+            onClick={() => void exportCurrent('archive')}
           >
             <Download aria-hidden="true" />
             Export archive
-          </a>
+          </button>
           <Button
             variant="ghost"
             size="sm"
@@ -1283,7 +1372,7 @@ function Workbench({
 
             <Conversation className="assist-conversation">
               <ConversationContent>
-                {!output && !busy ? (
+                {!output && !busy && !interrupted ? (
                   <ConversationEmptyState
                     icon={<SearchCheck />}
                     title="Work against the document"
@@ -1293,6 +1382,12 @@ function Workbench({
                   <Message from="assistant">
                     <MessageContent>
                       {status && <p className="stream-status">{status}</p>}
+                      {interrupted && (
+                        <p className="inline-error" role="alert">
+                          This response stopped before completion. Your request is kept below; run
+                          it again when ready.
+                        </p>
+                      )}
                       <MessageResponse>{output}</MessageResponse>
                     </MessageContent>
                     {citations.length > 0 && (
@@ -1387,8 +1482,15 @@ function Workbench({
               <ConversationScrollButton />
             </Conversation>
 
-            <PromptInput onSubmit={({ text }) => submitAction(text)} className="assist-input">
+            <PromptInput
+              onSubmit={async ({ text }) => {
+                if (await submitAction(text)) setPrompt('');
+              }}
+              className="assist-input"
+            >
               <PromptInputTextarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.currentTarget.value)}
                 placeholder={
                   action === 'review'
                     ? 'Optional review focus'
@@ -1913,10 +2015,15 @@ function Workbench({
         <div className="export-row">
           <span>Export</span>
           {(['markdown', 'docx', 'pdf', 'archive'] as const).map((format) => (
-            <a key={format} href={`/api/projects/${project.id}/export?format=${format}`}>
+            <button
+              type="button"
+              key={format}
+              disabled={documentMutationBusy || saveBusy}
+              onClick={() => void exportCurrent(format)}
+            >
               <Download aria-hidden="true" />
               {format}
-            </a>
+            </button>
           ))}
         </div>
       </aside>

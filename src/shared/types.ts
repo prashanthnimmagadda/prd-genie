@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { UIMessage } from 'ai';
 
 export const providerKinds = [
+  'chatgpt',
   'openai',
   'anthropic',
   'google',
@@ -238,6 +239,12 @@ export interface ProviderState {
   credentialSource: CredentialSource;
   configured: boolean;
   baseUrl: string | null;
+  account?: string | null;
+  connected?: boolean;
+  activeClientId?: string | null;
+  pending?: boolean;
+  error?: string | null;
+  accounts?: Array<{ clientId: string; email: string | null; connected: boolean }>;
 }
 
 export interface HealthResponse {
@@ -308,9 +315,9 @@ export const structureCreateSchema = z.object({
   sections: z.array(structureSectionSchema).min(1).max(50),
 });
 
-export const structureUpdateSchema = structureCreateSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-);
+export const structureUpdateSchema = structureCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0);
 
 export const structureSelectSchema = z.object({
   structureId: z.string().uuid(),
@@ -456,7 +463,7 @@ const reviewGenerationFindingSchema = z
 export const reviewGenerationSchema = z
   .object({
     summary: z.string(),
-    findings: z.array(reviewGenerationFindingSchema).max(3),
+    findings: z.array(reviewGenerationFindingSchema).max(20),
   })
   .strict();
 
@@ -477,17 +484,66 @@ export const DEFAULT_SECTIONS = [
 ] as const;
 
 export const DEFAULT_STRUCTURE_SECTIONS: readonly StructureSection[] = [
-  { title: 'Problem', purpose: 'Describe the specific user or business problem and why it matters now.', required: true },
-  { title: 'Context', purpose: 'Record confirmed background, source evidence, constraints and relevant prior decisions.', required: true },
-  { title: 'Target users', purpose: 'Identify intended users and their distinct needs without inventing research.', required: true },
+  {
+    title: 'Problem',
+    purpose: 'Describe the specific user or business problem and why it matters now.',
+    required: true,
+  },
+  {
+    title: 'Context',
+    purpose:
+      'Record confirmed background, source evidence, constraints and relevant prior decisions.',
+    required: true,
+  },
+  {
+    title: 'Target users',
+    purpose: 'Identify intended users and their distinct needs without inventing research.',
+    required: true,
+  },
   { title: 'Goals', purpose: 'State the outcomes this work aims to achieve.', required: true },
-  { title: 'Non-goals', purpose: 'Make relevant exclusions and boundaries explicit.', required: false },
-  { title: 'Scope', purpose: 'Define what is included in this version and what remains outside it.', required: true },
-  { title: 'User journeys', purpose: 'Describe primary flows and relevant edge or failure paths.', required: true },
-  { title: 'Requirements and acceptance criteria', purpose: 'Specify actionable behavior and testable conditions for acceptance.', required: true },
-  { title: 'Success measures', purpose: 'Name measurable signals and measurement approach without fabricating targets.', required: false },
-  { title: 'Dependencies', purpose: 'Record external systems, decisions or teams needed to deliver the scope.', required: false },
-  { title: 'Risks', purpose: 'Describe material risks, their impact and proportionate mitigations.', required: false },
-  { title: 'Open questions', purpose: 'List unresolved decisions and label assumptions separately from confirmed facts.', required: false },
-  { title: 'Rollout', purpose: 'Explain release, migration or communication steps when relevant.', required: false },
+  {
+    title: 'Non-goals',
+    purpose: 'Make relevant exclusions and boundaries explicit.',
+    required: false,
+  },
+  {
+    title: 'Scope',
+    purpose: 'Define what is included in this version and what remains outside it.',
+    required: true,
+  },
+  {
+    title: 'User journeys',
+    purpose: 'Describe primary flows and relevant edge or failure paths.',
+    required: true,
+  },
+  {
+    title: 'Requirements and acceptance criteria',
+    purpose: 'Specify actionable behavior and testable conditions for acceptance.',
+    required: true,
+  },
+  {
+    title: 'Success measures',
+    purpose: 'Name measurable signals and measurement approach without fabricating targets.',
+    required: false,
+  },
+  {
+    title: 'Dependencies',
+    purpose: 'Record external systems, decisions or teams needed to deliver the scope.',
+    required: false,
+  },
+  {
+    title: 'Risks',
+    purpose: 'Describe material risks, their impact and proportionate mitigations.',
+    required: false,
+  },
+  {
+    title: 'Open questions',
+    purpose: 'List unresolved decisions and label assumptions separately from confirmed facts.',
+    required: false,
+  },
+  {
+    title: 'Rollout',
+    purpose: 'Explain release, migration or communication steps when relevant.',
+    required: false,
+  },
 ];
