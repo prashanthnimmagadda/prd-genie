@@ -186,6 +186,7 @@ export interface ProjectSummary {
   updatedAt: string;
   selectedProvider: ProviderKind | null;
   selectedModel: string | null;
+  selectedStructureId?: string | null;
 }
 
 export interface PrdSection {
@@ -194,6 +195,23 @@ export interface PrdSection {
   title: string;
   body: string;
   position: number;
+  purpose?: string;
+  required?: boolean;
+  updatedAt: string;
+}
+
+export interface StructureSection {
+  title: string;
+  purpose: string;
+  required: boolean;
+}
+
+export interface StructureTemplate {
+  id: string;
+  projectId: string;
+  name: string;
+  sections: StructureSection[];
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -271,10 +289,32 @@ export const sectionUpdateSchema = z.object({
         title: z.string().trim().min(1).max(160),
         body: z.string().max(100_000),
         position: z.number().int().nonnegative(),
+        purpose: z.string().trim().max(1000).optional(),
+        required: z.boolean().optional(),
       }),
     )
     .min(1),
   reason: z.string().trim().min(1).max(200).default('Manual edit'),
+});
+
+export const structureSectionSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  purpose: z.string().trim().min(1).max(1000),
+  required: z.boolean(),
+});
+
+export const structureCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  sections: z.array(structureSectionSchema).min(1).max(50),
+});
+
+export const structureUpdateSchema = structureCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+);
+
+export const structureSelectSchema = z.object({
+  structureId: z.string().uuid(),
+  revision: z.number().int().nonnegative(),
 });
 
 export const sessionProviderSchema = z.object({
@@ -435,3 +475,19 @@ export const DEFAULT_SECTIONS = [
   'Open questions',
   'Rollout',
 ] as const;
+
+export const DEFAULT_STRUCTURE_SECTIONS: readonly StructureSection[] = [
+  { title: 'Problem', purpose: 'Describe the specific user or business problem and why it matters now.', required: true },
+  { title: 'Context', purpose: 'Record confirmed background, source evidence, constraints and relevant prior decisions.', required: true },
+  { title: 'Target users', purpose: 'Identify intended users and their distinct needs without inventing research.', required: true },
+  { title: 'Goals', purpose: 'State the outcomes this work aims to achieve.', required: true },
+  { title: 'Non-goals', purpose: 'Make relevant exclusions and boundaries explicit.', required: false },
+  { title: 'Scope', purpose: 'Define what is included in this version and what remains outside it.', required: true },
+  { title: 'User journeys', purpose: 'Describe primary flows and relevant edge or failure paths.', required: true },
+  { title: 'Requirements and acceptance criteria', purpose: 'Specify actionable behavior and testable conditions for acceptance.', required: true },
+  { title: 'Success measures', purpose: 'Name measurable signals and measurement approach without fabricating targets.', required: false },
+  { title: 'Dependencies', purpose: 'Record external systems, decisions or teams needed to deliver the scope.', required: false },
+  { title: 'Risks', purpose: 'Describe material risks, their impact and proportionate mitigations.', required: false },
+  { title: 'Open questions', purpose: 'List unresolved decisions and label assumptions separately from confirmed facts.', required: false },
+  { title: 'Rollout', purpose: 'Explain release, migration or communication steps when relevant.', required: false },
+];
