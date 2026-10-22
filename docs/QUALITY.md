@@ -24,7 +24,15 @@ The dependency-integrated runtime is identified by commit [`092b4cf`](https://gi
 | Native macOS ARM64, Node 24.15.0         | Full 12-step gate; 234 unit/integration tests; 30 production-browser tests across Chromium, Firefox, and WebKit; production restart and export smoke test                                               |
 | Native macOS ARM64, Node 22.23.2         | Clean install in a separate checkout; all 11 Node-gate steps, including the same 234 tests and production build                                                                                         |
 | Linux ARM64 image, Apple Container 1.0.0 | Dockerfile build with Node 22.23.2; health; loopback Host rejection; UID 1000 and Node PID 1; persistent data after restart; graceful SIGTERM; removal of exact temporary resources and engine shutdown |
-| Current dependency advisory data         | Zero findings in both production and full npm audits; generated license inventory and CycloneDX SBOM                                                                                                    |
+| Dependency advisory data on 8 September  | Zero findings in both production and full npm audits at the recorded commit; generated license inventory and CycloneDX SBOM                                                                             |
+
+The 22 October 2026 audit at `40e3906` supersedes that historical advisory
+snapshot: production has three moderate package findings and no high or critical
+findings; the full development tree has 23 findings, including three critical
+and 11 high. See the [focused production triage](DEPENDENCY_TRIAGE.md). The
+locally generated audit record is in `reports/dependency-audit.json`. The full
+audit gate is not passing, and these checks do not establish public-release
+readiness.
 
 Apple Container consumes the repository's Dockerfile and runs its Linux image. That execution does not exercise Docker Engine or Compose orchestration, native Windows, or a Linux desktop installation. Those are separate execution targets, not interchangeable names for the measured environment. The [README](../README.md#containers) includes the Apple Container commands as well as the Compose recipe.
 
