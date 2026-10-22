@@ -1748,8 +1748,8 @@ function Workbench({
               <div className="handoff-compose">
                 <p>
                   Export only the current {scope === 'document' ? 'document' : 'section'} and the
-                  evidence you select below. OpenAI processes this material inside ChatGPT. A
-                  ChatGPT subscription does not provide API access to the standalone app.
+                  evidence you select below. OpenAI processes this material inside ChatGPT. This
+                  handoff works separately from the optional ChatGPT plan provider in AI settings.
                 </p>
                 <label>
                   <span>Instruction</span>
