@@ -113,6 +113,7 @@ test('exports the latest editor text and reopens it locally', async ({
   };
   expect(saved.sections[0]?.body).toContain('Latest unsaved requirement for the PDF.');
   await page.reload();
+  await page.getByRole('button', { name, exact: true }).click();
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Latest unsaved requirement for the PDF.',
   );
@@ -153,6 +154,7 @@ test('saves and applies a custom project structure without dropping content', as
     'Keep this confirmed problem.',
   );
   await page.reload();
+  await page.getByRole('button', { name, exact: true }).click();
   await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
     'Next steps',
   );
