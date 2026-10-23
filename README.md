@@ -23,7 +23,7 @@ The latest packaged release is [v0.1.0-rc.3](https://github.com/prashanthnimmaga
 
 No adoption, universal accuracy, signed desktop distribution, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
-![PRD Genie workbench with the document editor, source rail, and review panel](docs/screenshots/workbench.png)
+![PRD Genie macOS conversation workspace with a fictional example project](docs/screenshots/workbench.png)
 
 ## Quick start
 
@@ -47,7 +47,7 @@ npm run build
 npm start
 ```
 
-Open [http://127.0.0.1:3210](http://127.0.0.1:3210) in a browser on the same computer. You should see **Your ideas, shaped into a clear PRD.** Keep the terminal running while using PRD Genie.
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210) in a browser on the same computer. You should see **Start with instructions or material.** Keep the terminal running while using PRD Genie.
 
 To stop, save your edits and press **Ctrl+C** in the terminal. To return, open a terminal in the `prd-genie` folder, run `npm start`, and reopen the URL. Projects persist; session provider keys must be configured again after a server restart.
 
@@ -67,11 +67,11 @@ On a Mac with Xcode Command Line Tools installed, run `npm run build && npm run 
 
 Start after installation. Model downloads and provider response times may take longer.
 
-1. Explore the optional finished example, enter a project name and click **Create project**, or use **Import an existing PRD** with a Markdown, DOCX, or plain-text document. Creating a PRD immediately is optional.
-2. Select **Problem** in the document outline. Describe the problem you want to address in one or two sentences. Save your edits using **Save**.
-3. Use **Add source** to upload a requirements brief, research notes, or a decision record you are permitted to use. Supported formats are PDF, DOCX, PPTX, XLSX, JPEG, Markdown, and plain text. Choose material relevant to the problem you wrote; the app cannot ground a proposal in evidence you have not supplied. Wait for its status to become **ready** or **partial**. Read every extraction warning: scans, images, formulas and complex layouts may not be fully captured. The first upload may download the local embedding model. Lexical search remains available when embeddings cannot load.
+1. Explore the optional finished example, or enter instructions and supporting material, then choose **Open workspace**. Naming the project is optional. Opening a workspace does not send an AI request. Use **Import PRD or archive** to review an existing Markdown, DOCX or plain-text PRD, or restore a project archive.
+2. Stay in **Conversation** to describe what you need. Choose **Document** to edit sections directly, then return to the conversation with your context intact. Save edits using **Save** or **Command-S**.
+3. Open **Sources** and use **Add source** to upload a requirements brief, research notes, or a decision record you are permitted to use. Supported formats are PDF, DOCX, PPTX, XLSX, JPEG, Markdown, and plain text. Choose material relevant to the problem you wrote; the app cannot ground a proposal in evidence you have not supplied. Wait for its status to become **ready** or **partial**. Read every extraction warning: scans, images, formulas and complex layouts may not be fully captured. The first upload may download the local embedding model. Lexical search remains available when embeddings cannot load.
 4. AI is optional. For an API provider, open AI settings, enter a session key, discover or enter a model ID, and select it. For local Ollama, select an already installed and running model. Eligible ChatGPT Plus and Pro users can choose **ChatGPT plan** and complete the separate OpenAI consent flow. A ChatGPT subscription is not an API key. See the [provider matrix](#provider-matrix).
-5. In **assist**, choose **Rewrite**, set **Scope** to **Section**, and keep **Problem** selected. Enter: “Rewrite the problem using the evidence. Keep it concise and do not invent business impact.” Submit the instruction.
+5. In **Conversation**, describe the draft, review or revision you need. **From instruction** selects an action from your wording; you can choose an explicit action and scope before sending. For example, choose **Rewrite**, set **Apply to** to **Section**, select **Problem**, and enter: “Rewrite the problem using the evidence. Keep it concise and do not invent business impact.” Use **Command-Return** to send; Return adds a line.
 6. Read the proposed text and its citations. Compare each cited excerpt with your source. Choose **Apply** (the accessible name identifies the target, such as **Apply to Problem**) to accept it, or dismiss it. The document changes only after acceptance. **Undo** is available for the immediately applied revision.
 7. Use **Export** to download the latest edits as Markdown, DOCX, or PDF. Use **Export archive** for a portable backup that includes sources, structures and revision history. Inspect the exported document before sharing it.
 8. Stop and restart the app using the Quick start instructions. Reopen your project to confirm your saved work is present. Reconfigure the provider session before another AI action.
