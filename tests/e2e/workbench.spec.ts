@@ -77,7 +77,11 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   expect(created.ok()).toBe(true);
   await page.goto('/');
   await selectProject(page, name);
-  await openSettings(page);
+  const sidebarSettings = page
+    .getByRole('complementary', { name: 'Project navigation' })
+    .getByRole('button', { name: 'AI settings', exact: true });
+  await sidebarSettings.focus();
+  await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'AI settings', exact: true });
   await expect(dialog).toBeVisible();
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
@@ -102,6 +106,16 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+  await expect(sidebarSettings).toBeFocused();
+  const composerSettings = page
+    .locator('#conversation-workspace')
+    .getByRole('button', { name: 'AI settings', exact: true });
+  await composerSettings.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(composerSettings).toBeFocused();
   await expect(page.locator('body')).not.toHaveAttribute('data-scroll-locked');
   expect(violations).toEqual([]);
 });

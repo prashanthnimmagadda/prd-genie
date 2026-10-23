@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, KeyRound, LoaderCircle } from 'lucide-react';
 import type { ProjectSummary, ProviderKind, ProviderState } from '@shared/types';
 import { api } from '@/lib/api';
@@ -46,6 +46,7 @@ export function ProviderDialog(props: ProviderDialogProps) {
 }
 
 function ProviderSettings({ open, project, onOpenChange, onProjectChange }: ProviderDialogProps) {
+  const returnFocus = useRef<HTMLElement | null>(null);
   const [provider, setProvider] = useState<ProviderKind>(project.selectedProvider ?? 'openai');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -352,6 +353,16 @@ function ProviderSettings({ open, project, onOpenChange, onProjectChange }: Prov
         className="provider-dialog provider-settings-sheet"
         showCloseButton={!busy}
         aria-busy={busy}
+        onOpenAutoFocus={() => {
+          returnFocus.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          if (returnFocus.current?.isConnected) {
+            event.preventDefault();
+            returnFocus.current.focus({ preventScroll: true });
+          }
+        }}
       >
         <DialogHeader>
           <DialogTitle>AI settings</DialogTitle>
