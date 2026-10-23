@@ -43,6 +43,10 @@ const installed = execFileSync('npm', ['ls', '--omit=dev', '--all', '--parseable
   .trim()
   .split('\n')
   .slice(1);
+// debug loads this optional module at runtime. Keep its locked, already-installed
+// copy in the app so Node does not search ancestor folders outside the bundle.
+const optionalColorSupport = path.join(root, 'node_modules/supports-color');
+if (!installed.includes(optionalColorSupport)) installed.push(optionalColorSupport);
 for (const source of installed) {
   const relative = path.relative(path.join(root, 'node_modules'), source);
   if (relative.startsWith('..') || path.isAbsolute(relative))

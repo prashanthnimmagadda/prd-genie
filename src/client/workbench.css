@@ -335,7 +335,7 @@ select {
   font-size: 12px;
 }
 .outline-item span {
-  color: #85858a;
+  color: var(--muted-foreground);
   font-size: 10px;
   min-width: 18px;
   margin-top: 2px;
@@ -1138,6 +1138,9 @@ html[data-increase-contrast='true'] {
   --muted-foreground: #45454a;
   --border: #8a8a90;
   --input: #8a8a90;
+}
+html[data-increase-contrast='true'] .section-controls {
+  opacity: 1;
 }
 .start-actions,
 .start-alternatives {

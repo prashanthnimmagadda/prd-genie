@@ -1016,6 +1016,30 @@ for (const width of [320, 375, 414, 768]) {
     await openSettings(page);
     await expect(page.getByRole('heading', { name: 'AI settings' })).toBeVisible();
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
+    if (width === 768) {
+      // Exercise the same preference flags supplied by the native shell,
+      // without changing the host Mac's accessibility settings.
+      await page.evaluate(() => {
+        Object.assign(document.documentElement.dataset, {
+          reduceMotion: 'true',
+          reduceTransparency: 'true',
+          increaseContrast: 'true',
+        });
+      });
+      await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCSS(
+        'background-color',
+        'rgb(236, 236, 239)',
+      );
+      await expect(page.getByRole('dialog', { name: 'AI settings', exact: true })).toHaveCSS(
+        'animation-name',
+        'none',
+      );
+      expect(
+        await page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim(),
+        ),
+      ).toBe('#45454a');
+    }
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);
     await page.keyboard.press('Tab');
