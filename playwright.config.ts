@@ -6,6 +6,9 @@ const production = process.env.PRD_GENIE_E2E_PRODUCTION === '1';
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
+  // Browser projects share one single-user server and its latest-opened project.
+  // Serialize them so one fixture cannot enter another fixture's recovery state.
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: evidenceOutput
     ? [['list'], ['json', { outputFile: evidenceOutput }]]

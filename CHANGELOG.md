@@ -18,6 +18,7 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 ### Fixed
 
 - Preserved in-progress work across navigation, interrupted generation and provider failures, with explicit recovery and cancellation states.
+- Avoided recovery writes when merely opening a project, preventing conflicts between unchanged viewers.
 - Exported the latest document edits to PDF and Word, preserving headings, lists, tables and references; corrected PDF wrapping and heading spacing.
 - Set explicit Word table column widths so native document previews preserve readable cells.
 - Kept an optional runtime dependency inside the macOS bundle so startup does not search ancestor folders on external volumes.

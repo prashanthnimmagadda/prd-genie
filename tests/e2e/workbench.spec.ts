@@ -128,6 +128,7 @@ test('creates a project with central conversation and an accessible document wor
     data: { name: projectName, description: 'Synthetic browser fixture' },
   });
   expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
+  const createdProject = (await created.json()) as { id: string };
   await page.goto('/');
   await selectProject(page, projectName);
   await expect(page.locator('.project-title strong')).toHaveText(projectName);
@@ -140,6 +141,8 @@ test('creates a project with central conversation and an accessible document wor
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+  const recovery = await request.get(`/api/projects/${createdProject.id}/workspace`);
+  expect((await recovery.json()) as { revision: number }).toMatchObject({ revision: 0 });
   if (process.env.UPDATE_SCREENSHOTS === '1' && testInfo.project.name === 'chromium') {
     await page.screenshot({
       path: 'docs/screenshots/workbench.png',

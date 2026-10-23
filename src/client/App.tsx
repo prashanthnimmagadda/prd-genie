@@ -574,6 +574,19 @@ function Workbench({
           }
           if (workspace.revision > 0) setPrompt(workspace.prompt);
           recoveryRevision.current = workspace.revision;
+          // Opening a saved workspace is read-only. Establish the persisted
+          // baseline before autosave so another viewer cannot create a conflict.
+          const recoveredKey = JSON.stringify({
+            prompt: workspace.prompt,
+            turns: workspace.turns,
+            proposal: workspace.proposal,
+            findingDrafts: workspace.findingDrafts ?? {},
+            handoffInstruction: workspace.handoffInstruction ?? '',
+            handoffDrafts: workspace.handoffDrafts ?? {},
+            draft: workspace.draft,
+          });
+          recoverySaved.current = recoveredKey;
+          setRecoverySavedKey(recoveredKey);
           setWorkspaceLoaded(true);
           setSources(sourceResult.sources);
           setFindings(findingResult.findings);
