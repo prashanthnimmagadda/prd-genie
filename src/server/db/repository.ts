@@ -14,8 +14,13 @@ import type {
   SourceSummary,
   StructureSection,
   StructureTemplate,
+  WorkspaceState,
 } from '../../shared/types.js';
-import { DEFAULT_STRUCTURE_SECTIONS } from '../../shared/types.js';
+import {
+  DEFAULT_STRUCTURE_SECTIONS,
+  WORKSPACE_MAX_BYTES,
+  workspaceUpdateSchema,
+} from '../../shared/types.js';
 import { ApiError } from '../../shared/api.js';
 import type { AppDatabase } from './client.js';
 import {
@@ -30,6 +35,7 @@ import {
   sourceLocations,
   sources,
   structureTemplates,
+  workspaceStates,
 } from './schema.js';
 import { deleteSourceData } from './source-deletion.js';
 import { drainPendingFileDeletions, enqueueFileDeletion } from './file-deletion.js';
@@ -376,6 +382,116 @@ export class Repository {
       for (const binaryPath of unsharedPaths) enqueueFileDeletion(this.database, binaryPath);
     })();
     drainPendingFileDeletions(this.database);
+  }
+
+  getWorkspace(projectId: string): WorkspaceState {
+    this.getProject(projectId);
+    const row = this.database.db
+      .select()
+      .from(workspaceStates)
+      .where(eq(workspaceStates.projectId, projectId))
+      .get();
+    if (!row) return { revision: 0, prompt: '', turns: [], draft: null };
+    let stored: unknown;
+    try {
+      stored = JSON.parse(row.stateJson);
+    } catch {
+      throw new ApiError(
+        500,
+        'workspace_unreadable',
+        'Saved workspace recovery could not be read. Your PRD is unchanged.',
+      );
+    }
+    const parsed = workspaceUpdateSchema.safeParse(
+      typeof stored === 'object' && stored !== null ? { ...stored, revision: row.revision } : null,
+    );
+    if (!parsed.success) {
+      throw new ApiError(
+        500,
+        'workspace_unreadable',
+        'Saved workspace recovery could not be read. Your PRD is unchanged.',
+      );
+    }
+    return parsed.data;
+  }
+
+  saveWorkspace(projectId: string, input: WorkspaceState): WorkspaceState {
+    const parsed = workspaceUpdateSchema.safeParse(input);
+    if (!parsed.success)
+      throw new ApiError(
+        400,
+        'invalid_workspace',
+        'Workspace recovery data is invalid or too large.',
+      );
+    const { revision, ...state } = parsed.data;
+    const stateJson = JSON.stringify(state);
+    if (Buffer.byteLength(stateJson, 'utf8') > WORKSPACE_MAX_BYTES) {
+      throw new ApiError(
+        413,
+        'workspace_too_large',
+        'Workspace recovery exceeds the local storage limit. No saved work was replaced.',
+      );
+    }
+    if (new Set(state.turns.map((turn) => turn.id)).size !== state.turns.length) {
+      throw new ApiError(
+        400,
+        'invalid_workspace',
+        'Conversation entries must have unique identifiers.',
+      );
+    }
+    return this.database.sqlite.transaction(() => {
+      this.getProject(projectId);
+      if (state.draft) {
+        const current = this.database.db
+          .select()
+          .from(prdDocuments)
+          .where(eq(prdDocuments.projectId, projectId))
+          .get();
+        const sections = state.draft.sections;
+        if (state.draft.baseRevision > (current?.revision ?? 0)) {
+          throw new ApiError(
+            409,
+            'invalid_recovery_revision',
+            'The recovery draft refers to a document revision that does not exist.',
+          );
+        }
+        if (
+          sections.some((section) => section.projectId !== projectId) ||
+          new Set(sections.map((section) => section.id)).size !== sections.length ||
+          [...sections]
+            .sort((a, b) => a.position - b.position)
+            .some((section, index) => section.position !== index)
+        ) {
+          throw new ApiError(
+            400,
+            'invalid_workspace',
+            'Recovery sections must belong to this project and have unique identifiers and continuous positions.',
+          );
+        }
+      }
+      const values = { projectId, revision: revision + 1, stateJson, updatedAt: now() };
+      const result =
+        revision === 0
+          ? this.database.db.insert(workspaceStates).values(values).onConflictDoNothing().run()
+          : this.database.db
+              .update(workspaceStates)
+              .set(values)
+              .where(
+                and(
+                  eq(workspaceStates.projectId, projectId),
+                  eq(workspaceStates.revision, revision),
+                ),
+              )
+              .run();
+      if (result.changes !== 1) {
+        throw new ApiError(
+          409,
+          'workspace_conflict',
+          'Workspace recovery changed in another window. Reload it before saving again.',
+        );
+      }
+      return { revision: values.revision, ...state };
+    })();
   }
 
   getPrd(projectId: string): PrdDocument {

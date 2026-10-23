@@ -13,6 +13,7 @@ import type {
   SourceSummary,
   StructureSection,
   StructureTemplate,
+  WorkspaceState,
 } from '@shared/types';
 
 interface ErrorPayload {
@@ -91,6 +92,12 @@ export const api = {
     }),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
   prd: (id: string) => request<PrdDocument>(`/api/projects/${id}/prd`),
+  workspace: (id: string) => request<WorkspaceState>(`/api/projects/${id}/workspace`),
+  saveWorkspace: (id: string, state: WorkspaceState) =>
+    request<WorkspaceState>(`/api/projects/${id}/workspace`, {
+      method: 'PUT',
+      body: JSON.stringify(state),
+    }),
   savePrd: (id: string, revision: number, sections: PrdDocument['sections'], reason: string) =>
     request<PrdDocument>(`/api/projects/${id}/prd`, {
       method: 'PUT',

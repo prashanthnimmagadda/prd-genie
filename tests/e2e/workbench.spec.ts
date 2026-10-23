@@ -1,6 +1,60 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import fs from 'node:fs';
+
+async function selectProject(page: Page, name: string) {
+  await expect(page.locator('.project-title strong')).toBeVisible();
+  if ((await page.locator('.project-title strong').textContent()) !== name) {
+    if (
+      (await page
+        .getByRole('button', { name: 'Toggle project navigation' })
+        .getAttribute('aria-expanded')) === 'false'
+    )
+      await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+    await page.getByRole('button', { name, exact: true }).click();
+  }
+  await expect(page.locator('.project-title strong')).toHaveText(name);
+}
+
+async function openDocument(page: Page) {
+  if (await page.locator('#prd-editor').isHidden()) {
+    await page
+      .locator('#conversation-workspace .workspace-viewbar')
+      .getByRole('button', { name: 'Document', exact: true })
+      .click();
+  }
+}
+
+async function openConversation(page: Page) {
+  await page
+    .locator('.workspace-viewbar:visible')
+    .getByRole('button', { name: 'Conversation', exact: true })
+    .click();
+}
+
+async function openSettings(page: Page) {
+  const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
+  if (
+    (await page
+      .getByRole('button', { name: 'Toggle project navigation' })
+      .getAttribute('aria-expanded')) === 'false'
+  )
+    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+  await sidebar.getByRole('button', { name: 'AI settings', exact: true }).click();
+}
+
+async function openHistory(page: Page) {
+  await page.getByRole('button', { name: 'History', exact: true }).first().click();
+}
+
+async function closeSheet(page: Page, name: string) {
+  const sheet = page.getByRole('dialog', { name, exact: true });
+  await page
+    .getByRole('dialog', { name, exact: true })
+    .getByRole('button', { name: 'Close', exact: true })
+    .click();
+  await expect(sheet).toHaveCount(0);
+}
 
 test('production provider and model dialogs satisfy CSP and release scroll locks', async ({
   page,
@@ -22,9 +76,9 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   const created = await request.post('/api/projects', { data: { name } });
   expect(created.ok()).toBe(true);
   await page.goto('/');
-  await page.getByRole('button', { name, exact: true }).click();
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Model provider', exact: true });
+  await selectProject(page, name);
+  await openSettings(page);
+  const dialog = page.getByRole('dialog', { name: 'AI settings', exact: true });
   await expect(dialog).toBeVisible();
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
   const nonce = await page.locator('meta[name="csp-style-nonce"]').getAttribute('content');
@@ -52,7 +106,7 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   expect(violations).toEqual([]);
 });
 
-test('creates a project and exposes the document-first workbench', async ({
+test('creates a project with central conversation and an accessible document workspace', async ({
   page,
   request,
 }, testInfo) => {
@@ -75,11 +129,14 @@ test('creates a project and exposes the document-first workbench', async ({
   });
   expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
   await page.goto('/');
-  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await selectProject(page, projectName);
+  await expect(page.locator('.project-title strong')).toHaveText(projectName);
+  await expect(page.getByLabel('Your instruction')).toBeVisible();
+  await expect(page.locator('#prd-editor')).toBeHidden();
+  await openDocument(page);
   await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Document outline' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'assist' })).toBeVisible();
-  await expect(page.getByText('Problem', { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel('Section title').first()).toHaveValue('Problem');
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -103,17 +160,23 @@ test('exports the latest editor text and reopens it locally', async ({
   expect(created.ok()).toBe(true);
   const project = (await created.json()) as { id: string };
   await page.goto('/');
-  await page.getByRole('button', { name, exact: true }).click();
+  await selectProject(page, name);
+  await openDocument(page);
   await page.getByLabel('Section content').first().fill('Latest unsaved requirement for the PDF.');
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'pdf', exact: true }).click();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Export document' })
+    .getByRole('button', { name: 'PDF', exact: true })
+    .click();
   expect((await download).suggestedFilename()).toMatch(/\.pdf$/);
   const saved = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
     sections: Array<{ body: string }>;
   };
   expect(saved.sections[0]?.body).toContain('Latest unsaved requirement for the PDF.');
   await page.reload();
-  await page.getByRole('button', { name, exact: true }).click();
+  await selectProject(page, name);
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Latest unsaved requirement for the PDF.',
   );
@@ -130,10 +193,14 @@ test('saves and applies a custom project structure without dropping content', as
   const created = await request.post('/api/projects', { data: { name } });
   expect(created.ok()).toBe(true);
   await page.goto('/');
-  await page.getByRole('button', { name, exact: true }).click();
+  await selectProject(page, name);
+  await openDocument(page);
   await page.getByLabel('Section content').first().fill('Keep this confirmed problem.');
+  await page
+    .locator('.workspace-viewbar:visible')
+    .getByRole('button', { name: 'Structure', exact: true })
+    .click();
   const picker = page.locator('.structure-picker');
-  await picker.locator('summary').click();
   await picker.getByRole('button', { name: 'Save or enter a structure' }).click();
   await picker.getByLabel('Name', { exact: true }).fill('Client brief');
   await picker
@@ -147,6 +214,7 @@ test('saves and applies a custom project structure without dropping content', as
     .filter({ hasText: 'Client brief' })
     .getByRole('button', { name: 'Use' })
     .click();
+  await closeSheet(page, 'Document structure');
   await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
     'Next steps',
   );
@@ -154,7 +222,8 @@ test('saves and applies a custom project structure without dropping content', as
     'Keep this confirmed problem.',
   );
   await page.reload();
-  await page.getByRole('button', { name, exact: true }).click();
+  await selectProject(page, name);
+  await openDocument(page);
   await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
     'Next steps',
   );
@@ -214,23 +283,25 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
   );
 
   await page.goto('/');
-  await page.getByRole('button', { name: projectName, exact: true }).click();
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Model provider' });
+  await selectProject(page, projectName);
+  await openSettings(page);
+  const dialog = page.getByRole('dialog', { name: 'AI settings' });
   const providerSelect = dialog.getByRole('combobox').first();
 
   await providerSelect.selectOption('openai-compatible');
   await expect(dialog.locator('.provider-host').first()).toContainText('models.saved.example.test');
-  await dialog.getByLabel('Session key').fill('replacement-compatible-key');
+  await dialog.getByLabel('API key for this session').fill('replacement-compatible-key');
   await expect(dialog.getByText('Re-enter the full endpoint')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Refresh models' })).toBeDisabled();
-  await dialog.getByLabel('Session key').fill('');
+  await expect(dialog.getByRole('button', { name: 'Configure and discover' })).toBeDisabled();
+  await dialog.getByLabel('API key for this session').fill('');
   await dialog.getByLabel('Endpoint').fill('https://models.example.test/v1');
-  await dialog.getByLabel('Session key').fill('old-compatible-key');
+  await dialog.getByLabel('API key for this session').fill('old-compatible-key');
+  if (!(await dialog.getByLabel('Optional headers as JSON').isVisible()))
+    await dialog.getByText('Additional headers', { exact: true }).click();
   await dialog.getByLabel('Optional headers as JSON').fill('{"X-Old-Provider":"retained"}');
 
   await providerSelect.selectOption('anthropic');
-  await expect(dialog.getByLabel('Session key')).toHaveValue('');
+  await expect(dialog.getByLabel('API key for this session')).toHaveValue('');
   await expect(dialog.getByLabel('Endpoint')).toHaveCount(0);
   await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
 
@@ -259,32 +330,36 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
       body: JSON.stringify({ models: [{ id: 'claude-synthetic', name: 'Claude synthetic' }] }),
     }),
   );
-  await dialog.getByLabel('Session key').fill(anthropicKey);
+  await dialog.getByLabel('API key for this session').fill(anthropicKey);
   const configureAnthropic = dialog.getByRole('button', { name: 'Configure and discover' });
   await configureAnthropic.click();
   await expect(providerSelect).toBeDisabled();
-  await expect(dialog.getByLabel('Session key')).toBeDisabled();
+  await expect(dialog.getByLabel('API key for this session')).toBeDisabled();
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeVisible();
   releaseAnthropicConfiguration?.();
-  await expect(dialog.getByPlaceholder('Or enter a model ID')).toHaveValue('claude-synthetic');
+  await expect(dialog.getByLabel('Or enter a model ID')).toHaveValue('claude-synthetic');
   expect(anthropicConfiguration).toEqual({ apiKey: anthropicKey });
 
   await providerSelect.selectOption('openai-compatible');
   await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
-  await expect(dialog.getByLabel('Session key')).toHaveValue('');
+  await expect(dialog.getByLabel('API key for this session')).toHaveValue('');
   await expect(dialog.getByLabel('Optional headers as JSON')).toHaveValue('');
   await dialog.getByLabel('Endpoint').fill('https://remote.example.test/v1');
-  await dialog.getByLabel('Session key').fill('second-compatible-key');
+  await dialog.getByLabel('API key for this session').fill('second-compatible-key');
+  if (!(await dialog.getByLabel('Optional headers as JSON').isVisible()))
+    await dialog.getByText('Additional headers', { exact: true }).click();
   await dialog.getByLabel('Optional headers as JSON').fill('{"X-Remote":"true"}');
-  await dialog.getByPlaceholder('Or enter a model ID').fill('manual-compatible');
+  await dialog.getByLabel('Or enter a model ID').fill('manual-compatible');
   await expect(dialog.getByRole('button', { name: 'Use provider' })).toBeDisabled();
-  await expect(dialog.locator('.provider-host-pending')).toContainText('remote.example.test');
+  await expect(dialog.locator('.provider-host').filter({ hasText: 'Pending' })).toContainText(
+    'remote.example.test',
+  );
 
   await providerSelect.selectOption('ollama');
   await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
-  await expect(dialog.getByLabel('Session key')).toHaveCount(0);
+  await expect(dialog.getByLabel('API key for this session')).toHaveCount(0);
   await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
   await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
   await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
@@ -309,15 +384,15 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
     }),
   );
   await dialog.getByRole('button', { name: /Configure and discover|Refresh models/ }).click();
-  await expect(dialog.getByPlaceholder('Or enter a model ID')).toHaveValue('local-synthetic');
+  await expect(dialog.getByLabel('Or enter a model ID')).toHaveValue('local-synthetic');
   expect(ollamaConfiguration).toBeUndefined();
   await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
   await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
 
   await dialog.getByLabel('Endpoint').fill('https://pending-close.example.test/v1');
   await dialog.getByRole('button', { name: 'Cancel' }).click();
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  const reopened = page.getByRole('dialog', { name: 'Model provider' });
+  await openSettings(page);
+  const reopened = page.getByRole('dialog', { name: 'AI settings' });
   await reopened.getByRole('combobox').first().selectOption('ollama');
   await expect(reopened.getByLabel('Endpoint')).toHaveValue('');
   await expect(reopened.locator('.provider-host')).toContainText('ollama.saved.example.test');
@@ -346,7 +421,7 @@ test('exports current AI evidence immediately and clears handoff selection bound
   expect(alternate.ok()).toBe(true);
 
   await page.goto('/');
-  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await selectProject(page, projectName);
   await page.getByLabel('Add source file').setInputFiles({
     name: 'handoff-evidence.md',
     mimeType: 'text/markdown',
@@ -367,26 +442,24 @@ test('exports current AI evidence immediately and clears handoff selection bound
       { timeout: 15_000 },
     )
     .not.toBe('processing');
+  await closeSheet(page, 'Sources');
 
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  const providerDialog = page.getByRole('dialog', { name: 'Model provider' });
+  await openSettings(page);
+  const providerDialog = page.getByRole('dialog', { name: 'AI settings' });
   await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
   await providerDialog.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
-  await providerDialog.getByLabel('Session key').fill('synthetic-session-key');
+  await providerDialog.getByLabel('API key for this session').fill('synthetic-session-key');
   await providerDialog.getByRole('button', { name: 'Configure and discover' }).click();
-  await expect(providerDialog.getByPlaceholder('Or enter a model ID')).toHaveValue(
-    'synthetic-prd-model',
-  );
+  await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
   await providerDialog.getByRole('button', { name: 'Use provider' }).click();
 
-  await page.getByLabel('Action').selectOption('rewrite');
-  await page
-    .getByPlaceholder('How should this be improved?')
-    .fill('Rewrite the problem using the current evidence.');
+  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await page.getByLabel('Your instruction').fill('Rewrite the problem using the current evidence.');
   await page.getByLabel('Submit').click();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
 
-  await page.getByRole('tab', { name: 'history' }).click();
+  await openHistory(page);
   const evidenceCheckbox = page.getByRole('checkbox', { name: /handoff-evidence\.md/ });
   await expect(evidenceCheckbox).toBeVisible();
   await evidenceCheckbox.check();
@@ -407,9 +480,9 @@ test('exports current AI evidence immediately and clears handoff selection bound
     }),
   ]);
 
-  await page.getByRole('tab', { name: 'assist' }).click();
-  await page.getByLabel('Action').selectOption('ask');
-  await page.getByPlaceholder('Ask about this PRD').fill('Summarize the current evidence.');
+  await openConversation(page);
+  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('ask');
+  await page.getByLabel('Your instruction').fill('Summarize the current evidence.');
   await page.getByLabel('Submit').click();
   await expect
     .poll(async () => {
@@ -419,7 +492,7 @@ test('exports current AI evidence immediately and clears handoff selection bound
       return result.runs.length;
     })
     .toBe(2);
-  await page.getByRole('tab', { name: 'history' }).click();
+  await openHistory(page);
   await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
 
   await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
@@ -429,19 +502,25 @@ test('exports current AI evidence immediately and clears handoff selection bound
     .filter({ hasText: 'synthetic-prd-model' })
     .first();
   await rewriteRun.getByRole('button', { name: 'Inspect' }).click();
-  await page.getByRole('tab', { name: 'history' }).click();
+  await openHistory(page);
   await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
 
   await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
-  await page.getByRole('button', { name: alternateName, exact: true }).click();
-  await expect(page.getByRole('heading', { name: alternateName })).toBeVisible();
-  await page.getByRole('button', { name: projectName, exact: true }).click();
-  await page.getByRole('tab', { name: 'history' }).click();
+  await selectProject(page, alternateName);
+  await expect(page.locator('.project-title strong')).toHaveText(alternateName);
+  await selectProject(page, projectName);
+  await openHistory(page);
   await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Sources', exact: true }).first().click();
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Delete handoff-evidence.md' }).click();
-  await expect(page.getByText('handoff-evidence.md', { exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Sources', exact: true })
+      .getByText('handoff-evidence.md', { exact: true }),
+  ).toHaveCount(0);
+  await closeSheet(page, 'Sources');
   await expect(page.locator('.handoff-row').first()).toContainText('stale');
   const runsAfterDeletion = (await (
     await request.get(`/api/projects/${project.id}/ai-runs`)
@@ -500,7 +579,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   expect(alternate.ok(), `${alternate.status()} ${await alternate.text()}`).toBe(true);
 
   await page.goto('/');
-  await page.getByRole('button', { name: projectName, exact: true }).click();
+  await selectProject(page, projectName);
   await page.getByLabel('Add source file').setInputFiles({
     name: 'research.md',
     mimeType: 'text/markdown',
@@ -508,43 +587,49 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
       '# Research\nEight of twelve product managers lost an unsaved PRD draft. Reconstruction took 23 minutes on average.',
     ),
   });
-  await expect(page.getByText('research.md', { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Sources', exact: true })
+      .getByText('research.md', { exact: true }),
+  ).toBeVisible();
+  await closeSheet(page, 'Sources');
 
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  let providerDialog = page.getByRole('dialog', { name: 'Model provider' });
+  await openSettings(page);
+  let providerDialog = page.getByRole('dialog', { name: 'AI settings' });
   await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
   await providerDialog.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
-  await providerDialog.getByLabel('Session key').fill('synthetic-session-key');
+  await providerDialog.getByLabel('API key for this session').fill('synthetic-session-key');
   await providerDialog.getByRole('button', { name: 'Configure and discover' }).click();
-  await expect(providerDialog.getByPlaceholder('Or enter a model ID')).toHaveValue(
-    'synthetic-prd-model',
-  );
+  await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
   await providerDialog.getByRole('button', { name: 'Use provider' }).click();
 
-  await page.getByLabel('Action').selectOption('rewrite');
-  await page
-    .getByPlaceholder('How should this be improved?')
-    .fill('Make the problem evidence-led.');
+  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.reload();
-  await page.getByRole('button', { name: projectName, exact: true }).click();
-  await page.getByRole('tab', { name: 'history' }).click();
+  await selectProject(page, projectName);
+  await openHistory(page);
   const durableRewrite = page
     .locator('.history-row')
     .filter({ hasText: 'rewrite on section' })
     .filter({ hasText: 'synthetic-prd-model' })
     .first();
+  await expect(durableRewrite).toContainText('openai-compatible');
+  await expect(durableRewrite).toContainText('Revision 0');
   await durableRewrite.getByRole('button', { name: 'Inspect' }).click();
   await expect(
-    page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
-  ).toContainText('revision 0, rewrite on section scope');
+    page.getByText('Proposed change · Based on version 0', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.locator('.action-context select').first().selectOption('ask');
   await page.locator('.action-context select').nth(1).selectOption('document');
   await expect(
-    page.getByText(/Proposal from openai-compatible \/ synthetic-prd-model/),
-  ).toContainText('rewrite on section scope');
+    page.getByText('Proposed change · Based on version 0', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   await page.locator('.action-context select').first().selectOption('rewrite');
   await page.locator('.action-context select').nth(1).selectOption('section');
@@ -556,15 +641,24 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   )!;
   const contextBefore = contextSection.body;
   const contextEditor = page.locator(`#section-${contextSection.id}`);
+  await openDocument(page);
   await page
     .getByRole('navigation', { name: 'Document outline' })
     .getByRole('link', { name: /Context$/ })
     .click();
+  await openConversation(page);
   await expect(page.locator('.scope-caption')).toContainText('Proposal target: Problem');
-  await expect(page.getByText(/^Target: Problem \[/)).toBeVisible();
-  await contextEditor.getByLabel('Section content').fill('Unsaved local edit must be preserved.');
+  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
+  await openDocument(page);
+  await contextEditor.getByLabel('Section content').focus();
+  await page.keyboard.insertText('Unsaved local edit must be preserved.');
+  await openConversation(page);
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeDisabled();
+  await openDocument(page);
+  await contextEditor.getByLabel('Section content').focus();
   await contextEditor.getByLabel('Undo editor change').click();
+  await expect(contextEditor.getByLabel('Section content')).toHaveText(contextBefore);
+  await openConversation(page);
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
   let releaseApply!: () => void;
   const heldApply = new Promise<void>((resolve) => {
@@ -581,14 +675,15 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     'false',
   );
   await expect(page.getByLabel('Section title').first()).toBeDisabled();
-  await expect(page.getByPlaceholder('How should this be improved?')).toBeDisabled();
+  await expect(page.getByLabel('Your instruction')).toBeDisabled();
   await expect(page.getByLabel('Revised AI proposal')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Dismiss proposal' })).toBeDisabled();
-  await page.getByRole('tab', { name: 'review' }).click();
-  await expect(page.getByRole('button', { name: 'Run review' })).toBeDisabled();
-  await page.getByRole('tab', { name: 'assist' }).click();
+  await expect(page.getByRole('combobox', { name: 'Action', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('Submit', { exact: true })).toBeDisabled();
   releaseApply();
-  await expect(page.getByRole('status')).toContainText('proposal changed');
+  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toContainText(
+    'proposal changed',
+  );
   await page.unroute('**/api/projects/*/ai-runs/*/apply');
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Eight of twelve product managers lost an unsaved PRD draft',
@@ -600,10 +695,11 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     contextBefore,
   );
   const appliedBody = persisted.sections[0]!.body;
+  await openDocument(page);
   await page
     .getByLabel('Section content')
     .first()
-    .fill(`${appliedBody}\n\nUnsaved local work must survive revision controls.`);
+    .fill(`${appliedBody} Unsaved local work must survive revision controls.`);
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
   expect(
     await page.evaluate(() => {
@@ -611,48 +707,69 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
       return window.dispatchEvent(event);
     }),
   ).toBe(false);
-  page.once('dialog', (dialog) => {
-    expect(dialog.type()).toBe('confirm');
-    void dialog.dismiss();
-  });
-  await page.getByLabel('Create project').click();
-  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
-  page.once('dialog', (dialog) => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message().toLowerCase()).toContain('discard unsaved changes');
-    void dialog.dismiss();
-  });
-  await page.getByRole('button', { name: alternateName, exact: true }).click();
-  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
-  page.once('dialog', (dialog) => {
-    expect(dialog.type()).toBe('confirm');
-    void dialog.dismiss();
-  });
-  await page.getByLabel('Restore PRD Genie project archive').setInputFiles({
-    name: 'cancelled.prdgenie.zip',
+  await page.getByLabel('Create project', { exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'New project', exact: true })).toBeVisible();
+  await closeSheet(page, 'New project');
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Unsaved local work must survive revision controls.',
+  );
+  await selectProject(page, alternateName);
+  await expect(page.locator('.project-title strong')).toHaveText(alternateName);
+  const savedBeforeSwitch = (await (
+    await request.get(`/api/projects/${project.id}/prd`)
+  ).json()) as { sections: Array<{ body: string }> };
+  expect(savedBeforeSwitch.sections[0]?.body).toContain(
+    'Unsaved local work must survive revision controls.',
+  );
+  await selectProject(page, projectName);
+  await openDocument(page);
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Unsaved local work must survive revision controls.',
+  );
+  await page
+    .getByLabel('Section content')
+    .first()
+    .fill(`${savedBeforeSwitch.sections[0]!.body} Further unsaved work.`);
+  const invalidImport = page.waitForResponse((response) =>
+    response.url().endsWith('/api/projects/restore'),
+  );
+  await page.getByLabel('Import PRD or restore project archive').setInputFiles({
+    name: 'invalid.prdgenie.zip',
     mimeType: 'application/zip',
     buffer: Buffer.from('not imported'),
   });
-  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  expect((await invalidImport).ok()).toBe(false);
+  await expect(page.locator('.project-title strong')).toHaveText(projectName);
+  const savedBeforeImport = (await (
+    await request.get(`/api/projects/${project.id}/prd`)
+  ).json()) as { sections: Array<{ body: string }> };
+  expect(savedBeforeImport.sections[0]?.body).toContain('Further unsaved work.');
+  await page
+    .getByLabel('Section content')
+    .first()
+    .fill(`${savedBeforeImport.sections[0]!.body} Keep work after failed import.`);
   page.once('dialog', (dialog) => {
     expect(dialog.type()).toBe('confirm');
     expect(dialog.message().toLowerCase()).toContain('discard unsaved changes');
     void dialog.dismiss();
   });
   await page.getByRole('button', { name: 'Delete project' }).click();
-  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  await expect(page.locator('.project-title strong')).toHaveText(projectName);
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
   );
 
-  await page.getByRole('tab', { name: 'review' }).click();
-  await page.getByRole('button', { name: 'Run review' }).click();
+  await openConversation(page);
+  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('review');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('document');
+  await page.getByLabel('Your instruction').fill('Run the full structured review.');
+  await page.getByLabel('Submit', { exact: true }).click();
   await expect(
     page.getByText('Reconstruction took 23 minutes on average.', { exact: true }),
   ).toBeVisible();
-  await page.getByRole('tab', { name: 'history' }).click();
+  await openHistory(page);
   const durableReview = page
     .locator('.history-row')
     .filter({ hasText: 'review on document' })
@@ -661,18 +778,47 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await durableReview.getByRole('button', { name: 'Inspect' }).click();
   await expect(page.getByRole('button', { name: /^Apply to/ })).toHaveCount(0);
   await expect(page.getByLabel('Revised AI proposal')).toHaveCount(0);
-  await page.getByRole('tab', { name: 'review' }).click();
+  await page
+    .locator('.workspace-viewbar:visible')
+    .getByRole('button', { name: /^Review findings/ })
+    .click();
   await page.getByText('Inspect proposed diff').click();
+  await openDocument(page);
   await page.getByLabel('Section content').first().fill('Unsaved review edit must be preserved.');
+  await openConversation(page);
+  await page
+    .locator('.workspace-viewbar:visible')
+    .getByRole('button', { name: /^Review findings/ })
+    .click();
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+  await expect
+    .poll(async () => {
+      const workspace = (await (
+        await request.get(`/api/projects/${project.id}/workspace`)
+      ).json()) as { draft: { sections: Array<{ body: string }> } | null };
+      return workspace.draft?.sections[0]?.body;
+    })
+    .toContain('Unsaved review edit must be preserved.');
   const unloadDialog = page.waitForEvent('dialog');
   const reload = page.reload();
   const dialog = await unloadDialog;
   expect(dialog.type()).toBe('beforeunload');
   await dialog.accept();
   await reload;
-  await page.getByRole('button', { name: projectName, exact: true }).click();
-  await page.getByRole('tab', { name: 'review' }).click();
+  await selectProject(page, projectName);
+  await openDocument(page);
+  await expect(page.getByLabel('Section content').first()).toContainText(
+    'Unsaved review edit must be preserved.',
+  );
+  const savedBeforeRecovery = (await (
+    await request.get(`/api/projects/${project.id}/prd`)
+  ).json()) as { sections: Array<{ body: string }> };
+  await page.getByLabel('Section content').first().fill(savedBeforeRecovery.sections[0]!.body);
+  await openConversation(page);
+  await page
+    .locator('.workspace-viewbar:visible')
+    .getByRole('button', { name: /^Review findings/ })
+    .click();
   await page.getByText('Inspect proposed diff').click();
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeEnabled();
   let releaseFinding!: () => void;
@@ -688,7 +834,9 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeDisabled();
   releaseFinding();
-  await expect(page.getByRole('status')).toContainText('proposal changed');
+  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toContainText(
+    'proposal changed',
+  );
   await page.unroute('**/api/projects/*/review-findings/*/accept');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByLabel('Section content').first()).toContainText(
@@ -697,21 +845,33 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
 
   await page.getByRole('button', { name: 'Run review' }).click();
   await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Sources', exact: true }).first().click();
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Delete research.md' }).click();
-  await expect(page.getByText('research.md', { exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Sources', exact: true })
+      .getByText('research.md', { exact: true }),
+  ).toHaveCount(0);
+  await closeSheet(page, 'Sources');
   const staleFinding = page.locator('article.finding').filter({ hasText: 'Status: stale' }).first();
   await expect(staleFinding).toBeVisible();
   await staleFinding.getByRole('button', { name: /research\.md/ }).click();
   await expect(page.getByText('Historical snapshot, source deleted')).toBeVisible();
 
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'markdown' }).click();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Export document' })
+    .getByRole('button', { name: 'Markdown', exact: true })
+    .click();
   expect((await download).suggestedFilename()).toMatch(/\.md$/);
+  await closeSheet(page, 'Export document');
 
-  await page.getByRole('button', { name: 'Configure model provider' }).click();
-  providerDialog = page.getByRole('dialog', { name: 'Model provider' });
+  await openSettings(page);
+  providerDialog = page.getByRole('dialog', { name: 'AI settings' });
   await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
+  await providerDialog.getByText('Data and credentials', { exact: true }).click();
   await providerDialog.getByRole('button', { name: 'Clear session configuration' }).click();
   await expect(
     providerDialog.getByRole('button', { name: 'Configure and discover' }),
@@ -734,8 +894,8 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
   });
   expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
   await page.goto('/');
-  await page.getByRole('button', { name: projectName, exact: true }).click();
-  await page.getByRole('tab', { name: 'history' }).click();
+  await selectProject(page, projectName);
+  await openHistory(page);
   await page
     .getByPlaceholder('Describe the draft, review, or rewrite you want ChatGPT to propose.')
     .fill('Rewrite the problem using only the supplied synthetic context.');
@@ -811,7 +971,7 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
   const downloadedArchive = await archiveDownload;
   const archivePath = await downloadedArchive.path();
   expect(archivePath).toBeTruthy();
-  await page.getByLabel('Restore PRD Genie project archive').setInputFiles({
+  await page.getByLabel('Import PRD or restore project archive').setInputFiles({
     name: downloadedArchive.suggestedFilename(),
     mimeType: 'application/zip',
     buffer: fs.readFileSync(archivePath),
@@ -824,35 +984,37 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
       return projects.projects.filter((item) => item.name === projectName).length;
     })
     .toBe(2);
-  await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+  await expect(page.locator('.project-title strong')).toHaveText(projectName);
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });
 
 for (const width of [320, 375, 414, 768]) {
-  test(`keeps editing and provider setup available at ${width}px`, async ({ page }) => {
+  test(`keeps editing and provider setup available at ${width}px`, async ({ page, request }) => {
+    const projectName = `Responsive ${width} ${crypto.randomUUID().slice(0, 8)}`;
+    const created = await request.post('/api/projects', { data: { name: projectName } });
+    expect(created.ok()).toBe(true);
     await page.setViewportSize({ width, height: 820 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
-    if (await page.getByLabel('Project name').isVisible()) {
-      await page.getByLabel('Project name').fill(`Responsive ${width}`);
-      await page.getByRole('button', { name: 'Create project' }).click();
-    }
+    await selectProject(page, projectName);
+    const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
     const outline = page.getByRole('navigation', { name: 'Document outline' });
-    const assistantTabs = page.getByRole('tablist', { name: 'Assistant panels' });
     await expect(outline).toBeHidden();
-    await expect(assistantTabs).toBeHidden();
-    await page.getByRole('button', { name: 'Open project navigation' }).click();
+    if (await sidebar.isVisible())
+      await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+    await expect(page.getByLabel('Your instruction')).toBeVisible();
+    await openDocument(page);
+    await expect(page.getByLabel('Section content').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     await expect(outline).toBeVisible();
-    await page.getByRole('button', { name: 'Close navigation' }).click();
+    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     await expect(outline).toBeHidden();
-    await page.getByRole('button', { name: 'Open assist and review panel' }).click();
-    await expect(assistantTabs).toBeVisible();
-    await page.getByRole('button', { name: 'Close panel' }).click();
-    await expect(assistantTabs).toBeHidden();
-    await page.getByRole('button', { name: 'Configure model provider' }).click();
-    await expect(page.getByRole('heading', { name: 'Model provider' })).toBeVisible();
+    await openConversation(page);
+    await expect(page.getByLabel('Your instruction')).toBeVisible();
+    await openSettings(page);
+    await expect(page.getByRole('heading', { name: 'AI settings' })).toBeVisible();
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);

@@ -11,6 +11,15 @@ export const projects = sqliteTable('projects', {
   updatedAt: text('updated_at').notNull(),
 });
 
+export const workspaceStates = sqliteTable('workspace_states', {
+  projectId: text('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  stateJson: text('state_json').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const sources = sqliteTable(
   'sources',
   {

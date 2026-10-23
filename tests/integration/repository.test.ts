@@ -23,6 +23,81 @@ describe('Repository', () => {
 
   afterEach(() => database.close());
 
+  it('recovers workspace text across restarts without changing the PRD or overwriting newer recovery', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-workspace-'));
+    const filename = path.join(directory, 'workspace.sqlite');
+    let persisted = createDatabase(filename);
+    try {
+      let recovery = new Repository(persisted);
+      const project = recovery.createProject('Recovery', '');
+      const original = recovery.getPrd(project.id);
+      const initial = recovery.getWorkspace(project.id);
+      const saved = recovery.saveWorkspace(project.id, {
+        ...initial,
+        prompt: '  Keep this unsent instruction\n',
+        turns: [
+          {
+            id: 'turn-1',
+            request: 'Review',
+            response: 'Partial response',
+            runId: null,
+            status: 'interrupted',
+          },
+        ],
+        draft: {
+          baseRevision: original.revision,
+          sections: original.sections.map((section, index) => ({
+            ...section,
+            body: index === 0 ? 'Unsaved edits' : section.body,
+          })),
+        },
+      });
+      expect(saved.revision).toBe(1);
+      expect(recovery.getPrd(project.id)).toEqual(original);
+      expect(() => recovery.saveWorkspace(project.id, initial)).toThrow(
+        'changed in another window',
+      );
+      persisted.close();
+      persisted = createDatabase(filename);
+      recovery = new Repository(persisted);
+      expect(recovery.getWorkspace(project.id)).toEqual(saved);
+      recovery.savePrd(project.id, original.revision, original.sections, 'Advance saved document');
+      const retained = recovery.saveWorkspace(project.id, {
+        ...saved,
+        prompt: 'Continue with my recovered text',
+      });
+      expect(retained.draft?.baseRevision).toBe(0);
+      expect(retained.draft?.sections[0]?.body).toBe('Unsaved edits');
+      expect(recovery.getPrd(project.id).revision).toBe(1);
+      expect(() =>
+        recovery.saveWorkspace(project.id, {
+          ...retained,
+          draft: { ...retained.draft!, baseRevision: 2 },
+        }),
+      ).toThrow('does not exist');
+      expect(() =>
+        recovery.saveWorkspace(project.id, {
+          ...retained,
+          draft: {
+            ...retained.draft!,
+            sections: retained.draft!.sections.map((section) => ({
+              ...section,
+              projectId: crypto.randomUUID(),
+            })),
+          },
+        }),
+      ).toThrow('must belong to this project');
+      expect(recovery.getWorkspace(project.id)).toEqual(retained);
+      recovery.deleteProject(project.id);
+      expect(
+        persisted.sqlite.prepare('SELECT count(*) AS count FROM workspace_states').get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      persisted.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('creates a revisioned project with the default section contract', () => {
     const project = repository.createProject('Checkout', 'Reduce payment friction');
     const prd = repository.getPrd(project.id);

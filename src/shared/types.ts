@@ -222,6 +222,93 @@ export interface PrdDocument {
   sections: PrdSection[];
 }
 
+export interface WorkspaceTurn {
+  id: string;
+  request: string;
+  response: string;
+  runId: string | null;
+  status: 'complete' | 'interrupted';
+}
+
+/** Local recovery data; saving this state never applies edits to the PRD. */
+export interface WorkspaceState {
+  revision: number;
+  prompt: string;
+  turns: WorkspaceTurn[];
+  draft: { baseRevision: number; sections: PrdSection[] } | null;
+  proposal?: { runId: string | null; text: string };
+  findingDrafts?: Record<string, string>;
+  handoffInstruction?: string;
+  handoffDrafts?: Record<string, Record<string, string | null>>;
+}
+
+export const WORKSPACE_MAX_BYTES = 4 * 1024 * 1024;
+
+export const workspaceUpdateSchema = z
+  .object({
+    revision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER - 1),
+    prompt: z.string().max(20_000),
+    proposal: z
+      .object({ runId: z.string().uuid().nullable(), text: z.string().max(250_000) })
+      .strict()
+      .optional(),
+    findingDrafts: z
+      .record(z.string().uuid(), z.string().max(100_000))
+      .refine((drafts) => Object.keys(drafts).length <= 1000, 'Too many review drafts.')
+      .optional(),
+    handoffInstruction: z.string().max(20_000).optional(),
+    handoffDrafts: z
+      .record(
+        z.string().uuid(),
+        z
+          .record(z.string().uuid(), z.string().max(100_000).nullable())
+          .refine((drafts) => Object.keys(drafts).length <= 100, 'Too many section drafts.'),
+      )
+      .refine((drafts) => Object.keys(drafts).length <= 1000, 'Too many handoff drafts.')
+      .optional(),
+    turns: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            request: z.string().max(20_000),
+            response: z.string().max(250_000),
+            runId: z.string().uuid().nullable(),
+            status: z.enum(['complete', 'interrupted']),
+          })
+          .strict(),
+      )
+      .max(1000),
+    draft: z
+      .object({
+        baseRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        sections: z
+          .array(
+            z
+              .object({
+                id: z.string().uuid(),
+                projectId: z.string().uuid(),
+                title: z.string().min(1).max(160),
+                body: z.string().max(100_000),
+                position: z.number().int().nonnegative(),
+                purpose: z.string().max(1000).optional(),
+                required: z.boolean().optional(),
+                updatedAt: z.string().max(64),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
 export interface SourceSummary {
   id: string;
   projectId: string;

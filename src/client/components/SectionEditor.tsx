@@ -90,7 +90,15 @@ export function SectionEditor({
 
   return (
     <div className="section-editor" onFocus={onFocus}>
-      <div className="editor-toolbar" aria-label="Text formatting">
+      <div
+        className="editor-toolbar"
+        aria-label="Text formatting"
+        onMouseDown={(event) => {
+          // Keep the selection and contextual toolbar in place until the command runs.
+          // WebKit does not focus buttons on mouse-down, so blur would collapse it.
+          if (event.button === 0) event.preventDefault();
+        }}
+      >
         {controls.map(({ label, icon: Icon, active, action }) => (
           <Button
             key={label}

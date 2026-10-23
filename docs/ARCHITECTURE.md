@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-PRD Genie is a single-user local browser application served from a local Node.js process. The default host is `127.0.0.1`. It is not currently a signed native desktop package. Remote deployment, account authentication, collaboration, and cloud sync are outside the v1 boundary.
+PRD Genie is a single-user macOS workbench. Its AppKit window, toolbar, menus and save panels host a React/Tiptap workspace in WKWebView, served by a bundled local Node.js process. The browser development interface uses the same workspace. The server binds to `127.0.0.1`. The local package is not yet signed or notarised. PRD Genie has no account gate; optional provider authentication is separate. Remote deployment, collaboration and cloud sync are outside this release.
 
 ## Package layout
 
@@ -25,6 +25,16 @@ Each PRD is an ordered list of stable-ID sections. A save creates a monotonicall
 Portable archive format version 3 contains project metadata, the current PRD, revision snapshots, source metadata and binaries, extracted locations, reconstructable chunk metadata, AI runs, durable citation snapshots, review findings, and applied ChatGPT handoffs. Exact application records retain the proposed and accepted text for RC.3 handoffs. Applied handoffs created before that record existed carry an explicit legacy-provenance limitation. Session credentials, embeddings, and unapplied ChatGPT handoffs are omitted. Restore accepts format version 2, validates paths, entry counts, expanded byte limits, hashes, reference integrity, and schema, then performs an atomic identifier-remapped insert and recomputes handoff digests. Embeddings are regenerated locally after restore.
 
 Before applying pending SQLite migrations to an existing database, the server creates a mode-0600 snapshot beside the database with a `.pre-<migration>.backup` suffix. Keep that snapshot until the upgraded application and archives are verified. Rolling back application code after RC.3 data has been written requires restoring both the matching database backup and source directory backup; an older binary must not be treated as a schema downgrade tool.
+
+## Workspace and recovery
+
+Conversation is the starting workspace. Document editing opens in the same window and retains the conversation, selected sources and project context. Sources, structure, exports and AI settings open as focused sheets. AI proposals require explicit acceptance before changing the PRD.
+
+A separate, revision-checked workspace record retains unsent instructions, conversation turns, local document edits and proposal/handoff drafts. Its revision is independent of the saved PRD revision. Writes use compare-and-swap; a conflict preserves the local work and requires recovery instead of overwriting a newer record. Recovery from an older document revision requires an explicit choice. Workspace recovery records are local working state, not part of portable project archives.
+
+Project navigation saves document edits and flushes recovery state before leaving. Native close and quit warn when unsaved work, pending recovery writes or generation are active. An interrupted generation is marked incomplete. Retrying is explicit and does not silently switch providers. Export saves the current edits before producing PDF, Word, Markdown or a project archive.
+
+The native shell accepts a fixed command set and bounded window state only from the local main frame. It uses system toolbar controls and SF Symbols; document content remains opaque. Reduced motion, reduced transparency and increased contrast preferences are passed into the workspace. The package targets macOS 13 or newer; compiling against a newer SDK does not establish runtime compatibility on every supported version.
 
 ## Retrieval
 

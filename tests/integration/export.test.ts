@@ -189,8 +189,8 @@ describe('ExportService', () => {
     expect(result.body.subarray(0, 4).toString()).toBe('%PDF');
     expect(result.body.length).toBeGreaterThan(1000);
     const parsed = await parseDocument('export.pdf', result.body);
-    expect(parsed.locations.flatMap((location) => location.content).join(' ')).toContain(
-      '• supported bullet café',
-    );
+    const text = parsed.locations.map((location) => location.content).join(' ');
+    expect(text).toContain('• supported bullet café');
+    expect(text.match(/A measurable requirement/g)).toHaveLength(600);
   });
 });

@@ -17,6 +17,8 @@ import {
   structureCreateSchema,
   structureSelectSchema,
   structureUpdateSchema,
+  workspaceUpdateSchema,
+  WORKSPACE_MAX_BYTES,
   type ProviderKind,
 } from '../../shared/types.js';
 import { ApiError } from '../../shared/api.js';
@@ -213,6 +215,15 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     const { id } = request.params as { id: string };
     const body = parse(structureSelectSchema, request.body);
     return services.repository.selectStructure(id, body.structureId, body.revision);
+  });
+
+  app.get('/api/projects/:id/workspace', (request) => {
+    const { id } = request.params as { id: string };
+    return services.repository.getWorkspace(id);
+  });
+  app.put('/api/projects/:id/workspace', { bodyLimit: WORKSPACE_MAX_BYTES }, (request) => {
+    const { id } = request.params as { id: string };
+    return services.repository.saveWorkspace(id, parse(workspaceUpdateSchema, request.body));
   });
 
   app.get('/api/projects/:id/prd', (request) => {

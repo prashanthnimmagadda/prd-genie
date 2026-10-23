@@ -49,8 +49,7 @@ export function StructurePanel({
   }
 
   return (
-    <details className="structure-picker">
-      <summary>Document structure</summary>
+    <section className="structure-picker" aria-label="Saved structures">
       <p>Keep the same headings through revisions, or choose a saved structure.</p>
       {structures.map((structure) => (
         <div className="structure-option" key={structure.id}>
@@ -123,7 +122,7 @@ export function StructurePanel({
           {error}
         </p>
       )}
-    </details>
+    </section>
   );
 }
 

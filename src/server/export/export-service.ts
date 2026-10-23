@@ -311,13 +311,20 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
   const write = (
     text: string,
     fontSize: number,
-    options: { heading?: boolean; indent?: number; gap?: number } = {},
+    options: { heading?: boolean; indent?: number; gap?: number; before?: number } = {},
   ) => {
     const font = options.heading ? bold : regular;
     assertPdfFontSupportsText(font, text);
     const indent = options.indent ?? 0;
     const lineHeight = fontSize * 1.45;
-    for (const line of wrapPdfText(text, font, fontSize, contentWidth - indent)) {
+    const lines = wrapPdfText(text, font, fontSize, contentWidth - indent);
+    if (options.heading) {
+      // Keep the whole heading with at least the first line of its content.
+      const before = options.before ?? 0;
+      ensureSpace(before + lines.length * lineHeight + (options.gap ?? fontSize * 0.45) + 14.5);
+      if (y < size.height - margin) y -= before;
+    }
+    for (const line of lines) {
       ensureSpace(lineHeight);
       page.drawText(line, {
         x: margin + indent,
@@ -375,16 +382,14 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
   write(project.name, 22, { heading: true, gap: 16 });
   if (project.description) write(project.description, 10, { gap: 15 });
   for (const section of prd.sections) {
-    ensureSpace(40);
-    write(section.title, 14, { heading: true, gap: 9 });
+    write(section.title, 14, { heading: true, before: 12, gap: 9 });
     if (!section.body.trim()) {
       write(missingSectionText(section.required), 10);
       continue;
     }
     for (const block of bodyBlocks(section.body)) {
       if (block.kind === 'heading') {
-        ensureSpace(34);
-        write(block.text, block.level <= 1 ? 12 : 11, { heading: true, gap: 7 });
+        write(block.text, block.level <= 1 ? 12 : 11, { heading: true, before: 6, gap: 7 });
       } else if (block.kind === 'list') {
         block.items.forEach((item, index) =>
           write(`${block.ordered ? `${index + 1}.` : '•'} ${item}`, 10, { indent: 14, gap: 3 }),
@@ -409,22 +414,26 @@ function missingSectionText(required: boolean | undefined): string {
 function wrapPdfText(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
   const result: string[] = [];
   for (const paragraph of text.split('\n')) {
-    const words = paragraph.split(/\s+/);
+    const words = paragraph.trim().split(/\s+/);
     let line = '';
-    for (const [wordIndex, word] of words.entries()) {
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+        line = candidate;
+        continue;
+      }
+      if (line) {
+        result.push(line);
+        line = '';
+      }
+      // Only an individual token wider than the column may split mid-word.
       for (const character of word) {
-        // Long evidence URLs and identifiers must wrap instead of leaving the page.
         if (font.widthOfTextAtSize(`${line}${character}`, fontSize) > maxWidth && line) {
           result.push(line);
           line = '';
         }
         line += character;
       }
-      if (font.widthOfTextAtSize(`${line} `, fontSize) > maxWidth && line) {
-        result.push(line);
-        line = '';
-      }
-      if (wordIndex < words.length - 1) line += ' ';
     }
     result.push(line.trimEnd());
   }

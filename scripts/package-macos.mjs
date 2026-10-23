@@ -60,6 +60,8 @@ const swiftEnv = {
 execFileSync(
   'swiftc',
   [
+    '-target',
+    `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`,
     path.join(root, 'scripts/mac/PRDGenie.swift'),
     '-o',
     binary,
@@ -76,6 +78,8 @@ if (existsSync(ocrSource)) {
     'swiftc',
     [
       '-O',
+      '-target',
+      `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`,
       ocrSource,
       '-o',
       path.join(resources, 'jpeg-ocr'),

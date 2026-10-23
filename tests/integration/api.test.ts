@@ -11,6 +11,7 @@ import type { EmbeddingService } from '../../src/server/retrieval/embedding-serv
 import type { AppDatabase } from '../../src/server/db/client.js';
 import { enqueueFileDeletion } from '../../src/server/db/file-deletion.js';
 import type { Repository } from '../../src/server/db/repository.js';
+import type { WorkspaceState } from '../../src/shared/types.js';
 
 describe('API', () => {
   let app: FastifyInstance;
@@ -62,6 +63,51 @@ describe('API', () => {
     const prd = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/prd` });
     expect(prd.statusCode).toBe(200);
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
+  });
+
+  it('persists bounded workspace recovery and reports conflicts without changing the document', async () => {
+    const project = repository.createProject('Workspace recovery', '');
+    const url = `/api/projects/${project.id}/workspace`;
+    const empty = await app.inject({ method: 'GET', url });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual({ revision: 0, prompt: '', turns: [], draft: null });
+    const findingId = crypto.randomUUID();
+    const handoffId = crypto.randomUUID();
+    const sectionId = repository.getPrd(project.id).sections[0]!.id;
+    const payload: WorkspaceState = {
+      ...empty.json<WorkspaceState>(),
+      prompt: 'Review my requirements',
+      proposal: { runId: null, text: '  My edited proposal\n' },
+      findingDrafts: { [findingId]: 'My revised acceptance criterion' },
+      handoffInstruction: '  Review the failure paths\n',
+      handoffDrafts: {
+        [handoffId]: {
+          [sectionId]: null,
+          [repository.getPrd(project.id).sections[1]!.id]: 'My edited handoff response',
+        },
+      },
+    };
+    const saved = await app.inject({ method: 'PUT', url, payload });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ ...payload, revision: 1 });
+    expect((await app.inject({ method: 'GET', url })).json()).toEqual(saved.json());
+    const conflict = await app.inject({ method: 'PUT', url, payload });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json<{ error: { code: string } }>().error.code).toBe('workspace_conflict');
+    for (const invalid of [
+      { ...saved.json<WorkspaceState>(), credential: 'not-a-credential' },
+      { ...saved.json<WorkspaceState>(), prompt: 'x'.repeat(20_001) },
+      { ...saved.json<WorkspaceState>(), proposal: { runId: null, text: 'x'.repeat(250_001) } },
+      { ...saved.json<WorkspaceState>(), handoffDrafts: { [handoffId]: { [sectionId]: 42 } } },
+      {
+        ...saved.json<WorkspaceState>(),
+        turns: [{ id: 'one', request: '', response: '', runId: null, status: 'running' }],
+      },
+    ]) {
+      expect((await app.inject({ method: 'PUT', url, payload: invalid })).statusCode).toBe(400);
+    }
+    expect(repository.getWorkspace(project.id)).toEqual(saved.json());
+    expect(repository.getPrd(project.id).revision).toBe(0);
   });
 
   it('creates and applies a reusable structure through the API', async () => {
