@@ -26,13 +26,12 @@ The dependency-integrated runtime is identified by commit [`092b4cf`](https://gi
 | Linux ARM64 image, Apple Container 1.0.0 | Dockerfile build with Node 22.23.2; health; loopback Host rejection; UID 1000 and Node PID 1; persistent data after restart; graceful SIGTERM; removal of exact temporary resources and engine shutdown |
 | Dependency advisory data on 8 September  | Zero findings in both production and full npm audits at the recorded commit; generated license inventory and CycloneDX SBOM                                                                             |
 
-The 22 October 2026 audit at `40e3906` supersedes that historical advisory
-snapshot: production has three moderate package findings and no high or critical
-findings; the full development tree has 23 findings, including three critical
-and 11 high. See the [focused production triage](DEPENDENCY_TRIAGE.md). The
-locally generated audit record is in `reports/dependency-audit.json`. The full
-audit gate is not passing, and these checks do not establish public-release
-readiness.
+An interim audit on 22 October 2026 at `40e3906` found three moderate
+production findings and 23 findings in the full development tree. After the
+dependency fixes, an online audit at `87c1538` recorded zero findings in both
+scopes. The full offline release gate passed at `3b16e8c` on macOS. See the
+[focused production triage](DEPENDENCY_TRIAGE.md). These recorded results do
+not establish signed distribution or model quality.
 
 Apple Container consumes the repository's Dockerfile and runs its Linux image. That execution does not exercise Docker Engine or Compose orchestration, native Windows, or a Linux desktop installation. Those are separate execution targets, not interchangeable names for the measured environment. The [README](../README.md#containers) includes the Apple Container commands as well as the Compose recipe.
 
@@ -44,7 +43,7 @@ Automated regression tests use explicitly labelled synthetic fixtures so expecte
 
 A private source-backed product case was exercised on 8 September 2026 at `4554cae`, before the URI lockfile correction. It used the compiled app, an isolated database, actual hybrid indexing, and the installed 4B Ollama drafting model. Twenty workflow assertions passed across import, source readiness, proposal staging, explicit acceptance, duplicate-apply rejection, Markdown/DOCX/PDF/archive export, archive restoration with handoff provenance, and restart persistence. The original source files and generated provider responses remain outside this public repository.
 
-The 4B proposal preserved the original problem wording unchanged. Whole-document reviews from the 4B and 9B local models failed validation; diagnostic output included incorrect citation identifiers and statements contradicted by the document. Those responses were rejected and not applied. A separate source-grounded file handoff was prepared in the authenticated assistant task, imported as a staged proposal, explicitly accepted, and supplemented through an explicit editor save after source review. This did not test ChatGPT browser login or plugin installation and did not use ChatGPT credentials as an API key.
+The 4B proposal preserved the original problem wording unchanged. Whole-document reviews from the 4B and 9B local models failed validation; diagnostic output included incorrect citation identifiers and statements contradicted by the document. Those responses were rejected and not applied. A separate source-grounded file handoff was imported as a staged proposal, explicitly accepted, and supplemented through an explicit editor save after source review. This did not test ChatGPT browser login or plugin installation and did not use ChatGPT credentials as an API key.
 
 This case proves the recorded real-source workflow and rejection behavior, not reliable autonomous whole-document review by the tested local models. A valid handoff also remains subject to factual review before acceptance.
 

@@ -36,6 +36,5 @@ entry count of uploaded Office files, so the shared parser now checks the
 entries JSZip actually loads and counts their bytes during inflation before
 handing a DOCX to Mammoth or parsing slides and sheets.
 
-These results support private local validation. Signing, notarization, live
-ChatGPT consent, the user's private Recall document, and public distribution
-have separate validation or approval requirements.
+These dependency results support local validation. Signing, notarization,
+private real-document validation, and public distribution remain separate steps.

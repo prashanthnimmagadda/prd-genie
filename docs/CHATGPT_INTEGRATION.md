@@ -12,7 +12,7 @@ Model discovery uses the signed-in account's model catalog. PRD actions use `POS
 
 Selected PRD scope, the user's instruction, and up to eight retrieved source excerpts are sent to OpenAI for an online action. Local source extraction and retrieval remain local. No unrelated source binaries or other project history are sent. OpenAI's [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) apply; output quality depends on the selected account and model.
 
-The OAuth integration is implemented from the published protocol description, without bundling example-app code. Automated tests use synthetic tokens and mocked responses. A real sign-in and inference request require the user's own consent and private validation.
+The OAuth integration follows the published protocol without bundling example-app code. Automated tests use synthetic tokens and mocked responses. On 22 October 2026, a user-authorized connection and one Ask on the fictional example project completed in the local macOS app with a source-linked answer. Output quality on a real document remains for private validation.
 
 ## Manual handoff and plugin
 
