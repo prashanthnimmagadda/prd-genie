@@ -8,6 +8,7 @@ import {
   Paragraph,
   Table,
   TableCell,
+  TableLayoutType,
   TableRow,
   TextRun,
   WidthType,
@@ -206,6 +207,10 @@ function plainText(value: string): string {
 }
 
 async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer> {
+  // A4 with the existing one-inch margins, in twentieths of a point.
+  const pageSize = { width: 11906, height: 16838 };
+  const pageMargin = { top: 1440, right: 1440, bottom: 1440, left: 1440 };
+  const contentWidth = pageSize.width - pageMargin.left - pageMargin.right;
   const children: Array<Paragraph | Table> = [
     new Paragraph({ text: project.name, heading: HeadingLevel.TITLE, spacing: { after: 180 } }),
   ];
@@ -252,15 +257,21 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
           ),
         );
       } else if (block.kind === 'table') {
+        // Explicit grid and cell widths prevent native Word previews from treating
+        // the library's placeholder grid columns as the actual table dimensions.
+        const columnWidth = Math.floor(contentWidth / (block.rows[0]?.length ?? 1));
         children.push(
           new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
+            width: { size: contentWidth, type: WidthType.DXA },
+            columnWidths: block.rows[0]!.map(() => columnWidth),
+            layout: TableLayoutType.FIXED,
             rows: block.rows.map(
               (row, rowIndex) =>
                 new TableRow({
                   children: row.map(
                     (cell) =>
                       new TableCell({
+                        width: { size: columnWidth, type: WidthType.DXA },
                         children: [
                           new Paragraph({
                             children: [new TextRun({ text: cell, bold: rowIndex === 0 })],
@@ -287,7 +298,9 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
       }
     }
   }
-  const document = new Document({ sections: [{ children }] });
+  const document = new Document({
+    sections: [{ properties: { page: { size: pageSize, margin: pageMargin } }, children }],
+  });
   return Packer.toBuffer(document);
 }
 

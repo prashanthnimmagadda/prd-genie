@@ -6,8 +6,24 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ## Unreleased
 
+### Added
+
+- A macOS app with native navigation, keyboard commands and save panels around a central conversation workspace and focused document editor.
+- An optional example project, reusable project structures and instruction-led drafting, review and revision.
+- A shared, versioned PRD quality contract with section guidance, source grounding, labelled assumptions and explicit incomplete-output warnings.
+- Optional Sign in with ChatGPT in AI settings, alongside existing local models, API providers and manual handoff. Provider selection remains explicit with no paid fallback.
+- JPEG text extraction on macOS and clearer partial-extraction warnings for supported attachments.
+- Persistent unsent instructions, conversation, draft and proposal recovery, with conflict checks before restoring or applying changes.
+
 ### Fixed
 
+- Preserved in-progress work across navigation, interrupted generation and provider failures, with explicit recovery and cancellation states.
+- Exported the latest document edits to PDF and Word, preserving headings, lists, tables and references; corrected PDF wrapping and heading spacing.
+- Set explicit Word table column widths so native document previews preserve readable cells.
+- Kept an optional runtime dependency inside the macOS bundle so startup does not search ancestor folders on external volumes.
+- Included the project and bundled Node licence notices in the app and used numeric native version fields while retaining the prerelease identifier.
+- Improved outline contrast, visible keyboard focus and reduced-motion, reduced-transparency and increased-contrast presentation.
+- Hardened Office-file extraction against unsafe archive expansion and malformed XML, and updated affected production and development dependencies.
 - Scoped patched URI dependencies by major version so the container's npm 10 and native npm 11 both resolve a valid lockfile.
 - Integrated reviewed production, development, and AI SDK 7 dependency updates, retaining TypeScript 6.0.3 for linter compatibility and grouping future coupled SDK updates.
 - Updated manual workflow actions using immutable commit pins and supplied explicit comparison refs for manual dependency review. GitHub Actions remain disabled.

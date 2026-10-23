@@ -63,6 +63,8 @@ Development opens at [http://127.0.0.1:5173](http://127.0.0.1:5173), with the AP
 
 On a Mac with Xcode Command Line Tools installed, run `npm run build && npm run package:mac` after `npm ci`. This creates `dist/mac/PRD Genie.app` with a bundled Node runtime and local WebKit window. Open it from Finder. It starts and stops its own loopback server and uses the same local project data as the source installation. It needs no PRD Genie account or online service. This build is unsigned and has not been notarized or published as a download; signing, notarization and distribution are separate decisions.
 
+Packaging includes the project and dependency notices, including the licence from the exact Node distribution being bundled. That distribution must retain its `LICENSE` beside its `bin` directory. The native version uses the numeric package version and the Git commit count as its build number; the complete prerelease identifier remains in `PRDGenieReleaseVersion` in `Info.plist`. Build from a full Git checkout so the build number is reproducible.
+
 ## Your first PRD
 
 Start after installation. Model downloads and provider response times may take longer.

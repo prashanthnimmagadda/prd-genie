@@ -87,6 +87,8 @@ describe('ExportService', () => {
     const xml = await (await JSZip.loadAsync(docx.body)).file('word/document.xml')?.async('string');
     expect(xml).toContain('Recovery flow');
     expect(xml).toContain('w:tbl');
+    expect(xml).toContain('w:gridCol w:w="4513"');
+    expect(xml).toContain('w:tcW w:type="dxa" w:w="4513"');
     expect(xml).toContain('Preserve the draft');
     expect(xml).toContain('Interview notes (https://example.test/notes)');
     expect(xml).not.toContain('| --- |');

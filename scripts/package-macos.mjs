@@ -19,6 +19,30 @@ const contents = path.join(app, 'Contents');
 const resources = path.join(contents, 'Resources');
 const appRoot = path.join(resources, 'app');
 const binary = path.join(contents, 'MacOS', 'PRD Genie');
+const nodeBinary = realpathSync(process.execPath);
+const nodeLicense = path.resolve(path.dirname(nodeBinary), '..', 'LICENSE');
+if (!existsSync(nodeLicense) || !readFileSync(nodeLicense, 'utf8').includes('Node.js')) {
+  throw new Error('The bundled Node distribution must include its matching LICENSE beside bin/.');
+}
+const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+const version = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(packageJson.version);
+if (!version) throw new Error('The package version must contain a numeric major, minor and patch.');
+const nativeVersion = version.slice(1, 4).join('.');
+if (
+  execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).trim() === 'true'
+) {
+  throw new Error('Use a full Git checkout to derive the native build number.');
+}
+const buildNumber = execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+  cwd: root,
+  encoding: 'utf8',
+}).trim();
+if (!/^[1-9]\d{0,3}$/.test(buildNumber)) {
+  throw new Error('The native build number must be a positive integer of at most four digits.');
+}
 if (
   !existsSync(path.join(root, 'dist/client/index.html')) ||
   !existsSync(path.join(root, 'dist/server/server/index.js'))
@@ -32,8 +56,11 @@ cpSync(path.join(root, 'dist/client'), path.join(appRoot, 'dist/client'), { recu
 cpSync(path.join(root, 'dist/server'), path.join(appRoot, 'dist/server'), { recursive: true });
 cpSync(path.join(root, 'drizzle'), path.join(appRoot, 'drizzle'), { recursive: true });
 cpSync(path.join(root, 'package.json'), path.join(appRoot, 'package.json'));
+cpSync(path.join(root, 'LICENSE'), path.join(resources, 'LICENSE'));
+cpSync(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PARTY_NOTICES.md'));
 cpSync(path.join(root, 'src/client/SHADCN-LICENSE.md'), path.join(resources, 'SHADCN-LICENSE.md'));
-cpSync(realpathSync(process.execPath), path.join(resources, 'node'));
+cpSync(nodeLicense, path.join(resources, 'node-LICENSE.txt'));
+cpSync(nodeBinary, path.join(resources, 'node'));
 
 const installed = execFileSync('npm', ['ls', '--omit=dev', '--all', '--parseable'], {
   cwd: root,
@@ -96,7 +123,6 @@ if (existsSync(ocrSource)) {
   );
 }
 
-const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 writeFileSync(
   path.join(contents, 'Info.plist'),
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -105,8 +131,9 @@ writeFileSync(
 <key>CFBundleIdentifier</key><string>app.stillform.prdgenie</string>
 <key>CFBundleName</key><string>PRD Genie</string>
 <key>CFBundleDisplayName</key><string>PRD Genie</string>
-<key>CFBundleVersion</key><string>${packageJson.version}</string>
-<key>CFBundleShortVersionString</key><string>${packageJson.version}</string>
+<key>CFBundleVersion</key><string>${buildNumber}</string>
+<key>CFBundleShortVersionString</key><string>${nativeVersion}</string>
+<key>PRDGenieReleaseVersion</key><string>${packageJson.version}</string>
 <key>CFBundleExecutable</key><string>PRD Genie</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
