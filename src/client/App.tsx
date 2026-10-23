@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -10,8 +10,11 @@ import {
   FolderOpen,
   History,
   KeyRound,
-  Menu,
-  PanelRight,
+  PanelLeft,
+  MessageSquare,
+  Paperclip,
+  Settings2,
+  FileText,
   Plus,
   RotateCcw,
   Save,
@@ -28,12 +31,17 @@ import type {
   Citation,
   PrdDocument,
   ProjectSummary,
+  ProviderState,
   ReviewFinding,
   RevisionSummary,
   SourceSummary,
+  WorkspaceState,
+  WorkspaceTurn,
 } from '@shared/types';
 import { api, ClientApiError, runAction } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { isNative, postShellState, readLocalPrompt } from '@/lib/native-shell';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
   Conversation,
@@ -58,10 +66,13 @@ import {
 import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources';
 import { SectionEditor } from '@/components/SectionEditor';
 import { ProviderDialog } from '@/components/ProviderDialog';
+import { StructurePanel } from '@/components/StructurePanel';
+import { exampleSource, exampleSourceName, fillExample } from '@/example-project';
 
 type PanelTab = 'assist' | 'review' | 'evidence' | 'history';
 
 interface ProposalContext {
+  sourceRunId: string | null;
   runId: string | null;
   sourceRevision: number;
   action: AiAction;
@@ -78,6 +89,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [importWarnings, setImportWarnings] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     void api
@@ -90,16 +102,58 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
-  async function createProject(name: string) {
+  async function createProject(name: string, instruction = '', files: File[] = []) {
     const project = await api.createProject(name);
+    setProjects((current) => [project, ...current]);
+    const warnings: string[] = [];
+    try {
+      if (instruction)
+        await api.saveWorkspace(project.id, {
+          revision: 0,
+          prompt: instruction,
+          turns: [],
+          draft: null,
+        });
+      for (const file of files) {
+        try {
+          await api.addSource(project.id, file);
+        } catch (reason) {
+          warnings.push(`${file.name}: ${messageFrom(reason)}`);
+        }
+      }
+    } catch (reason) {
+      throw new Error(
+        `The project was created, but the instruction could not be saved. Your text is still here. ${messageFrom(reason)}`,
+        { cause: reason },
+      );
+    }
+    if (warnings.length) setImportWarnings((current) => ({ ...current, [project.id]: warnings }));
+    setSelectedId(project.id);
+  }
+
+  async function createExampleProject() {
+    const project = await api.createProject('Explore: meeting scheduler', 'Fictional example');
+    const document = await api.prd(project.id);
+    await api.savePrd(project.id, document.revision, fillExample(document), 'Example PRD added');
+    await api.addSource(
+      project.id,
+      new File([exampleSource], exampleSourceName, { type: 'text/plain' }),
+    );
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
   }
 
   async function importProject(file: File) {
-    const { project } = file.name.toLowerCase().endsWith('.prdgenie.zip')
-      ? await api.restoreProject(file)
-      : await api.importProject(file);
+    let project: ProjectSummary;
+    if (file.name.toLowerCase().endsWith('.prdgenie.zip')) {
+      project = (await api.restoreProject(file)).project;
+    } else {
+      const imported = await api.importProject(file);
+      project = imported.project;
+      if (imported.warnings.length > 0) {
+        setImportWarnings((current) => ({ ...current, [project.id]: imported.warnings }));
+      }
+    }
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
   }
@@ -138,7 +192,13 @@ export default function App() {
   }
 
   if (!selectedId) {
-    return <EmptyWorkspace onCreate={createProject} onImport={importProject} />;
+    return (
+      <EmptyWorkspace
+        onCreate={createProject}
+        onImport={importProject}
+        onExample={createExampleProject}
+      />
+    );
   }
 
   const project = projects.find((item) => item.id === selectedId);
@@ -155,6 +215,14 @@ export default function App() {
         onProjectImport={importProject}
         onProjectChange={updateProject}
         onProjectDelete={deleteProject}
+        importWarnings={importWarnings[project.id] ?? []}
+        onDismissImportWarnings={() =>
+          setImportWarnings((current) => {
+            const next = { ...current };
+            delete next[project.id];
+            return next;
+          })
+        }
       />
     </TooltipProvider>
   );
@@ -163,83 +231,170 @@ export default function App() {
 function EmptyWorkspace({
   onCreate,
   onImport,
+  onExample,
 }: {
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (name: string, instruction?: string, files?: File[]) => Promise<void>;
   onImport: (file: File) => Promise<void>;
+  onExample: () => Promise<void>;
 }) {
   const [name, setName] = useState('');
+  const [instruction, setInstruction] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const importRef = useRef<HTMLInputElement | null>(null);
-
+  const sourcesRef = useRef<HTMLInputElement | null>(null);
+  const instructionRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    postShellState({
+      title: 'PRD Genie',
+      subtitle: 'Local workspace',
+      dirty: false,
+      busy,
+      recoveryPending: Boolean(instruction || files.length),
+      hasProject: false,
+    });
+    const command = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === 'new-project') instructionRef.current?.focus();
+    };
+    window.addEventListener('prd-command', command);
+    return () => window.removeEventListener('prd-command', command);
+  }, [busy, instruction, files.length]);
+  async function perform(operation: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await operation();
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <main className="onboarding">
-      <div className="onboarding-mark">
-        <BookOpenText aria-hidden="true" />
-      </div>
-      <p className="eyebrow">Local-first PRD workbench</p>
-      <h1>Start with the document, not a chat.</h1>
+    <main className="onboarding" aria-busy={busy}>
+      <BookOpenText className="onboarding-mark" aria-hidden="true" />
+      <h1>Start with instructions or material.</h1>
       <p className="onboarding-copy">
-        Build a structured PRD, ground it in your source material, and review every AI proposal
-        before it changes the document.
+        Describe a product, review a PRD, or bring a question. Your instructions and material stay
+        together in a local project.
       </p>
       <form
         className="create-project"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!name.trim()) return;
-          setBusy(true);
-          setError('');
-          void onCreate(name.trim())
-            .catch((reason: unknown) => setError(messageFrom(reason)))
-            .finally(() => setBusy(false));
+          void perform(() => onCreate(name.trim() || 'Untitled project', instruction, files));
         }}
       >
-        <label htmlFor="project-name">Project name</label>
-        <input
-          id="project-name"
-          value={name}
-          placeholder="Example: Billing redesign"
-          maxLength={120}
-          autoFocus
-          onChange={(event) => setName(event.target.value)}
+        <label className="visually-hidden" htmlFor="first-instruction">
+          Your instruction
+        </label>
+        <textarea
+          id="first-instruction"
+          ref={instructionRef}
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          placeholder="What would you like to work on?"
+          maxLength={20000}
+          disabled={busy}
         />
-        <Button type="submit" disabled={busy || !name.trim()}>
-          <Plus aria-hidden="true" />
-          Create project
-        </Button>
+        {files.length > 0 && (
+          <ul className="pending-sources">
+            {files.map((file, index) => (
+              <li key={`${file.name}-${index}`}>
+                <Paperclip aria-hidden="true" />
+                <span>{file.name}</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="start-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => sourcesRef.current?.click()}
+          >
+            <Paperclip aria-hidden="true" />
+            Add material
+          </Button>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Opening…' : 'Open workspace'}
+          </Button>
+        </div>
+        <details>
+          <summary>
+            Name this project <span className="muted">(optional)</span>
+          </summary>
+          <label className="visually-hidden" htmlFor="project-name">
+            Project name
+          </label>
+          <input
+            id="project-name"
+            value={name}
+            placeholder="Untitled project"
+            maxLength={120}
+            onChange={(event) => setName(event.target.value)}
+            disabled={busy}
+          />
+        </details>
       </form>
-      <div className="import-prd">
-        <span>or</span>
-        <Button variant="outline" onClick={() => importRef.current?.click()}>
+      <p className="sheet-note">
+        Nothing is sent to AI until you choose a provider and send an instruction.
+      </p>
+      <div className="start-alternatives">
+        <Button variant="ghost" disabled={busy} onClick={() => importRef.current?.click()}>
           <FilePlus2 aria-hidden="true" />
-          Import an existing PRD
+          Open an existing PRD
         </Button>
-        <input
-          ref={importRef}
-          className="visually-hidden"
-          type="file"
-          aria-label="Import PRD file"
-          accept=".md,.markdown,.docx,.txt,.prdgenie.zip"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            setBusy(true);
-            setError('');
-            void onImport(file)
-              .catch((reason: unknown) => setError(messageFrom(reason)))
-              .finally(() => setBusy(false));
-          }}
-        />
+        <Button variant="ghost" disabled={busy} onClick={() => void perform(onExample)}>
+          <BookOpenText aria-hidden="true" />
+          Explore an example
+        </Button>
       </div>
+      <input
+        ref={sourcesRef}
+        className="visually-hidden"
+        type="file"
+        hidden
+        multiple
+        aria-label="Add starting material"
+        accept=".txt,.md,.markdown,.pdf,.docx,.pptx,.xlsx,.jpg,.jpeg"
+        onChange={(event) => {
+          setFiles((current) => [...current, ...Array.from(event.target.files ?? [])]);
+          event.target.value = '';
+        }}
+      />
+      <input
+        ref={importRef}
+        className="visually-hidden"
+        type="file"
+        hidden
+        aria-label="Import PRD file"
+        accept=".md,.markdown,.docx,.txt,.prdgenie.zip"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void perform(() => onImport(file));
+          event.target.value = '';
+        }}
+      />
       {error && (
         <p className="form-error" role="alert">
           {error}
         </p>
       )}
       <p className="disk-note">
-        Project data stays on this device. It relies on your operating system disk protection and is
-        not independently encrypted.
+        No account required. Editing, history and export work offline. Local files rely on your
+        Mac’s disk protection.
       </p>
     </main>
   );
@@ -253,6 +408,8 @@ interface WorkbenchProps {
   onProjectImport: (file: File) => Promise<void>;
   onProjectChange: (project: ProjectSummary) => void;
   onProjectDelete: (id: string) => Promise<void>;
+  importWarnings: string[];
+  onDismissImportWarnings: () => void;
 }
 
 function Workbench({
@@ -263,7 +420,26 @@ function Workbench({
   onProjectImport,
   onProjectChange,
   onProjectDelete,
+  importWarnings,
+  onDismissImportWarnings,
 }: WorkbenchProps) {
+  const [turns, setTurns] = useState<WorkspaceTurn[]>([]);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [recoveryConflict, setRecoveryConflict] = useState<WorkspaceState['draft']>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryStatus, setRecoveryStatus] = useState('');
+  const [recoverySavedKey, setRecoverySavedKey] = useState('');
+  const recoveryRevision = useRef(0);
+  const recoveryQueue = useRef<Promise<boolean>>(Promise.resolve(true));
+  const recoveryBlocked = useRef(false);
+  const [recoveryUnavailable, setRecoveryUnavailable] = useState(false);
+  const [recoveryReadOnly, setRecoveryReadOnly] = useState(false);
+  const [proposalDraft, setProposalDraft] = useState<WorkspaceState['proposal']>(undefined);
+  const [navigationBusy, setNavigationBusy] = useState(false);
+  const navigationRef = useRef(false);
+  const recoverySnapshot = useRef<Omit<WorkspaceState, 'revision'> | null>(null);
+  const recoverySaved = useRef('');
   const [prd, setPrd] = useState<PrdDocument | null>(null);
   const [savedPrd, setSavedPrd] = useState<PrdDocument | null>(null);
   const [sources, setSources] = useState<SourceSummary[]>([]);
@@ -279,12 +455,27 @@ function Workbench({
   const [selectedSectionId, setSelectedSectionId] = useState('');
   const [selection, setSelection] = useState('');
   const [tab, setTab] = useState<PanelTab>('assist');
-  const [railOpen, setRailOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
+  const [documentOpen, setDocumentOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [structureOpen, setStructureOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [exportStatus, setExportStatus] = useState('');
+  const [submittedPrompt, setSubmittedPrompt] = useState('');
+  const [autoAction, setAutoAction] = useState(true);
+  const [activitySequence, setActivitySequence] = useState(0);
+  const [stalled, setStalled] = useState(false);
+  const [storageError, setStorageError] = useState('');
   const [providerOpen, setProviderOpen] = useState(false);
+  const [activeProviderState, setActiveProviderState] = useState<ProviderState | null>(null);
   const [action, setAction] = useState<AiAction>('ask');
-  const [scope, setScope] = useState<ActionScope>('section');
+  const [scope, setScope] = useState<ActionScope>('document');
   const [output, setOutput] = useState('');
+  const [prompt, setPrompt] = useState(() => readLocalPrompt(project.id));
+  const [interrupted, setInterrupted] = useState(false);
   const [proposalContext, setProposalContext] = useState<ProposalContext | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
@@ -308,6 +499,18 @@ function Workbench({
   const documentMutationRef = useRef(false);
 
   useEffect(() => {
+    if (providerOpen || !project.selectedProvider) return;
+    void api
+      .providerStates()
+      .then(({ providers }) => {
+        setActiveProviderState(
+          providers.find((item) => item.provider === project.selectedProvider) ?? null,
+        );
+      })
+      .catch(() => setActiveProviderState(null));
+  }, [providerOpen, project.selectedProvider]);
+
+  useEffect(() => {
     const onOnline = () => setOffline(false);
     const onOffline = () => setOffline(true);
     window.addEventListener('online', onOnline);
@@ -326,18 +529,73 @@ function Workbench({
       api.aiRuns(project.id),
       api.revisions(project.id),
       api.chatGptHandoffs(project.id),
+      api.workspace(project.id).catch((reason: unknown): WorkspaceState => {
+        recoveryBlocked.current = true;
+        setRecoveryUnavailable(true);
+        setRecoveryReadOnly(true);
+        setStorageError(
+          `Recovery is unavailable. The saved PRD can still be viewed and exported. Editing is paused to protect the recovery record. ${messageFrom(reason)}`,
+        );
+        return { revision: 0, prompt: '', turns: [], draft: null };
+      }),
     ])
-      .then(([document, sourceResult, findingResult, runResult, revisionResult, handoffResult]) => {
-        setError('');
-        setPrd(document);
-        setSavedPrd(document);
-        setSources(sourceResult.sources);
-        setFindings(findingResult.findings);
-        setAiRuns(runResult.runs);
-        setRevisions(revisionResult.revisions);
-        setHandoffs(handoffResult.handoffs);
-        setSelectedSectionId(document.sections[0]?.id ?? '');
-      })
+      .then(
+        ([
+          document,
+          sourceResult,
+          findingResult,
+          runResult,
+          revisionResult,
+          handoffResult,
+          workspace,
+        ]) => {
+          setError('');
+          if (workspace.draft?.baseRevision === document.revision) {
+            setPrd({ ...document, sections: workspace.draft.sections });
+            setRecoveryStatus('Recovered unsaved edits. Review the document and save when ready.');
+          } else {
+            setPrd(document);
+            if (workspace.draft) setRecoveryConflict(workspace.draft);
+          }
+          setSavedPrd(document);
+          setTurns(workspace.turns);
+          setFindingDrafts(workspace.findingDrafts ?? {});
+          setHandoffInstruction(workspace.handoffInstruction ?? '');
+          setHandoffDrafts(workspace.handoffDrafts ?? {});
+          setProposalDraft(workspace.proposal);
+          if (workspace.proposal) {
+            const run = runResult.runs.find((item) => item.id === workspace.proposal?.runId);
+            setOutput(workspace.proposal.text);
+            if (run) {
+              setCitations(run.citations);
+              setProposalContext(contextForRun(run, document.revision));
+              setActiveTurnId(workspace.turns.find((turn) => turn.runId === run.id)?.id ?? null);
+            }
+          }
+          if (workspace.revision > 0) setPrompt(workspace.prompt);
+          recoveryRevision.current = workspace.revision;
+          // Opening a saved workspace is read-only. Establish the persisted
+          // baseline before autosave so another viewer cannot create a conflict.
+          const recoveredKey = JSON.stringify({
+            prompt: workspace.prompt,
+            turns: workspace.turns,
+            proposal: workspace.proposal,
+            findingDrafts: workspace.findingDrafts ?? {},
+            handoffInstruction: workspace.handoffInstruction ?? '',
+            handoffDrafts: workspace.handoffDrafts ?? {},
+            draft: workspace.draft,
+          });
+          recoverySaved.current = recoveredKey;
+          setRecoverySavedKey(recoveredKey);
+          setWorkspaceLoaded(true);
+          setSources(sourceResult.sources);
+          setFindings(findingResult.findings);
+          setAiRuns(runResult.runs);
+          setRevisions(revisionResult.revisions);
+          setHandoffs(handoffResult.handoffs);
+          setSelectedSectionId(document.sections[0]?.id ?? '');
+        },
+      )
       .catch((reason: unknown) => setError(messageFrom(reason)));
   }, [project.id]);
 
@@ -360,20 +618,60 @@ function Workbench({
     [prd, savedPrd],
   );
 
+  const workspaceSnapshot = useMemo(
+    () =>
+      !workspaceLoaded || !prd
+        ? null
+        : {
+            prompt,
+            turns,
+            proposal: proposalDraft,
+            findingDrafts,
+            handoffInstruction,
+            handoffDrafts,
+            draft:
+              recoveryConflict ??
+              (dirty ? { baseRevision: prd.revision, sections: prd.sections } : null),
+          },
+    [
+      workspaceLoaded,
+      prd,
+      prompt,
+      turns,
+      proposalDraft,
+      findingDrafts,
+      handoffInstruction,
+      handoffDrafts,
+      recoveryConflict,
+      dirty,
+    ],
+  );
+  const workspaceFingerprint = useMemo(
+    () => JSON.stringify(workspaceSnapshot),
+    [workspaceSnapshot],
+  );
+  const recoveryPending =
+    workspaceLoaded && !recoveryReadOnly && workspaceFingerprint !== recoverySavedKey;
+
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty && !recoveryPending && !busy) return;
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', warnBeforeUnload);
     return () => window.removeEventListener('beforeunload', warnBeforeUnload);
-  }, [dirty]);
+  }, [dirty, recoveryPending, busy]);
 
   const selectedSection = prd?.sections.find((section) => section.id === selectedSectionId);
 
   async function runDocumentMutation<T>(operation: () => Promise<T>): Promise<T | undefined> {
     if (documentMutationRef.current) return undefined;
+    if (recoveryUnavailable) return undefined;
+    if (recoveryConflict) {
+      setRecoveryOpen(true);
+      return undefined;
+    }
     documentMutationRef.current = true;
     setDocumentMutationBusy(true);
     try {
@@ -386,6 +684,10 @@ function Workbench({
 
   async function save(reason = 'Manual edit'): Promise<PrdDocument | null> {
     if (!prd || documentMutationRef.current) return null;
+    if (recoveryConflict) {
+      setRecoveryOpen(true);
+      return null;
+    }
     setSaveBusy(true);
     setError('');
     try {
@@ -395,6 +697,8 @@ function Workbench({
       if (!saved) return null;
       setPrd(saved);
       setSavedPrd(saved);
+      if (recoverySnapshot.current)
+        recoverySnapshot.current = { ...recoverySnapshot.current, draft: null };
       setUndoRevision(null);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
       void api.revisions(project.id).then((result) => setRevisions(result.revisions));
@@ -407,16 +711,55 @@ function Workbench({
     }
   }
 
+  async function exportCurrent(format: 'markdown' | 'docx' | 'pdf' | 'archive') {
+    if (documentMutationRef.current || !prd) return;
+    if (recoveryConflict) {
+      setExportOpen(false);
+      setRecoveryOpen(true);
+      return;
+    }
+    setExportStatus('Preparing the latest document…');
+    if (dirty && !(await save('Saved before export'))) {
+      setExportStatus(
+        'Export paused because the document could not be saved. Your edits are still here.',
+      );
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = `/api/projects/${project.id}/export?format=${format}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setExportStatus(
+      isNative
+        ? 'Choose where to save the exported file.'
+        : 'Export requested. Check your browser downloads.',
+    );
+  }
+
   async function submitAction(
     instruction: string,
     override?: { action: AiAction; scope: ActionScope },
   ) {
     if (documentMutationRef.current) return;
+    if (recoveryUnavailable) return;
+    if (recoveryConflict) {
+      setRecoveryOpen(true);
+      return;
+    }
     if (!prd || !project.selectedProvider || !project.selectedModel) {
       setProviderOpen(true);
       return;
     }
-    const requestedAction = override?.action ?? action;
+    if (busy) return false;
+    if (instruction.length > 10000) {
+      setError(
+        'Keep the instruction under 10,000 characters. Add longer material as a source; your text is retained.',
+      );
+      return false;
+    }
+    const requestedAction =
+      override?.action ?? (autoAction ? actionForInstruction(instruction, prd) : action);
     const requestedScope = override?.scope ?? scope;
     const requestedTargetSectionId =
       requestedScope === 'document' ? null : selectedSectionId || null;
@@ -437,11 +780,24 @@ function Workbench({
     if (!savedBeforeAction) return;
     const current = savedBeforeAction;
     setBusy(true);
+    setSubmittedPrompt(instruction.trim());
+    const turnId = crypto.randomUUID();
+    setActiveTurnId(turnId);
+    setTurns((items) => [
+      ...items,
+      { id: turnId, request: instruction.trim(), response: '', runId: null, status: 'interrupted' },
+    ]);
+    setActivitySequence((sequence) => sequence + 1);
+    setStalled(false);
+    setDocumentOpen(false);
+    setTab('assist');
     setError('');
     setOutput('');
+    setInterrupted(false);
     setProposalContext(
       requestedAction === 'draft' || requestedAction === 'rewrite'
         ? {
+            sourceRunId: null,
             runId: null,
             sourceRevision: current.revision,
             action: requestedAction,
@@ -473,16 +829,35 @@ function Workbench({
           ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
         },
         {
-          onText: (delta) => setOutput((value) => value + delta),
+          onText: (delta) => {
+            setActivitySequence((sequence) => sequence + 1);
+            setOutput((value) => value + delta);
+            setTurns((items) =>
+              items.map((turn) =>
+                turn.id === turnId ? { ...turn, response: turn.response + delta } : turn,
+              ),
+            );
+          },
           onCitation: (citation) =>
             setCitations((value) =>
               value.some((item) => item.id === citation.id) ? value : [...value, citation],
             ),
           onFinding: (finding) => setFindings((value) => [...value, finding]),
-          onStatus: (next) => setStatus(next.detail),
+          onStatus: (next) => {
+            setActivitySequence((sequence) => sequence + 1);
+            setStatus(next.detail);
+          },
           onCompletion: (completion) => {
+            setTurns((items) =>
+              items.map((turn) =>
+                turn.id === turnId
+                  ? { ...turn, runId: completion.runId, status: 'complete' }
+                  : turn,
+              ),
+            );
             if (requestedAction === 'draft' || requestedAction === 'rewrite') {
               setProposalContext({
+                sourceRunId: completion.runId,
                 runId: completion.runId,
                 sourceRevision: completion.revision,
                 action: requestedAction,
@@ -500,12 +875,16 @@ function Workbench({
         controller.signal,
       );
       if (requestedAction === 'review') setTab('review');
+      return true;
     } catch (reasonCaught) {
+      setInterrupted(true);
       if (!(reasonCaught instanceof DOMException && reasonCaught.name === 'AbortError')) {
         setError(messageFrom(reasonCaught));
       }
+      return false;
     } finally {
       setBusy(false);
+      setStalled(false);
       setStatus('');
       abortRef.current = null;
     }
@@ -532,6 +911,7 @@ function Workbench({
     setPrd(saved);
     setSavedPrd(saved);
     setOutput('');
+    setProposalDraft((draft) => (draft?.runId === runId ? undefined : draft));
     setProposalContext(null);
     setFindings((current) =>
       current.map((finding) =>
@@ -617,13 +997,8 @@ function Workbench({
   }
 
   async function upload(file: File) {
-    setError('');
-    try {
-      const source = await api.addSource(project.id, file);
-      setSources((current) => [...current, source]);
-    } catch (reason) {
-      setError(messageFrom(reason));
-    }
+    const source = await api.addSource(project.id, file);
+    setSources((current) => [...current, source]);
   }
 
   async function removeSource(source: SourceSummary) {
@@ -660,8 +1035,8 @@ function Workbench({
   }
 
   async function openCitation(citation: Citation) {
+    setDocumentOpen(false);
     setTab('evidence');
-    setPanelOpen(true);
     if (!citation.available || !citation.sourceId || !citation.locationId) {
       setEvidenceDetail({
         locator: citation.locator,
@@ -712,8 +1087,10 @@ function Workbench({
     const link = document.createElement('a');
     link.href = url;
     link.download = `prd-genie-request-${handoff.id}.json`;
+    document.body.append(link);
     link.click();
-    URL.revokeObjectURL(url);
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   async function importChatGptHandoff(file: File) {
@@ -751,11 +1128,230 @@ function Workbench({
     setRevisions(revisionResult.revisions);
   }
 
-  if (!prd) {
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const persistRecovery = useCallback((): Promise<boolean> => {
+    const snapshot = recoverySnapshot.current;
+    if (!snapshot || recoveryBlocked.current) return Promise.resolve(!recoveryBlocked.current);
+    recoveryQueue.current = recoveryQueue.current.then(async () => {
+      if (recoveryBlocked.current) return false;
+      const fingerprint = JSON.stringify(snapshot);
+      if (fingerprint === recoverySaved.current) return true;
+      try {
+        const saved = await api.saveWorkspace(project.id, {
+          ...snapshot,
+          revision: recoveryRevision.current,
+        });
+        recoveryRevision.current = saved.revision;
+        recoverySaved.current = fingerprint;
+        setRecoverySavedKey(fingerprint);
+        setStorageError('');
+        return true;
+      } catch (reason) {
+        if (reason instanceof ClientApiError && reason.code === 'workspace_conflict') {
+          recoveryBlocked.current = true;
+          setRecoveryUnavailable(true);
+        }
+        setStorageError(
+          reason instanceof ClientApiError && reason.code === 'workspace_conflict'
+            ? 'Another window saved this workspace. Keep this window open and copy any unsent text before reloading; the newer recovery record has not been overwritten.'
+            : `Recovery could not be saved locally. Keep this window open. ${messageFrom(reason)}`,
+        );
+        return false;
+      }
+    });
+    return recoveryQueue.current;
+  }, [project.id]);
+
+  useEffect(() => {
+    recoverySnapshot.current = workspaceSnapshot;
+    if (!workspaceSnapshot) return;
+    const timer = window.setTimeout(() => {
+      void persistRecovery();
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSnapshot, persistRecovery]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const started = performance.now();
+    const timer = window.setInterval(() => setStalled(performance.now() - started > 45000), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, activitySequence]);
+
+  useEffect(() => {
+    postShellState({
+      title: project.name,
+      subtitle: saveBusy
+        ? 'Saving…'
+        : dirty
+          ? 'Unsaved edits'
+          : `Saved locally · Version ${prd?.revision ?? 0}`,
+      dirty,
+      busy: busy || navigationBusy,
+      recoveryPending,
+      modalOpen:
+        providerOpen || sourcesOpen || structureOpen || exportOpen || createOpen || recoveryOpen,
+      hasProject: true,
+    });
+  }, [
+    project.name,
+    saveBusy,
+    dirty,
+    busy,
+    navigationBusy,
+    recoveryPending,
+    prd?.revision,
+    providerOpen,
+    sourcesOpen,
+    structureOpen,
+    exportOpen,
+    createOpen,
+    recoveryOpen,
+  ]);
+
+  useEffect(() => {
+    const command = (event: Event) => {
+      switch ((event as CustomEvent<string>).detail) {
+        case 'toggle-sidebar':
+          setRailOpen((open) => !open);
+          break;
+        case 'conversation':
+          setDocumentOpen(false);
+          setTab('assist');
+          break;
+        case 'document':
+          setDocumentOpen((open) => !open);
+          break;
+        case 'sources':
+          setSourcesOpen(true);
+          break;
+        case 'history':
+          setDocumentOpen(false);
+          setTab('history');
+          break;
+        case 'export':
+          setExportOpen(true);
+          break;
+        case 'settings':
+          setProviderOpen(true);
+          break;
+        case 'save':
+          if (dirty) void save();
+          break;
+        case 'new-project':
+          setCreateOpen(true);
+          break;
+      }
+    };
+    const download = (event: Event) => {
+      const result = (event as CustomEvent<{ status: string; message?: string }>).detail;
+      setExportStatus(
+        result.status === 'completed'
+          ? 'Export saved.'
+          : result.status === 'cancelled'
+            ? 'Export cancelled. Your document is unchanged.'
+            : result.message || 'Export could not finish. Try another location.',
+      );
+    };
+    const keyboard = (event: KeyboardEvent) => {
+      if (!isNative && (event.metaKey || event.ctrlKey)) {
+        if (event.key === 's') {
+          event.preventDefault();
+          if (dirty) void save();
+        }
+        if (event.key === ',') {
+          event.preventDefault();
+          setProviderOpen(true);
+        }
+      }
+    };
+    window.addEventListener('prd-command', command);
+    window.addEventListener('prd-download', download);
+    window.addEventListener('keydown', keyboard);
+    return () => {
+      window.removeEventListener('prd-command', command);
+      window.removeEventListener('prd-download', download);
+      window.removeEventListener('keydown', keyboard);
+    };
+  });
+
+  useEffect(() => {
+    document
+      .getElementById(documentOpen ? 'prd-editor' : 'conversation-workspace')
+      ?.focus({ preventScroll: true });
+  }, [documentOpen, tab]);
+
+  async function uploadFiles(files: File[]) {
+    if (!files.length) return;
+    setSourcesOpen(true);
+    setUploading(true);
+    const failures: string[] = [];
+    setError('');
+    try {
+      for (const file of files) {
+        try {
+          await upload(file);
+        } catch (reason) {
+          failures.push(`${file.name}: ${messageFrom(reason)}`);
+        }
+      }
+      if (failures.length) setError(failures.join(' '));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function leaveWorkspace(operation: () => Promise<void> | void, reason: string) {
+    if (navigationRef.current || documentMutationRef.current) return;
+    if (busy) {
+      setError(
+        'Stop the current response before leaving this project. Your instruction will be kept.',
+      );
+      return;
+    }
+    if (recoveryConflict) {
+      setRecoveryOpen(true);
+      return;
+    }
+    if (recoveryUnavailable && recoveryPending) {
+      setError(
+        'Keep this window open until recovery is saved. Copy any new text before reloading.',
+      );
+      return;
+    }
+    navigationRef.current = true;
+    setNavigationBusy(true);
+    try {
+      if (dirty && !(await save(reason))) return;
+      if (!recoveryUnavailable && !(await persistRecovery())) return;
+      await operation();
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      navigationRef.current = false;
+      setNavigationBusy(false);
+    }
+  }
+
+  async function importAnotherProject(file: File) {
+    await leaveWorkspace(() => onProjectImport(file), 'Saved before opening another PRD');
+  }
+
+  async function createAnotherProject() {
+    if (!newProjectName.trim()) return;
+    await leaveWorkspace(
+      () => onProjectCreate(newProjectName.trim()),
+      'Saved before creating project',
+    );
+  }
+
+  if (!prd || !workspaceLoaded) {
     return (
-      <main className="boot-state" aria-busy="true">
+      <main className="boot-state" aria-busy={!error}>
         <BookOpenText aria-hidden="true" />
-        <p>Loading project</p>
+        <p>{error || 'Opening project…'}</p>
+        {error && <Button onClick={() => window.location.reload()}>Retry</Button>}
       </main>
     );
   }
@@ -767,9 +1363,9 @@ function Workbench({
     proposalContext?.scope === 'document'
       ? 'Complete document'
       : proposalTargetSection
-        ? `${proposalTargetSection.title} [${proposalTargetSection.id.slice(0, 8)}]`
+        ? proposalTargetSection.title
         : proposalContext?.targetSectionId
-          ? `Archived section [${proposalContext.targetSectionId.slice(0, 8)}]`
+          ? 'Archived section'
           : 'Unknown target';
   const proposalApplyLabel =
     proposalContext?.scope === 'document'
@@ -779,277 +1375,91 @@ function Workbench({
         : `Apply to ${proposalTargetSection?.title ?? 'section'}`;
 
   return (
-    <div className="workbench">
-      <a className="skip-link" href="#prd-editor">
-        Skip to PRD editor
+    <div
+      inert={navigationBusy}
+      aria-busy={navigationBusy}
+      className={`workbench ${railOpen ? 'rail-visible' : 'rail-hidden'} ${isNative ? 'native-workbench' : ''}`}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (event.dataTransfer.files.length) {
+          event.preventDefault();
+          setSourcesOpen(true);
+          void uploadFiles(Array.from(event.dataTransfer.files));
+        }
+      }}
+    >
+      <a className="skip-link" href={documentOpen ? '#prd-editor' : '#conversation-workspace'}>
+        Skip to workspace
       </a>
-      {offline && (
-        <div className="offline-banner" role="status">
-          You are offline. Editing, local sources, and Ollama remain available. Remote provider
-          actions are paused.
-        </div>
-      )}
-      <header className="topbar">
+      <header className={`topbar ${isNative ? 'native-hidden' : ''}`}>
         <Button
-          className="mobile-only"
           variant="ghost"
           size="icon"
-          aria-label="Open project navigation"
-          onClick={() => setRailOpen(true)}
+          aria-label="Toggle project navigation"
+          aria-expanded={railOpen}
+          onClick={() => setRailOpen(!railOpen)}
         >
-          <Menu aria-hidden="true" />
+          <PanelLeft aria-hidden="true" />
         </Button>
         <div className="project-title">
-          <span className="app-name">PRD Genie</span>
-          <span aria-hidden="true">/</span>
           <strong>{project.name}</strong>
-          {dirty && <span className="dirty-label">Unsaved</span>}
+          <small>
+            {saveBusy
+              ? 'Saving…'
+              : dirty
+                ? 'Unsaved edits'
+                : `Saved locally · Version ${prd.revision}`}
+          </small>
         </div>
         <div className="topbar-actions">
           <Button
-            variant="outline"
-            onClick={() => setProviderOpen(true)}
-            aria-label="Configure model provider"
-          >
-            <KeyRound aria-hidden="true" />
-            <span className="label-wide">{project.selectedModel ?? 'Configure model'}</span>
-          </Button>
-          <Button disabled={!dirty || saveBusy || documentMutationBusy} onClick={() => void save()}>
-            <Save aria-hidden="true" />
-            <span className="label-wide">{saveBusy ? 'Saving' : 'Save'}</span>
-          </Button>
-          <Button
-            className="mobile-only"
             variant="ghost"
             size="icon"
-            aria-label="Open assist and review panel"
-            onClick={() => setPanelOpen(true)}
+            aria-label="Sources"
+            onClick={() => setSourcesOpen(true)}
           >
-            <PanelRight aria-hidden="true" />
+            <Paperclip aria-hidden="true" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="History"
+            onClick={() => {
+              setDocumentOpen(false);
+              setTab('history');
+            }}
+          >
+            <History aria-hidden="true" />
+          </Button>
+          <Button variant="outline" onClick={() => setExportOpen(true)}>
+            Export
           </Button>
         </div>
       </header>
+      <div className="workspace-notices">
+        {offline && (
+          <div className="offline-banner" role="status">
+            You are offline. Editing, saving and export remain available. AI works offline only with
+            a running local model.
+          </div>
+        )}
 
-      <aside
-        className={`left-rail ${railOpen ? 'drawer-open' : ''}`}
-        aria-label="Project navigation"
-      >
-        <div className="drawer-heading mobile-only">
-          <strong>Workspace</strong>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Close navigation"
-            onClick={() => setRailOpen(false)}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-        <nav className="project-switcher" aria-label="Projects">
-          <div className="rail-label">
-            <span>Projects</span>
+        {importWarnings.length > 0 && (
+          <div className="inline-error" role="alert">
+            <CircleAlert aria-hidden="true" />
+            <span>Import needs a visual check: {importWarnings.join(' ')}</span>
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Create project"
-              disabled={documentMutationBusy}
-              onClick={() => {
-                if (documentMutationRef.current) return;
-                if (dirty && !window.confirm('Discard unsaved changes and create a project?')) {
-                  return;
-                }
-                const name = window.prompt('Project name');
-                if (name?.trim()) {
-                  void runDocumentMutation(() => onProjectCreate(name.trim())).catch(
-                    (reason: unknown) => setError(messageFrom(reason)),
-                  );
-                }
-              }}
+              aria-label="Dismiss import warning"
+              onClick={onDismissImportWarnings}
             >
-              <Plus aria-hidden="true" />
+              <X aria-hidden="true" />
             </Button>
           </div>
-          {projects.map((item) => (
-            <button
-              key={item.id}
-              className={item.id === project.id ? 'rail-item selected' : 'rail-item'}
-              disabled={documentMutationBusy}
-              onClick={() => {
-                if (documentMutationRef.current) return;
-                if (!dirty || window.confirm('Discard unsaved changes and switch projects?')) {
-                  setHandoffCitationIds([]);
-                  onProjectSelect(item.id);
-                  setRailOpen(false);
-                }
-              }}
-            >
-              <FolderOpen aria-hidden="true" />
-              <span>{item.name}</span>
-            </button>
-          ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={documentMutationBusy}
-            onClick={() => archiveInputRef.current?.click()}
-          >
-            <Upload aria-hidden="true" />
-            Restore archive
-          </Button>
-          <input
-            ref={archiveInputRef}
-            className="visually-hidden"
-            type="file"
-            accept=".prdgenie.zip"
-            aria-label="Restore PRD Genie project archive"
-            disabled={documentMutationBusy}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (
-                file &&
-                !documentMutationRef.current &&
-                (!dirty || window.confirm('Discard unsaved changes and restore this archive?'))
-              ) {
-                void runDocumentMutation(() => onProjectImport(file)).catch((reason: unknown) =>
-                  setError(messageFrom(reason)),
-                );
-              }
-              event.target.value = '';
-            }}
-          />
-        </nav>
-
-        <nav className="outline" aria-label="Document outline">
-          <div className="rail-label">
-            <span>Outline</span>
-            <span>{prd.sections.length}</span>
-          </div>
-          {prd.sections.map((section) => (
-            <a
-              key={section.id}
-              href={`#section-${section.id}`}
-              className={
-                section.id === selectedSectionId ? 'outline-item selected' : 'outline-item'
-              }
-              onClick={() => {
-                setSelectedSectionId(section.id);
-                setRailOpen(false);
-              }}
-            >
-              <span>{String(section.position + 1).padStart(2, '0')}</span>
-              {section.title}
-            </a>
-          ))}
-        </nav>
-
-        <section className="source-rail" aria-labelledby="sources-heading">
-          <div className="rail-label">
-            <span id="sources-heading">Sources</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Add source"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <FilePlus2 aria-hidden="true" />
-            </Button>
-          </div>
-          <input
-            ref={fileInputRef}
-            className="visually-hidden"
-            type="file"
-            aria-label="Add source file"
-            accept=".pdf,.docx,.md,.markdown,.txt"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void upload(file);
-              event.target.value = '';
-            }}
-          />
-          {sources.length === 0 ? (
-            <button className="empty-source" onClick={() => fileInputRef.current?.click()}>
-              Add evidence
-              <small>PDF, DOCX, Markdown, or text</small>
-            </button>
-          ) : (
-            sources.map((source) => (
-              <div className="source-item" key={source.id}>
-                <div>
-                  <span>{source.name}</span>
-                  <small>{source.status}</small>
-                  {source.error && <small>{source.error}</small>}
-                </div>
-                {(source.status === 'partial' || source.status === 'failed') && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      void api
-                        .retrySourceIndex(project.id, source.id)
-                        .then((updated) =>
-                          setSources((current) =>
-                            current.map((item) => (item.id === updated.id ? updated : item)),
-                          ),
-                        )
-                        .catch((reason: unknown) => setError(messageFrom(reason)));
-                    }}
-                  >
-                    Retry index
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Delete ${source.name}`}
-                  disabled={busy || documentMutationBusy}
-                  onClick={() => {
-                    if (!window.confirm(`Delete ${source.name} and its index?`)) return;
-                    void removeSource(source);
-                  }}
-                >
-                  <Trash2 aria-hidden="true" />
-                </Button>
-              </div>
-            ))
-          )}
-        </section>
-        <section className="project-lifecycle" aria-label="Project data">
-          <a
-            href={`/api/projects/${project.id}/export?format=archive`}
-            aria-disabled={documentMutationBusy}
-            onClick={(event) => {
-              if (documentMutationBusy) event.preventDefault();
-            }}
-          >
-            <Download aria-hidden="true" />
-            Export archive
-          </a>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={documentMutationBusy}
-            onClick={() => {
-              if (documentMutationRef.current) return;
-              if (
-                !window.confirm(
-                  dirty
-                    ? `Delete ${project.name} and discard unsaved changes? Export an archive first if you may need this project later.`
-                    : `Delete ${project.name}? Export an archive first if you may need this project later.`,
-                )
-              )
-                return;
-              void runDocumentMutation(() => onProjectDelete(project.id)).catch((reason: unknown) =>
-                setError(messageFrom(reason)),
-              );
-            }}
-          >
-            <Trash2 aria-hidden="true" />
-            Delete project
-          </Button>
-        </section>
-      </aside>
-
-      <main id="prd-editor" className="document-surface">
+        )}
         {undoRevision !== null && prd.revision === undoRevision + 1 && (
           <div className="undo-banner" role="status">
             <span>A proposal changed the current revision.</span>
@@ -1078,10 +1488,240 @@ function Workbench({
             </Button>
           </div>
         )}
+        {storageError && (
+          <div role="alert" className="inline-error">
+            <span>{storageError}</span>
+            {!recoveryUnavailable && (
+              <Button variant="ghost" onClick={() => void persistRecovery()}>
+                Retry
+              </Button>
+            )}
+          </div>
+        )}
+        {recoveryStatus && (
+          <div className="undo-banner" role="status">
+            <span>{recoveryStatus}</span>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setDocumentOpen(true);
+                setRecoveryStatus('');
+              }}
+            >
+              Review document
+            </Button>
+          </div>
+        )}
+        {recoveryConflict && (
+          <div className="inline-error" role="alert">
+            <span>
+              Recovered edits were based on an older document version. Choose what to keep before
+              editing.
+            </span>
+            <Button variant="ghost" onClick={() => setRecoveryOpen(true)}>
+              Review recovered edits
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <aside
+        className={`left-rail ${railOpen ? 'drawer-open' : ''}`}
+        hidden={!railOpen}
+        aria-label="Project navigation"
+      >
+        <div className="drawer-heading mobile-only">
+          <strong>Workspace</strong>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close navigation"
+            onClick={() => setRailOpen(false)}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </div>
+        <nav className="project-switcher" aria-label="Projects">
+          <div className="rail-label">
+            <span>Projects</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Create project"
+              disabled={documentMutationBusy}
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus aria-hidden="true" />
+            </Button>
+          </div>
+          {projects.map((item) => (
+            <button
+              key={item.id}
+              className={item.id === project.id ? 'rail-item selected' : 'rail-item'}
+              disabled={documentMutationBusy}
+              onClick={() => {
+                if (item.id !== project.id)
+                  void leaveWorkspace(
+                    () => onProjectSelect(item.id),
+                    'Saved before switching projects',
+                  );
+              }}
+            >
+              <FolderOpen aria-hidden="true" />
+              <span>{item.name}</span>
+            </button>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={documentMutationBusy}
+            onClick={() => archiveInputRef.current?.click()}
+          >
+            <Upload aria-hidden="true" />
+            Import PRD or archive
+          </Button>
+          <input
+            ref={archiveInputRef}
+            className="visually-hidden"
+            type="file"
+            hidden
+            accept=".prdgenie.zip,.md,.markdown,.txt,.docx"
+            aria-label="Import PRD or restore project archive"
+            disabled={documentMutationBusy}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file && !documentMutationRef.current) {
+                void importAnotherProject(file).catch((reason: unknown) =>
+                  setError(messageFrom(reason)),
+                );
+              }
+              event.target.value = '';
+            }}
+          />
+        </nav>
+
+        <nav className="workspace-navigation" aria-label="Workspace">
+          <button
+            className={!documentOpen && tab === 'assist' ? 'rail-item selected' : 'rail-item'}
+            onClick={() => {
+              setDocumentOpen(false);
+              setTab('assist');
+            }}
+          >
+            <MessageSquare aria-hidden="true" />
+            <span>Conversation</span>
+          </button>
+          <button
+            className={documentOpen ? 'rail-item selected' : 'rail-item'}
+            onClick={() => setDocumentOpen(true)}
+          >
+            <FileText aria-hidden="true" />
+            <span>Document</span>
+          </button>
+          <button className="rail-item" onClick={() => setSourcesOpen(true)}>
+            <Paperclip aria-hidden="true" />
+            <span>Sources</span>
+            <small>{sources.length}</small>
+          </button>
+          <button
+            className={!documentOpen && tab === 'history' ? 'rail-item selected' : 'rail-item'}
+            onClick={() => {
+              setDocumentOpen(false);
+              setTab('history');
+            }}
+          >
+            <History aria-hidden="true" />
+            <span>History</span>
+          </button>
+        </nav>
+        <nav className="document-outline" aria-label="Document outline" hidden={!documentOpen}>
+          <div className="rail-label">
+            <span>Outline</span>
+            <span>{prd.sections.length}</span>
+          </div>
+          {prd.sections.map((section) => (
+            <a
+              key={section.id}
+              href={`#section-${section.id}`}
+              className={
+                section.id === selectedSectionId ? 'outline-item selected' : 'outline-item'
+              }
+              onClick={() => {
+                setSelectedSectionId(section.id);
+                setDocumentOpen(true);
+              }}
+            >
+              <span>{String(section.position + 1).padStart(2, '0')}</span>
+              {section.title}
+            </a>
+          ))}
+        </nav>
+
+        <section className="project-lifecycle" aria-label="Project data">
+          <Button variant="ghost" size="sm" onClick={() => setProviderOpen(true)}>
+            <Settings2 aria-hidden="true" />
+            AI settings
+          </Button>
+          <button
+            type="button"
+            disabled={documentMutationBusy || saveBusy}
+            onClick={() => void exportCurrent('archive')}
+          >
+            <Download aria-hidden="true" />
+            Export archive
+          </button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={documentMutationBusy}
+            onClick={() => {
+              if (documentMutationRef.current) return;
+              if (
+                !window.confirm(
+                  dirty
+                    ? `Delete ${project.name} and discard unsaved changes? Export an archive first if you may need this project later.`
+                    : `Delete ${project.name}? Export an archive first if you may need this project later.`,
+                )
+              )
+                return;
+              void runDocumentMutation(() => onProjectDelete(project.id)).catch((reason: unknown) =>
+                setError(messageFrom(reason)),
+              );
+            }}
+          >
+            <Trash2 aria-hidden="true" />
+            Delete project
+          </Button>
+        </section>
+      </aside>
+
+      <main id="prd-editor" className="document-surface" hidden={!documentOpen} tabIndex={-1}>
+        <div className="workspace-viewbar">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setDocumentOpen(false);
+              setTab('assist');
+            }}
+          >
+            <MessageSquare aria-hidden="true" />
+            Conversation
+          </Button>
+          <span>Document</span>
+          <Button variant="ghost" onClick={() => setStructureOpen(true)}>
+            Structure
+          </Button>
+          <Button disabled={!dirty || saveBusy || documentMutationBusy} onClick={() => void save()}>
+            <Save aria-hidden="true" />
+            {saveBusy ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
         <div className="document-heading">
           <p className="eyebrow">Product requirements document</p>
           <h1>{project.name}</h1>
-          <p>{project.description || 'Define the decision, evidence, and delivery contract.'}</p>
+          <p>
+            {project.description || `Version ${prd.revision} · ${prd.sections.length} sections`}
+          </p>
         </div>
         <div className="sections">
           {prd.sections.map((section, index) => (
@@ -1094,11 +1734,14 @@ function Workbench({
                 <span className="section-number">{String(index + 1).padStart(2, '0')}</span>
                 <input
                   aria-label="Section title"
-                  disabled={documentMutationBusy}
+                  disabled={
+                    documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)
+                  }
                   value={section.title}
                   onFocus={() => setSelectedSectionId(section.id)}
                   onChange={(event) => {
-                    if (documentMutationRef.current) return;
+                    if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
+                      return;
                     setPrd((current) =>
                       current
                         ? {
@@ -1140,9 +1783,12 @@ function Workbench({
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Remove ${section.title}`}
-                    disabled={documentMutationBusy || prd.sections.length === 1}
+                    disabled={
+                      documentMutationBusy || Boolean(recoveryConflict) || prd.sections.length === 1
+                    }
                     onClick={() => {
-                      if (documentMutationRef.current) return;
+                      if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
+                        return;
                       if (!window.confirm(`Remove the ${section.title} section?`)) return;
                       setPrd({
                         ...prd,
@@ -1159,11 +1805,12 @@ function Workbench({
               <SectionEditor
                 sectionId={section.id}
                 value={section.body}
-                disabled={documentMutationBusy}
+                disabled={documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)}
                 onFocus={() => setSelectedSectionId(section.id)}
                 onSelectionChange={setSelection}
                 onChange={(body) => {
-                  if (documentMutationRef.current) return;
+                  if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
+                    return;
                   setPrd((current) =>
                     current
                       ? {
@@ -1181,9 +1828,9 @@ function Workbench({
           <Button
             variant="outline"
             className="add-section"
-            disabled={documentMutationBusy}
+            disabled={documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)}
             onClick={() => {
-              if (documentMutationRef.current) return;
+              if (documentMutationRef.current || recoveryUnavailable || recoveryConflict) return;
               setPrd({
                 ...prd,
                 sections: [
@@ -1206,94 +1853,126 @@ function Workbench({
         </div>
       </main>
 
-      <aside
-        className={`right-panel ${panelOpen ? 'drawer-open' : ''}`}
-        aria-label="Assist and review"
+      <main
+        id="conversation-workspace"
+        className="workspace-panel"
+        hidden={documentOpen}
+        tabIndex={-1}
+        aria-label="Conversation and document work"
       >
-        <div className="panel-tabs" role="tablist" aria-label="Assistant panels">
-          {(['assist', 'review', 'evidence', 'history'] as const).map((value) => (
-            <button
-              key={value}
-              role="tab"
-              aria-selected={tab === value}
-              onClick={() => setTab(value)}
-            >
-              {value}
-              {value === 'review' &&
-                findings.filter((finding) => finding.status === 'open').length > 0 && (
-                  <span>{findings.filter((finding) => finding.status === 'open').length}</span>
-                )}
-            </button>
-          ))}
-          <Button
-            className="mobile-only panel-close"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close panel"
-            onClick={() => setPanelOpen(false)}
+        <h1 className="visually-hidden">{project.name}</h1>
+        <div className="workspace-viewbar">
+          <button
+            className={tab === 'assist' ? 'view-selected' : ''}
+            onClick={() => setTab('assist')}
           >
-            <X aria-hidden="true" />
-          </Button>
+            Conversation
+          </button>
+          <button onClick={() => setDocumentOpen(true)}>Document</button>
+          <span className="viewbar-spacer" />
+          {tab !== 'assist' && (
+            <span>
+              {tab === 'review' ? 'Review findings' : tab === 'history' ? 'History' : 'Evidence'}
+            </span>
+          )}
+          {findings.filter((finding) => finding.status === 'open').length > 0 &&
+            tab !== 'review' && (
+              <button onClick={() => setTab('review')}>
+                Review findings ({findings.filter((finding) => finding.status === 'open').length})
+              </button>
+            )}
+          <button onClick={() => setStructureOpen(true)}>Structure</button>
         </div>
 
         {tab === 'assist' && (
           <div className="assist-panel">
-            <div className="action-context">
-              <label>
-                <span>Action</span>
-                <select
-                  value={action}
-                  disabled={documentMutationBusy}
-                  onChange={(event) => {
-                    if (!documentMutationRef.current) setAction(event.target.value as AiAction);
-                  }}
-                >
-                  <option value="ask">Ask</option>
-                  <option value="rewrite">Rewrite</option>
-                  <option value="draft">Draft</option>
-                  <option value="review">Review</option>
-                </select>
-              </label>
-              <label>
-                <span>Scope</span>
-                <select
-                  value={scope}
-                  disabled={documentMutationBusy}
-                  onChange={(event) => {
-                    if (!documentMutationRef.current) setScope(event.target.value as ActionScope);
-                  }}
-                >
-                  <option value="section">Section</option>
-                  <option value="selection" disabled={!selection}>
-                    Selection{selection ? '' : ' unavailable'}
-                  </option>
-                  <option value="document">Document</option>
-                </select>
-              </label>
-            </div>
-            <p className="scope-caption">
-              {proposalContext
-                ? `Proposal target: ${proposalTargetLabel}`
-                : scope === 'section'
-                  ? (selectedSection?.title ?? 'Choose a section')
-                  : scope === 'selection'
-                    ? `${selection.length} selected characters`
-                    : `${prd.sections.length} sections`}
-            </p>
-
             <Conversation className="assist-conversation">
               <ConversationContent>
-                {!output && !busy ? (
+                {turns
+                  .filter((turn) => turn.id !== activeTurnId)
+                  .map((turn) => (
+                    <div className="conversation-turn" key={turn.id}>
+                      <Message from="user">
+                        <span className="message-author">You</span>
+                        <MessageContent>
+                          <p>{turn.request || 'Document action'}</p>
+                        </MessageContent>
+                      </Message>
+                      <Message from="assistant">
+                        <span className="message-author">PRD Genie</span>
+                        <MessageContent>
+                          <MessageResponse>
+                            {turn.response ||
+                              (turn.status === 'complete'
+                                ? 'Review completed. Open findings or History for the result.'
+                                : 'This response did not finish.')}
+                          </MessageResponse>
+                        </MessageContent>
+                        {turn.status === 'interrupted' && (
+                          <p className="recovery-note">
+                            Incomplete response. No changes were applied automatically.
+                          </p>
+                        )}
+                        {turn.runId && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setTab('history');
+                            }}
+                          >
+                            Inspect saved run in History
+                          </Button>
+                        )}
+                      </Message>
+                    </div>
+                  ))}
+                {submittedPrompt && (
+                  <Message from="user">
+                    <span className="message-author">You</span>
+                    <MessageContent>
+                      <p>{submittedPrompt}</p>
+                    </MessageContent>
+                  </Message>
+                )}
+
+                {!output && !busy && !interrupted && turns.length === 0 ? (
                   <ConversationEmptyState
                     icon={<SearchCheck />}
-                    title="Work against the document"
-                    description="Ask a question, draft a section, or request a review. Nothing is applied automatically."
+                    title={
+                      prd.sections.some((section) => section.body.trim())
+                        ? 'Continue with this PRD'
+                        : 'What would you like to work on?'
+                    }
+                    description="Describe what you need, add supporting material, or ask for a review. Proposed changes are yours to accept."
                   />
-                ) : (
+                ) : output || busy || interrupted ? (
                   <Message from="assistant">
+                    <span className="message-author">PRD Genie</span>
                     <MessageContent>
-                      {status && <p className="stream-status">{status}</p>}
+                      {busy && (
+                        <p className="stream-status" role="status">
+                          {status || 'Preparing response…'}
+                        </p>
+                      )}
+                      {stalled && busy && (
+                        <p className="recovery-note" role="status">
+                          Still waiting for the provider. You can stop safely; your instruction will
+                          be kept.
+                        </p>
+                      )}
+                      {interrupted && (
+                        <p className="inline-error" role="alert">
+                          This response stopped before completion. Your request is kept below; run
+                          it again when ready.
+                        </p>
+                      )}
                       <MessageResponse>{output}</MessageResponse>
+                      {!busy && output && (
+                        <Button variant="ghost" size="sm" onClick={() => setDocumentOpen(true)}>
+                          Open document
+                        </Button>
+                      )}
                     </MessageContent>
                     {citations.length > 0 && (
                       <Sources>
@@ -1316,9 +1995,7 @@ function Workbench({
                     {output && proposalContext && (
                       <>
                         <p className="proposal-provenance">
-                          Proposal from {proposalContext.provider} / {proposalContext.model},
-                          revision {proposalContext.sourceRevision}, {proposalContext.action} on{' '}
-                          {proposalContext.scope} scope
+                          Proposed change · Based on version {proposalContext.sourceRevision}
                         </p>
                         <p className="proposal-provenance">
                           Target: {proposalTargetLabel}
@@ -1337,15 +2014,30 @@ function Workbench({
                             <textarea
                               aria-label="Revised AI proposal"
                               value={output}
-                              disabled={documentMutationBusy}
+                              disabled={documentMutationBusy || recoveryUnavailable}
                               onChange={(event) => {
-                                if (!documentMutationRef.current) setOutput(event.target.value);
+                                if (!documentMutationRef.current && !recoveryUnavailable) {
+                                  if (
+                                    proposalDraft &&
+                                    proposalDraft.runId !== proposalContext?.sourceRunId &&
+                                    !window.confirm(
+                                      'Replace your saved edits to the other proposal? Cancel to keep them in History.',
+                                    )
+                                  )
+                                    return;
+                                  setOutput(event.target.value);
+                                  setProposalDraft({
+                                    runId: proposalContext?.sourceRunId ?? null,
+                                    text: event.target.value,
+                                  });
+                                }
                               }}
                             />
                           </details>
                         )}
                         <MessageActions>
                           <MessageAction
+                            size="sm"
                             label={proposalApplyLabel}
                             tooltip="Creates a revision bound to this AI run"
                             disabled={
@@ -1366,12 +2058,16 @@ function Workbench({
                             Apply
                           </MessageAction>
                           <MessageAction
+                            size="sm"
                             label="Dismiss proposal"
                             tooltip="Leaves the PRD unchanged"
                             disabled={documentMutationBusy}
                             onClick={() => {
                               if (documentMutationRef.current) return;
                               setOutput('');
+                              setProposalDraft((draft) =>
+                                draft?.runId === proposalContext?.sourceRunId ? undefined : draft,
+                              );
                               setProposalContext(null);
                             }}
                           >
@@ -1382,26 +2078,105 @@ function Workbench({
                       </>
                     )}
                   </Message>
-                )}
+                ) : null}
               </ConversationContent>
               <ConversationScrollButton />
             </Conversation>
 
-            <PromptInput onSubmit={({ text }) => submitAction(text)} className="assist-input">
+            <div className="action-context">
+              <label>
+                <span>Action</span>
+                <select
+                  value={autoAction ? 'auto' : action}
+                  disabled={documentMutationBusy}
+                  onChange={(event) => {
+                    if (!documentMutationRef.current) {
+                      setAutoAction(event.target.value === 'auto');
+                      if (event.target.value !== 'auto') setAction(event.target.value as AiAction);
+                    }
+                  }}
+                >
+                  <option value="auto">
+                    From instruction ({actionForInstruction(prompt, prd)})
+                  </option>
+                  <option value="ask">Ask</option>
+                  <option value="rewrite">Rewrite</option>
+                  <option value="draft">Draft</option>
+                  <option value="review">Review</option>
+                </select>
+              </label>
+              <label>
+                <span>Apply to</span>
+                <select
+                  value={scope}
+                  disabled={documentMutationBusy}
+                  onChange={(event) => {
+                    if (!documentMutationRef.current) setScope(event.target.value as ActionScope);
+                  }}
+                >
+                  <option value="section">Section</option>
+                  <option value="selection" disabled={!selection}>
+                    Selection{selection ? '' : ' unavailable'}
+                  </option>
+                  <option value="document">Whole PRD</option>
+                </select>
+              </label>
+            </div>
+            <p className="scope-caption">
+              {proposalContext
+                ? `Proposal target: ${proposalTargetLabel}`
+                : scope === 'section'
+                  ? (selectedSection?.title ?? 'Choose a section')
+                  : scope === 'selection'
+                    ? `${selection.length} selected characters`
+                    : `${prd.sections.length} sections`}
+            </p>
+
+            <PromptInput
+              onSubmit={async ({ text }) => {
+                if (await submitAction(text))
+                  setPrompt((current) => (current === text ? '' : current));
+              }}
+              className="assist-input"
+            >
               <PromptInputTextarea
-                placeholder={
-                  action === 'review'
-                    ? 'Optional review focus'
-                    : action === 'rewrite'
-                      ? 'How should this be improved?'
-                      : 'Ask about this PRD'
-                }
-                disabled={
-                  busy || documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
-                }
+                value={prompt}
+                onChange={(event) => setPrompt(event.currentTarget.value)}
+                placeholder="Describe a PRD, ask for a review, or explain what to change…"
+                aria-label="Your instruction"
+                disabled={documentMutationBusy || recoveryUnavailable}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                    event.stopPropagation();
+                    if (event.metaKey || event.ctrlKey) {
+                      event.preventDefault();
+                      if (!busy) event.currentTarget.form?.requestSubmit();
+                    }
+                  }
+                }}
               />
               <PromptInputFooter>
                 <PromptInputTools>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Attach source files"
+                    disabled={uploading}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSourcesOpen(true)}
+                  >
+                    {uploading
+                      ? 'Adding files…'
+                      : `${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
+                  </Button>
                   <Button
                     type="button"
                     variant="ghost"
@@ -1410,13 +2185,16 @@ function Workbench({
                     onClick={() => setProviderOpen(true)}
                   >
                     <KeyRound aria-hidden="true" />
-                    {project.selectedModel ?? 'Model'}
+                    {project.selectedProvider
+                      ? `${project.selectedProvider === 'ollama' ? 'Local' : 'Online'} · ${project.selectedModel ?? project.selectedProvider}`
+                      : 'AI settings'}
                   </Button>
                 </PromptInputTools>
                 <PromptInputSubmit
                   status={busy ? 'streaming' : 'ready'}
                   disabled={
-                    documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
+                    documentMutationBusy ||
+                    (!busy && offline && project.selectedProvider !== 'ollama')
                   }
                   onClick={(event) => {
                     if (busy) {
@@ -1427,6 +2205,16 @@ function Workbench({
                 />
               </PromptInputFooter>
             </PromptInput>
+            <p className="composer-caption">
+              {project.selectedProvider
+                ? activeProviderState?.configured
+                  ? project.selectedProvider === 'ollama'
+                    ? 'Local model must be running.'
+                    : 'Relevant source excerpts and document context are sent to the selected online provider.'
+                  : 'Selected provider needs setup. Your work remains available.'
+                : 'AI is optional. Edit the document or use manual handoff in History.'}{' '}
+              <span>⌘ Return to send</span>
+            </p>
           </div>
         )}
 
@@ -1486,9 +2274,9 @@ function Workbench({
                           <span>Revise before accepting</span>
                           <textarea
                             value={findingDrafts[finding.id] ?? finding.proposedPatch.afterMarkdown}
-                            disabled={documentMutationBusy}
+                            disabled={documentMutationBusy || recoveryUnavailable}
                             onChange={(event) => {
-                              if (documentMutationRef.current) return;
+                              if (documentMutationRef.current || recoveryUnavailable) return;
                               setFindingDrafts((current) => ({
                                 ...current,
                                 [finding.id]: event.target.value,
@@ -1612,14 +2400,14 @@ function Workbench({
               <div className="handoff-compose">
                 <p>
                   Export only the current {scope === 'document' ? 'document' : 'section'} and the
-                  evidence you select below. OpenAI processes this material inside ChatGPT. A
-                  ChatGPT subscription does not provide API access to the standalone app.
+                  evidence you select below. OpenAI processes this material inside ChatGPT. This
+                  handoff works separately from the optional ChatGPT plan provider in AI settings.
                 </p>
                 <label>
                   <span>Instruction</span>
                   <textarea
                     value={handoffInstruction}
-                    disabled={documentMutationBusy}
+                    disabled={documentMutationBusy || recoveryUnavailable}
                     onChange={(event) => {
                       if (!documentMutationRef.current) setHandoffInstruction(event.target.value);
                     }}
@@ -1635,7 +2423,7 @@ function Workbench({
                         <input
                           type="checkbox"
                           checked={handoffCitationIds.includes(citation.id)}
-                          disabled={documentMutationBusy}
+                          disabled={documentMutationBusy || recoveryUnavailable}
                           onChange={(event) => {
                             if (documentMutationRef.current) return;
                             setHandoffCitationIds((current) =>
@@ -1678,6 +2466,7 @@ function Workbench({
                     ref={handoffInputRef}
                     className="visually-hidden"
                     type="file"
+                    hidden
                     accept="application/json,.json"
                     aria-label="Import ChatGPT handoff response"
                     disabled={documentMutationBusy}
@@ -1722,9 +2511,13 @@ function Workbench({
                               <input
                                 type="checkbox"
                                 checked={enabled}
-                                disabled={documentMutationBusy || handoff.status !== 'staged'}
+                                disabled={
+                                  documentMutationBusy ||
+                                  recoveryUnavailable ||
+                                  handoff.status !== 'staged'
+                                }
                                 onChange={(event) => {
-                                  if (documentMutationRef.current) return;
+                                  if (documentMutationRef.current || recoveryUnavailable) return;
                                   setHandoffDrafts((current) => ({
                                     ...current,
                                     [handoff.id]: {
@@ -1740,11 +2533,14 @@ function Workbench({
                             </span>
                             <textarea
                               disabled={
-                                documentMutationBusy || !enabled || handoff.status !== 'staged'
+                                documentMutationBusy ||
+                                recoveryUnavailable ||
+                                !enabled ||
+                                handoff.status !== 'staged'
                               }
                               value={configured ?? patch.afterMarkdown}
                               onChange={(event) => {
-                                if (documentMutationRef.current) return;
+                                if (documentMutationRef.current || recoveryUnavailable) return;
                                 setHandoffDrafts((current) => ({
                                   ...current,
                                   [handoff.id]: {
@@ -1871,34 +2667,24 @@ function Workbench({
                         size="sm"
                         onClick={() => {
                           if (documentMutationRef.current) return;
+                          if (busy) return;
+                          setInterrupted(run.status !== 'completed');
                           setAction(run.action);
                           setScope(run.scope);
-                          setOutput(run.outputText ?? '');
+                          setOutput(
+                            proposalDraft?.runId === run.id
+                              ? proposalDraft.text
+                              : (run.outputText ?? ''),
+                          );
                           setCitations(run.citations);
                           setHandoffCitationIds([]);
-                          setProposalContext(
-                            run.action === 'draft' || run.action === 'rewrite'
-                              ? {
-                                  runId:
-                                    run.appliedRevision === null &&
-                                    run.sourceRevision === prd.revision &&
-                                    run.citations.every((citation) => citation.available)
-                                      ? run.id
-                                      : null,
-                                  sourceRevision: run.sourceRevision,
-                                  action: run.action,
-                                  scope: run.scope,
-                                  provider: run.provider,
-                                  model: run.model,
-                                  appliedRevision: run.appliedRevision,
-                                  targetSectionId: run.targetSectionId,
-                                  selectionText: run.selectionText,
-                                }
-                              : null,
-                          );
+                          setProposalContext(contextForRun(run, prd.revision));
+                          setActiveTurnId(turns.find((turn) => turn.runId === run.id)?.id ?? null);
+                          setSubmittedPrompt('');
+                          setDocumentOpen(false);
                           setTab('assist');
                         }}
-                        disabled={documentMutationBusy}
+                        disabled={documentMutationBusy || busy}
                       >
                         Inspect
                       </Button>
@@ -1909,29 +2695,230 @@ function Workbench({
             </section>
           </div>
         )}
+      </main>
+      <input
+        ref={fileInputRef}
+        className="visually-hidden"
+        type="file"
+        hidden
+        multiple
+        aria-label="Add source file"
+        accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.md,.markdown,.txt"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []);
+          void uploadFiles(files);
+          event.target.value = '';
+        }}
+      />
 
-        <div className="export-row">
-          <span>Export</span>
-          {(['markdown', 'docx', 'pdf', 'archive'] as const).map((format) => (
-            <a key={format} href={`/api/projects/${project.id}/export?format=${format}`}>
-              <Download aria-hidden="true" />
-              {format}
-            </a>
-          ))}
-        </div>
-      </aside>
+      <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
+        <DialogContent className="workspace-sheet">
+          <DialogTitle>Sources</DialogTitle>
+          <DialogDescription>
+            Local files used as evidence. Importing a file does not make it a document template.
+          </DialogDescription>
+          <section className="source-rail" aria-labelledby="sources-heading">
+            <div className="rail-label">
+              <span id="sources-heading">Sources</span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Add source"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <FilePlus2 aria-hidden="true" />
+              </Button>
+            </div>
+            {sources.length === 0 ? (
+              <button className="empty-source" onClick={() => fileInputRef.current?.click()}>
+                Add evidence
+                <small>PDF, Word, slides, sheets, JPEG, or text</small>
+              </button>
+            ) : (
+              sources.map((source) => (
+                <div className="source-item" key={source.id}>
+                  <div>
+                    <strong>{source.name}</strong>
+                    <small>
+                      {source.status === 'processing' ? 'Extracting and indexing…' : source.status}
+                    </small>
+                    {source.error && <small>{source.error}</small>}
+                  </div>
+                  {(source.status === 'partial' || source.status === 'failed') && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        void api
+                          .retrySourceIndex(project.id, source.id)
+                          .then((updated) =>
+                            setSources((current) =>
+                              current.map((item) => (item.id === updated.id ? updated : item)),
+                            ),
+                          )
+                          .catch((reason: unknown) => setError(messageFrom(reason)));
+                      }}
+                    >
+                      Retry index
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete ${source.name}`}
+                    disabled={busy || documentMutationBusy}
+                    onClick={() => {
+                      if (!window.confirm(`Delete ${source.name} and its index?`)) return;
+                      void removeSource(source);
+                    }}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                </div>
+              ))
+            )}
+          </section>
+          <p className="sheet-note">
+            PDF, Word, slides, spreadsheets, JPEG and text · Up to 25 MB per file. Check extraction
+            warnings before relying on a source.
+          </p>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={structureOpen} onOpenChange={setStructureOpen}>
+        <DialogContent className="workspace-sheet">
+          <DialogTitle>Document structure</DialogTitle>
+          <DialogDescription>
+            Choose headings and purpose for this project. Existing content is preserved or a
+            conflict is reported before changes are applied.
+          </DialogDescription>
+          <StructurePanel
+            project={project}
+            document={prd}
+            onApply={async (structureId) => {
+              if (recoveryUnavailable)
+                throw new Error('Reload when recovery is available before changing structure.');
+              if (recoveryConflict)
+                throw new Error('Review recovered edits before changing structure.');
+              const current = dirty ? await save('Saved before structure change') : prd;
+              if (!current)
+                throw new Error('Save the current document before changing its structure.');
+              const result = await api.selectStructure(project.id, structureId, current.revision);
+              setPrd(result.prd);
+              setSavedPrd(result.prd);
+              setSelectedSectionId(result.prd.sections[0]?.id ?? '');
+              onProjectChange(result.project);
+              setRevisions((await api.revisions(project.id)).revisions);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+        <DialogContent className="workspace-sheet export-sheet">
+          <DialogTitle>Export document</DialogTitle>
+          <DialogDescription>
+            The latest edits are saved before export. Export works without AI or an internet
+            connection.
+          </DialogDescription>
+          <div className="export-row">
+            <span>Export</span>
+            {(['pdf', 'docx', 'markdown', 'archive'] as const).map((format) => (
+              <button
+                type="button"
+                key={
+                  format === 'docx'
+                    ? 'Word (.docx)'
+                    : format === 'pdf'
+                      ? 'PDF'
+                      : format === 'archive'
+                        ? 'Project archive'
+                        : 'Markdown'
+                }
+                disabled={documentMutationBusy || saveBusy}
+                onClick={() => void exportCurrent(format)}
+              >
+                <Download aria-hidden="true" />
+                {format === 'docx'
+                  ? 'Word (.docx)'
+                  : format === 'pdf'
+                    ? 'PDF'
+                    : format === 'archive'
+                      ? 'Project archive'
+                      : 'Markdown'}
+              </button>
+            ))}
+          </div>
+          <p role="status">{exportStatus}</p>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="workspace-sheet">
+          <DialogTitle>New project</DialogTitle>
+          <DialogDescription>
+            Keep a PRD, its instructions and sources together on this Mac.
+          </DialogDescription>
+          <form
+            className="new-project-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createAnotherProject();
+            }}
+          >
+            <label htmlFor="new-project-name">Project name</label>
+            <input
+              id="new-project-name"
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+              maxLength={120}
+              autoFocus
+            />
+            <Button type="submit" disabled={!newProjectName.trim() || busy || documentMutationBusy}>
+              Create project
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
-      {(railOpen || panelOpen) && (
-        <button
-          className="drawer-scrim mobile-only"
-          aria-label="Close open panel"
-          onClick={() => {
-            setRailOpen(false);
-            setPanelOpen(false);
-          }}
-        />
-      )}
-
+      <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen}>
+        <DialogContent className="workspace-sheet">
+          <DialogTitle>Recovered edits</DialogTitle>
+          <DialogDescription>
+            These edits are from version {recoveryConflict?.baseRevision}. The saved document is
+            version {prd.revision}. Replacing the editor does not change saved history until you
+            save.
+          </DialogDescription>
+          <div className="recovery-document">
+            {recoveryConflict?.sections.map((section) => (
+              <section key={section.id}>
+                <h3>{section.title}</h3>
+                <pre>{section.body}</pre>
+              </section>
+            ))}
+          </div>
+          <Button
+            disabled={busy || documentMutationBusy}
+            onClick={() => {
+              if (!recoveryConflict) return;
+              setPrd({ ...prd, sections: recoveryConflict.sections });
+              setRecoveryConflict(null);
+              setRecoveryOpen(false);
+              setDocumentOpen(true);
+            }}
+          >
+            Use recovered edits in editor
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (window.confirm('Discard this recovery copy and keep the saved document?')) {
+                setRecoveryConflict(null);
+                setRecoveryOpen(false);
+              }
+            }}
+          >
+            Keep saved document and discard recovery
+          </Button>
+        </DialogContent>
+      </Dialog>
       {providerOpen && (
         <ProviderDialog
           key={project.id}
@@ -1964,4 +2951,39 @@ function truncateText(value: string, limit = 160): string {
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'The operation could not be completed.';
+}
+
+function actionForInstruction(instruction: string, document: PrdDocument): AiAction {
+  const text = instruction.trim().toLowerCase();
+  if (/^(draft|create|write|start|generate)\b/.test(text)) return 'draft';
+  if (/\b(review|critique|audit|assess|find gaps|check for)\b/.test(text)) return 'review';
+  if (
+    /\b(rewrite|revise|update|change|improve|replace|add|remove)\b/.test(text) &&
+    document.sections.some((section) => section.body.trim())
+  )
+    return 'rewrite';
+  if (/^(what|why|how|which|where|when|can you explain|explain)\b/.test(text)) return 'ask';
+  return document.sections.some((section) => section.body.trim()) ? 'ask' : 'draft';
+}
+
+function contextForRun(run: AiRunProposal, revision: number): ProposalContext | null {
+  if (run.action !== 'draft' && run.action !== 'rewrite') return null;
+  return {
+    sourceRunId: run.id,
+    runId:
+      run.status === 'completed' &&
+      run.appliedRevision === null &&
+      run.sourceRevision === revision &&
+      run.citations.every((citation) => citation.available)
+        ? run.id
+        : null,
+    sourceRevision: run.sourceRevision,
+    action: run.action,
+    scope: run.scope,
+    provider: run.provider,
+    model: run.model,
+    appliedRevision: run.appliedRevision,
+    targetSectionId: run.targetSectionId,
+    selectionText: run.selectionText,
+  };
 }

@@ -14,6 +14,11 @@ import {
   restoreRevisionSchema,
   sectionUpdateSchema,
   sessionProviderSchema,
+  structureCreateSchema,
+  structureSelectSchema,
+  structureUpdateSchema,
+  workspaceUpdateSchema,
+  WORKSPACE_MAX_BYTES,
   type ProviderKind,
 } from '../../shared/types.js';
 import { ApiError } from '../../shared/api.js';
@@ -25,6 +30,7 @@ import type { ExportService } from '../export/export-service.js';
 import { validateProviderEndpoint } from '../providers/endpoints.js';
 import type { ActionService } from '../providers/action-service.js';
 import type { ProviderService } from '../providers/provider-service.js';
+import type { ChatGptService } from '../providers/chatgpt-service.js';
 import type { ProposalService } from '../providers/proposal-service.js';
 import type { SessionStore } from '../providers/session-store.js';
 import type { EmbeddingService } from '../retrieval/embedding-service.js';
@@ -35,6 +41,7 @@ interface Services {
   exports: ExportService;
   sessions: SessionStore;
   providers: ProviderService;
+  chatgpt: ChatGptService;
   actions: ActionService;
   proposals: ProposalService;
   embeddings: EmbeddingService;
@@ -110,6 +117,8 @@ export function registerApi(app: FastifyInstance, services: Services): void {
       title,
       body: bodies.filter(Boolean).join('\n\n'),
       position,
+      purpose: `Describe ${title.toLowerCase()} for this PRD.`,
+      required: true,
       updatedAt: new Date().toISOString(),
     }));
     const prd = services.repository.savePrd(
@@ -124,12 +133,28 @@ export function registerApi(app: FastifyInstance, services: Services): void {
               title: 'Imported PRD',
               body: '',
               position: 0,
+              purpose: 'Describe the imported PRD.',
+              required: true,
               updatedAt: new Date().toISOString(),
             },
           ],
       'PRD imported',
     );
-    return reply.code(201).send({ project: services.repository.getProject(project.id), prd });
+    services.repository.createStructure(
+      project.id,
+      'Imported PRD',
+      prd.sections.map((section) => ({
+        title: section.title,
+        purpose: `Describe ${section.title.toLowerCase()} for this PRD.`,
+        required: true,
+      })),
+      true,
+    );
+    return reply.code(201).send({
+      project: services.repository.getProject(project.id),
+      prd,
+      warnings: parsed.warnings,
+    });
   });
   app.post('/api/projects/restore', async (request, reply) => {
     const part = await request.file({ limits: { files: 1, fileSize: 250 * 1024 * 1024 } });
@@ -161,6 +186,44 @@ export function registerApi(app: FastifyInstance, services: Services): void {
     const { id } = request.params as { id: string };
     services.repository.deleteProject(id);
     return reply.code(204).send();
+  });
+
+  app.get('/api/projects/:id/structures', (request) => {
+    const { id } = request.params as { id: string };
+    const structures = services.repository.listStructures(id);
+    return {
+      structures,
+      selectedStructureId: services.repository.getProject(id).selectedStructureId,
+    };
+  });
+  app.post('/api/projects/:id/structures', (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = parse(structureCreateSchema, request.body);
+    return reply.code(201).send(services.repository.createStructure(id, body.name, body.sections));
+  });
+  app.patch('/api/projects/:id/structures/:structureId', (request) => {
+    const { id, structureId } = request.params as { id: string; structureId: string };
+    const body = parse(structureUpdateSchema, request.body);
+    return services.repository.updateStructure(id, structureId, body);
+  });
+  app.delete('/api/projects/:id/structures/:structureId', (request, reply) => {
+    const { id, structureId } = request.params as { id: string; structureId: string };
+    services.repository.deleteStructure(id, structureId);
+    return reply.code(204).send();
+  });
+  app.put('/api/projects/:id/selected-structure', (request) => {
+    const { id } = request.params as { id: string };
+    const body = parse(structureSelectSchema, request.body);
+    return services.repository.selectStructure(id, body.structureId, body.revision);
+  });
+
+  app.get('/api/projects/:id/workspace', (request) => {
+    const { id } = request.params as { id: string };
+    return services.repository.getWorkspace(id);
+  });
+  app.put('/api/projects/:id/workspace', { bodyLimit: WORKSPACE_MAX_BYTES }, (request) => {
+    const { id } = request.params as { id: string };
+    return services.repository.saveWorkspace(id, parse(workspaceUpdateSchema, request.body));
   });
 
   app.get('/api/projects/:id/prd', (request) => {
@@ -222,11 +285,43 @@ export function registerApi(app: FastifyInstance, services: Services): void {
   app.get('/api/session/providers', (request) => {
     const id = request.cookies[sessionCookie];
     return {
-      providers: providerKinds.map((provider) => services.sessions.state(id, provider)),
+      providers: providerKinds.map((provider) =>
+        provider === 'chatgpt'
+          ? {
+              provider,
+              credentialSource: 'none' as const,
+              baseUrl: 'api.openai.com',
+              ...services.chatgpt.state(),
+            }
+          : services.sessions.state(id, provider),
+      ),
     };
   });
+  app.post('/api/chatgpt/connect', async (request) => {
+    const id = request.cookies[sessionCookie];
+    if (!id) throw new ApiError(401, 'session_missing', 'Browser session is unavailable.');
+    const body = (request.body ?? {}) as { clientId?: unknown };
+    if (body.clientId !== undefined && typeof body.clientId !== 'string') {
+      throw new ApiError(400, 'invalid_request', 'Choose a valid ChatGPT account.');
+    }
+    return services.chatgpt.begin(id, body.clientId);
+  });
+  app.post('/api/chatgpt/cancel', () => {
+    services.chatgpt.cancel();
+    return services.chatgpt.state();
+  });
+  app.post('/api/chatgpt/select', (request) => {
+    const body = request.body as { clientId?: unknown };
+    if (typeof body?.clientId !== 'string')
+      throw new ApiError(400, 'invalid_request', 'Choose a ChatGPT account.');
+    services.chatgpt.select(body.clientId);
+    return services.chatgpt.state();
+  });
+  app.post('/api/chatgpt/sign-out', async () => services.chatgpt.signOut());
   app.put('/api/session/providers/:provider', (request) => {
     const provider = providerParam(request);
+    if (provider === 'chatgpt')
+      throw new ApiError(400, 'sign_in_required', 'Use Continue with ChatGPT to connect.');
     const body = parse(sessionProviderSchema, request.body);
     const sessionId = request.cookies[sessionCookie];
     if (!sessionId) throw new ApiError(401, 'session_missing', 'Browser session is unavailable.');
@@ -240,6 +335,8 @@ export function registerApi(app: FastifyInstance, services: Services): void {
   });
   app.delete('/api/session/providers/:provider', (request, reply) => {
     const provider = providerParam(request);
+    if (provider === 'chatgpt')
+      throw new ApiError(400, 'sign_out_required', 'Use ChatGPT sign-out in AI settings.');
     const sessionId = request.cookies[sessionCookie];
     if (sessionId) services.sessions.clearProvider(sessionId, provider);
     return reply.code(204).send();

@@ -11,6 +11,9 @@ import type {
   ReviewFinding,
   RevisionSummary,
   SourceSummary,
+  StructureSection,
+  StructureTemplate,
+  WorkspaceState,
 } from '@shared/types';
 
 interface ErrorPayload {
@@ -61,10 +64,13 @@ export const api = {
   importProject: (file: File) => {
     const data = new FormData();
     data.set('file', file);
-    return request<{ project: ProjectSummary; prd: PrdDocument }>('/api/projects/import', {
-      method: 'POST',
-      body: data,
-    });
+    return request<{ project: ProjectSummary; prd: PrdDocument; warnings: string[] }>(
+      '/api/projects/import',
+      {
+        method: 'POST',
+        body: data,
+      },
+    );
   },
   restoreProject: (file: File) => {
     const data = new FormData();
@@ -86,6 +92,12 @@ export const api = {
     }),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
   prd: (id: string) => request<PrdDocument>(`/api/projects/${id}/prd`),
+  workspace: (id: string) => request<WorkspaceState>(`/api/projects/${id}/workspace`),
+  saveWorkspace: (id: string, state: WorkspaceState) =>
+    request<WorkspaceState>(`/api/projects/${id}/workspace`, {
+      method: 'PUT',
+      body: JSON.stringify(state),
+    }),
   savePrd: (id: string, revision: number, sections: PrdDocument['sections'], reason: string) =>
     request<PrdDocument>(`/api/projects/${id}/prd`, {
       method: 'PUT',
@@ -115,6 +127,44 @@ export const api = {
       endOffset: number;
     }>(`/api/projects/${projectId}/sources/${citation.sourceId}/locations/${citation.locationId}`),
   providerStates: () => request<{ providers: ProviderState[] }>('/api/session/providers'),
+  structures: (projectId: string) =>
+    request<{ structures: StructureTemplate[]; selectedStructureId: string | null }>(
+      `/api/projects/${projectId}/structures`,
+    ),
+  createStructure: (projectId: string, value: { name: string; sections: StructureSection[] }) =>
+    request<StructureTemplate>(`/api/projects/${projectId}/structures`, {
+      method: 'POST',
+      body: JSON.stringify(value),
+    }),
+  updateStructure: (
+    projectId: string,
+    structureId: string,
+    value: Partial<{ name: string; sections: StructureSection[] }>,
+  ) =>
+    request<StructureTemplate>(`/api/projects/${projectId}/structures/${structureId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(value),
+    }),
+  deleteStructure: (projectId: string, structureId: string) =>
+    request<void>(`/api/projects/${projectId}/structures/${structureId}`, { method: 'DELETE' }),
+  selectStructure: (projectId: string, structureId: string, revision: number) =>
+    request<{ prd: PrdDocument; project: ProjectSummary }>(
+      `/api/projects/${projectId}/selected-structure`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ structureId, revision }),
+      },
+    ),
+  connectChatGpt: (clientId?: string) =>
+    request<{ url: string }>('/api/chatgpt/connect', {
+      method: 'POST',
+      body: JSON.stringify(clientId ? { clientId } : {}),
+    }),
+  cancelChatGpt: () => request<void>('/api/chatgpt/cancel', { method: 'POST' }),
+  selectChatGpt: (clientId: string) =>
+    request<void>('/api/chatgpt/select', { method: 'POST', body: JSON.stringify({ clientId }) }),
+  signOutChatGpt: () =>
+    request<{ revocationConfirmed: boolean }>('/api/chatgpt/sign-out', { method: 'POST' }),
   configureProvider: (
     provider: ProviderKind,
     value: { apiKey?: string; baseUrl?: string; headers?: Record<string, string> },
@@ -237,6 +287,7 @@ export async function runAction(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let completed = false;
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
@@ -259,6 +310,7 @@ export async function runAction(
         handlers.onStatus(part.data as { stage: string; detail: string });
       }
       if (part.type === 'data-completion') {
+        completed = true;
         handlers.onCompletion(part.data as { runId: string; revision: number });
       }
       if (part.type === 'error') {
@@ -271,5 +323,12 @@ export async function runAction(
       }
     }
     if (done) break;
+  }
+  if (!completed) {
+    throw new ClientApiError(
+      502,
+      'incomplete_response',
+      'The AI response ended before completion. Your prompt and document were preserved.',
+    );
   }
 }

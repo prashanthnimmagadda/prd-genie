@@ -21,6 +21,8 @@ The gate runs the content and history guard, formatting, lint, strict TypeScript
 
 The cache-only audit proves what the local npm advisory cache knows. It does not prove that the advisory data is current. Run `npm run audit:record` with approved network access to record separate current production and full dependency results in `reports/dependency-audit.json`.
 
+On macOS with Xcode Command Line Tools, include the existing native Vision JPEG check with `PRD_GENIE_TEST_NATIVE_OCR=1`. For the macOS production release gate, run `PRD_GENIE_TEST_NATIVE_OCR=1 PRD_GENIE_E2E_PRODUCTION=1 npm run ci:offline`. Without the OCR opt-in, that check is skipped and the complete gate correctly refuses to record an all-tests pass.
+
 To run the same full gate against the built production app (including the provider-dialog CSP regression), use `PRD_GENIE_E2E_PRODUCTION=1 npm run ci:offline` on macOS/Linux. In PowerShell, set `$env:PRD_GENIE_E2E_PRODUCTION = '1'` before `npm run ci:offline`. Without this setting, browser tests exercise the development server and the production-only CSP test is skipped.
 
 Run `npm run gate:node` once under Node.js 22 and once under Node.js 24. These quick exact-SHA gates write `reports/node-22.json` and `reports/node-24.json`. A completed manual browser and source review is recorded with `npm run accessibility:record`; the command validates an exact-SHA review input before writing `reports/accessibility-review.json`.
@@ -46,8 +48,10 @@ Before merge, a maintainer records:
 - Coverage summary.
 - Dependency audit result.
 - SBOM and license report hashes.
-- Container smoke-test result when container files changed.
-- Real provider evaluation when provider prompts, schemas, streams, or proposal application changed.
+- Container smoke-test result.
+- Real provider evaluation.
+
+Release provenance requires both reports for the exact clean release SHA, even when a change does not touch those components. Missing resources block release; these requirements do not authorize starting services or downloading models.
 
 The generated reports are ignored by Git because they include timestamps and machine-specific evidence. Release artifacts include reviewed copies.
 
@@ -67,7 +71,7 @@ Public release uses two separate authorization stages because public provenance 
 
 First obtain a provenance-preparation authorization. It uses `schemaVersion: 2`, `approvalScope: "public-github-provenance-preparation"`, `authorized: true`, the exact Git SHA and intended tag, repository and product identity, rights confirmation, passing validation status, known limitations, unresolved issues, and the exact `artifacts` array from the local provenance report. This authorization permits only local tag and public-provenance preparation. It does not authorize a push, GitHub release, upload, or other public promotion. Create the annotated tag locally, then run `PRD_GENIE_SOURCE_VISIBILITY=public-github PRD_GENIE_PUBLIC_PROVENANCE_AUTHORIZATION_FILE=/absolute/path/to/preparation.json npm run provenance`. The generator rejects a dirty tree, mismatched SHA or tag, incomplete authorization, missing artifact, stale validation report, or changed artifact hash.
 
-Next assemble and reproduce the finished public release directory. It must contain only the source archive, evidence archive, license inventory, public provenance, SBOM, and `SHA256SUMS.txt`. Present the exact commit, annotated tag object, and SHA-256 of all six finished files for a fresh public-promotion approval. That approval uses `schemaVersion: 2`, `approvalScope: "public-github-promotion"`, `approved: true`, `tagObjectSha`, the same identity, rights, validation, limitation, and issue fields, and a `releaseAssets` array that names and hashes every finished file including the checksum manifest. Verify it with `npm run release:verify-approval -- /absolute/final-release-directory /absolute/promotion-approval.json`. The verifier rejects a lightweight or mismatched tag, dirty tree, missing or extra asset, checksum mismatch, changed byte, or incomplete approval. Do not push, upload, publish, or otherwise promote until this final verifier passes.
+Next assemble and reproduce the finished public release directory. It must contain the source archive, evidence archive, license inventory, public provenance, SBOM, and `SHA256SUMS.txt`. The only permitted additional asset is `prd-genie-v<VERSION>-macos-arm64.zip`, verified under the [macOS release policy](MACOS_RELEASE.md). Source-only releases retain six files; a macOS release has seven. Present the exact commit, annotated tag object, and SHA-256 of every finished file for a fresh public-promotion approval. That approval uses `schemaVersion: 2`, `approvalScope: "public-github-promotion"`, `approved: true`, `tagObjectSha`, the same identity, rights, validation, limitation, and issue fields, and a `releaseAssets` array that names and hashes every finished file including the checksum manifest. Verify it with `npm run release:verify-approval -- /absolute/final-release-directory /absolute/promotion-approval.json`. The verifier rejects a lightweight or mismatched tag, dirty tree, missing or extra asset, checksum mismatch, changed byte, or incomplete approval. Do not push, upload, publish, or otherwise promote until this final verifier passes.
 
 Run `npm run container:record-smoke` while Apple Container is stopped. The automated harness starts the engine, builds the clean SHA with an OCI revision label, validates the image digest and Linux ARM64 platform, checks health and Host rejection, proves unprivileged Node PID 1, creates a synthetic project, verifies persistence after restart, measures and hashes the SIGTERM shutdown log, removes only its exact container, volumes, and image, and returns Apple Container to its stopped state. A failed observation aborts the report and still attempts exact-resource cleanup.
 

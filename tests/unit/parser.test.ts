@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import { PDFDocument } from 'pdf-lib';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import JSZip from 'jszip';
 import { config } from '../../src/server/config.js';
 import { parseDocument } from '../../src/server/documents/parser.js';
+
+function understateCentralSize(original: Buffer, entryName: string): Buffer {
+  const buffer = Buffer.from(original);
+  for (let offset = 0; offset + 46 <= buffer.length; offset += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) continue;
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    if (buffer.toString('utf8', offset + 46, offset + 46 + nameLength) !== entryName) continue;
+    buffer.writeUInt32LE(1, offset + 24);
+    return buffer;
+  }
+  throw new Error(`Missing ZIP entry: ${entryName}`);
+}
 
 describe('parseDocument', () => {
   it('preserves Markdown headings and structural locations', async () => {
@@ -79,6 +92,7 @@ describe('parseDocument', () => {
     expect(parsed.locations.map((location) => location.locator)).toEqual(['Page 1', 'Page 2']);
     expect(parsed.partial).toBe(true);
     expect(parsed.warnings[0]).toContain('no extractable text');
+    expect(parsed.warnings.join(' ')).toContain('visual table layout');
   });
 
   it('parses DOCX headings, paragraphs, lists, and inline formatting', async () => {
@@ -110,6 +124,18 @@ describe('parseDocument', () => {
     });
   });
 
+  it('rejects generic ZIP archives renamed as slide or spreadsheet files', async () => {
+    const zip = new JSZip();
+    zip.file('notes.txt', 'Not an Office document.');
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    await expect(parseDocument('notes.pptx', buffer)).rejects.toMatchObject({
+      code: 'mime_mismatch',
+    });
+    await expect(parseDocument('notes.xlsx', buffer)).rejects.toMatchObject({
+      code: 'mime_mismatch',
+    });
+  });
+
   it('rejects DOCX packages whose declared expanded content exceeds the limit', async () => {
     const document = new Document({
       sections: [{ children: [new Paragraph({ text: 'Synthetic content' })] }],
@@ -126,6 +152,102 @@ describe('parseDocument', () => {
     await expect(parseDocument('oversized.docx', buffer)).rejects.toMatchObject({
       code: 'docx_resource_limit',
     });
+  });
+
+  it('enforces expanded Office limits when ZIP directory sizes understate actual content', async () => {
+    const originalLimit = config.maxDocxExpandedBytes;
+    const content = 'A'.repeat(200_000);
+    const docx = Buffer.from(
+      await Packer.toBuffer(
+        new Document({ sections: [{ children: [new Paragraph({ text: content })] }] }),
+      ),
+    );
+    const presentation = new JSZip();
+    presentation.file('[Content_Types].xml', '<Types/>');
+    presentation.file('ppt/presentation.xml', '<presentation/>');
+    presentation.file('ppt/slides/slide1.xml', `<p:sld><a:t>${content}</a:t></p:sld>`);
+    const workbook = new JSZip();
+    workbook.file('[Content_Types].xml', '<Types/>');
+    workbook.file('xl/workbook.xml', '<workbook/>');
+    workbook.file(
+      'xl/worksheets/sheet1.xml',
+      `<worksheet><row><c><v>${content}</v></c></row></worksheet>`,
+    );
+    const cases = [
+      ['brief.docx', docx, 'word/document.xml', 'docx_resource_limit'],
+      [
+        'slides.pptx',
+        await presentation.generateAsync({ type: 'nodebuffer' }),
+        'ppt/slides/slide1.xml',
+        'office_resource_limit',
+      ],
+      [
+        'sheet.xlsx',
+        await workbook.generateAsync({ type: 'nodebuffer' }),
+        'xl/worksheets/sheet1.xml',
+        'office_resource_limit',
+      ],
+    ] as const;
+    try {
+      Object.assign(config, { maxDocxExpandedBytes: 100_000 });
+      for (const [name, buffer, entry, code] of cases) {
+        await expect(
+          parseDocument(name, understateCentralSize(buffer, entry)),
+        ).rejects.toMatchObject({
+          code,
+        });
+      }
+    } finally {
+      Object.assign(config, { maxDocxExpandedBytes: originalLimit });
+    }
+  });
+
+  it('counts the ZIP entries actually loaded instead of trusting an alternate directory', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<Types/>');
+    zip.file('ppt/presentation.xml', '<p/>');
+    zip.file('ppt/slides/slide1.xml', '<s><a:t>hello</a:t></s>');
+    zip.file('x0', 'x');
+    zip.file('x1', 'x');
+    const real = await zip.generateAsync({ type: 'nodebuffer' });
+    const eocd = real.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const start = real.readUInt32LE(eocd + 16);
+    const size = real.readUInt32LE(eocd + 12);
+    const records: Array<{ name: string; data: Buffer }> = [];
+    for (let offset = start; offset < start + size;) {
+      const length =
+        46 +
+        real.readUInt16LE(offset + 28) +
+        real.readUInt16LE(offset + 30) +
+        real.readUInt16LE(offset + 32);
+      records.push({
+        name: real.toString('utf8', offset + 46, offset + 46 + real.readUInt16LE(offset + 28)),
+        data: Buffer.from(real.subarray(offset, offset + length)),
+      });
+      offset += length;
+    }
+    const selected = ['[Content_Types].xml', 'ppt/presentation.xml', 'x0'].map(
+      (name) => records.find((record) => record.name === name)!.data,
+    );
+    const padding = size - selected.reduce((total, record) => total + record.length, 0);
+    selected[0]!.writeUInt16LE(padding, 32);
+    const fakeDirectory = Buffer.concat([
+      selected[0]!,
+      Buffer.alloc(padding),
+      ...selected.slice(1),
+    ]);
+    const prefix = Buffer.alloc(start + size);
+    real.copy(prefix, 0, 0, Math.min(100, start));
+    fakeDirectory.copy(prefix, start);
+    const originalLimit = config.maxDocxEntries;
+    try {
+      Object.assign(config, { maxDocxEntries: 3 });
+      await expect(
+        parseDocument('slides.pptx', Buffer.concat([prefix, real])),
+      ).rejects.toMatchObject({ code: 'office_resource_limit' });
+    } finally {
+      Object.assign(config, { maxDocxEntries: originalLimit });
+    }
   });
 
   it('enforces configured PDF page and extracted-text limits', async () => {
@@ -155,6 +277,87 @@ describe('parseDocument', () => {
         maxPdfPages: originalPages,
         maxPdfExtractedTextChars: originalTextLimit,
       });
+    }
+  });
+
+  it('extracts PPTX slide text and reports unread visual content', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<Types/>');
+    zip.file('ppt/presentation.xml', '<presentation/>');
+    zip.file(
+      'ppt/slides/slide1.xml',
+      '<p:sp><a:t>Problem</a:t><a:t>Users lose drafts</a:t></p:sp>',
+    );
+    zip.file('ppt/slides/slide2.xml', '<p:pic/>');
+    const parsed = await parseDocument(
+      'brief.pptx',
+      await zip.generateAsync({ type: 'nodebuffer' }),
+    );
+    expect(parsed.locations.map((location) => [location.locator, location.content])).toEqual([
+      ['Slide 1', 'Problem Users lose drafts'],
+    ]);
+    expect(parsed.partial).toBe(true);
+    expect(parsed.warnings.join(' ')).toContain('Slide 2 contains no extractable text');
+    expect(parsed.warnings.join(' ')).toContain('visual or embedded content');
+  });
+
+  it('extracts XLSX cells with addresses and flags uncached formulas', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<Types/>');
+    zip.file('xl/workbook.xml', '<workbook/>');
+    zip.file(
+      'xl/sharedStrings.xml',
+      '<sst><si><t>Requirement</t></si><si><t>Recover drafts</t></si></sst>',
+    );
+    zip.file(
+      'xl/worksheets/sheet1.xml',
+      '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="C2"><f>1+1</f></c></row></sheetData></worksheet>',
+    );
+    const parsed = await parseDocument(
+      'requirements.xlsx',
+      await zip.generateAsync({ type: 'nodebuffer' }),
+    );
+    expect(parsed.locations[0]).toMatchObject({
+      locator: 'Sheet 1',
+      content: 'A1: Requirement | B1: Recover drafts',
+    });
+    expect(parsed.partial).toBe(true);
+    expect(parsed.warnings.join(' ')).toContain('formulas without cached values');
+  });
+
+  it.skipIf(process.env.PRD_GENIE_TEST_NATIVE_OCR !== '1')(
+    'uses local Vision for JPEG OCR and marks visual interpretation as partial',
+    async () => {
+      const jpeg = fs.readFileSync(new URL('../fixtures/ocr-sample.jpg', import.meta.url));
+      const parsed = await parseDocument('requirements.jpg', jpeg);
+      expect(parsed.mediaType).toBe('image/jpeg');
+      expect(parsed.partial).toBe(true);
+      expect(parsed.locations[0]?.content).toContain('Save draft');
+    },
+    60_000,
+  );
+
+  it('rejects a mismatched JPEG signature', async () => {
+    await expect(parseDocument('fake.jpg', Buffer.from('not a jpeg'))).rejects.toMatchObject({
+      code: 'mime_mismatch',
+    });
+  });
+
+  it('explains when packaged JPEG OCR has no bundled helper', async () => {
+    const original = process.env.NODE_ENV;
+    const originalHelper = process.env.PRD_GENIE_OCR_HELPER;
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.PRD_GENIE_OCR_HELPER;
+      const jpeg = fs.readFileSync(new URL('../fixtures/ocr-sample.jpg', import.meta.url));
+      await expect(parseDocument('requirements.jpeg', jpeg)).rejects.toMatchObject({
+        code: 'ocr_unavailable',
+      });
+    } finally {
+      if (original === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = original;
+      if (originalHelper === undefined) delete process.env.PRD_GENIE_OCR_HELPER;
+      else process.env.PRD_GENIE_OCR_HELPER = originalHelper;
     }
   });
 });

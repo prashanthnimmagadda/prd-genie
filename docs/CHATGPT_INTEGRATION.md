@@ -1,39 +1,23 @@
 # ChatGPT integration
 
-## What is supported
+PRD Genie offers two separate ChatGPT paths. **ChatGPT plan** appears in AI settings as an optional online provider. The existing manual, revision-bound handoff and skills-only plugin remain available independently.
 
-This repository contains a skills-only plugin at `plugins/prd-genie`. It is available only after a user installs it in a ChatGPT surface that supports plugins. Any ChatGPT usage is governed by that user’s ChatGPT plan, region, and workspace policy. It has no hosted connector, MCP server, app, hook, OAuth flow, or API-calling code.
+## ChatGPT plan provider
 
-The standalone PRD Genie application still connects to model providers through a separate API key or local Ollama. A ChatGPT subscription or ChatGPT sign-in does not provide API credentials, API credits, model tokens, or billing entitlement to the standalone application.
+The local app uses OpenAI's [Sign in with ChatGPT for open-source clients](https://developers.openai.com/siwc/token-sharing-open-source) flow. It is not a PRD Genie login. PRD editing, saving, reopening, history, local source processing and exports work without it. Eligible ChatGPT Plus and Pro users can authorize the separate `chatgpt.tokens.use.direct` permission. OpenAI determines account and workspace eligibility, available models, limits and credits. The app never treats a ChatGPT identity token alone as inference permission, obtains an API key, or silently switches to paid API-key usage.
 
-## Privacy boundary
+`Continue with ChatGPT` opens OpenAI's browser consent flow with a fresh state, nonce and PKCE challenge. The app creates a stable opaque host ID, saves the issued registration client ID, validates the returned identity token against OpenAI's JWKS, and stores the resulting credentials in a local owner-only file. Access and refresh tokens stay out of PRD projects, browser storage, URLs, logs and archives. Each registration is associated with its validated identity and issued client ID. Settings can switch between saved connections and sign out. If remote revocation cannot be confirmed, the app signs out locally and tells the user to disconnect PRD Genie in [ChatGPT Settings](https://chatgpt.com/settings/usage).
 
-The plugin runs in the ChatGPT conversation. Users must share only the PRD sections and evidence they are authorized to send to OpenAI. The standalone application does not receive ChatGPT cookies, account tokens, unrelated conversation history, billing data, or subscription details.
+Model discovery uses the signed-in account's model catalog. PRD actions use `POST /v1/responses` with `store: false`, `stream: true` and only the fields supported by this flow. A response counts as complete only after `response.completed`. Limits, interrupted streams and unsupported capabilities produce visible errors and do not apply a partial proposal. A fresh prompt and relevant PRD context are sent per request. The model must be selected explicitly; switching providers never triggers a billing fallback.
 
-Exporting a handoff is an intentional disclosure to ChatGPT and OpenAI by the user. It is outside the standalone provider request path. Unapplied handoffs can be deleted completely. Applied handoffs can be retired from the interface, but their request, response, exact accepted application, and digests remain local revision provenance until the project is deleted.
+Selected PRD scope, the user's instruction, and up to eight retrieved source excerpts are sent to OpenAI for an online action. Local source extraction and retrieval remain local. No unrelated source binaries or other project history are sent. OpenAI's [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) apply; output quality depends on the selected account and model.
 
-The first integration is skills-only. It does not operate a remote PRD Genie service. An optional local MCP adapter may be considered later, but it will remain disabled by default and will stage proposals only.
+The OAuth integration follows the published protocol without bundling example-app code. Automated tests use synthetic tokens and mocked responses. On 22 October 2026, a user-authorized connection and one Ask on the fictional example project completed in the local macOS app with a source-linked answer. Output quality on a real document remains for private validation.
 
-## Safe handoff
+## Manual handoff and plugin
 
-The local application will export a narrow request containing:
+The included skills-only plugin can be installed in a supported ChatGPT surface. It has no hosted connector, OAuth flow or API-calling code. The local app can export chosen PRD sections and evidence excerpts into a revision-bound request, and import the resulting response as a staged proposal. It validates the project, revision, section hashes, evidence IDs, request digest, response size and replay state before applying a chosen patch.
 
-- An opaque handoff and project identifier.
-- The current PRD revision.
-- Only the chosen sections and their preimage hashes.
-- Only the chosen evidence excerpts and opaque evidence IDs.
-- The requested action, scope, and instruction.
+An imported handoff is an intentional disclosure by the user. Unapplied handoffs can be deleted. Applied handoffs retain their request and accepted change as local revision provenance. Portable project archives include applied handoffs and omit unapplied ones.
 
-It will not include keys, cookies, source binaries, filesystem paths, environment data, logs, or unrelated project content.
-
-ChatGPT returns a versioned response. The local app validates the handoff ID, request digest, project, revision, section allowlist, preimage hashes, evidence allowlist, size, and replay state. Imported output is staged as a proposal and is never silently applied.
-
-Findings returned through a ChatGPT handoff remain inside that handoff record. They do not automatically enter the direct-provider review queue.
-
-Portable archives include applied handoffs and recompute their digests after identifier remapping. Unapplied handoffs are excluded. Handoffs applied before RC.3 did not record the exact selected or user-revised patch, so an archive preserves those legacy records with an explicit provenance-unavailable marker rather than inventing detail.
-
-## Availability
-
-Plugin installation and file-generation behavior can vary by ChatGPT plan, region, workspace policy, and surface. BYOK and Ollama remain available when the plugin is unavailable.
-
-See [Sign in with ChatGPT](https://help.openai.com/en/articles/20001410-sign-in-with-chatgpt) for the identity-only data boundary and [plugin architecture](https://developers.openai.com/plugins/concepts/plugins) for the current plugin model.
+Plugin availability and file handling vary by plan, region, workspace policy and ChatGPT surface. See the [official quickstart](https://developers.openai.com/siwc/quickstart) and [account and session guidance](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions).

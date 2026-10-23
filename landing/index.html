@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="canonical" href="https://prdgenie.stillform.app/" />
+    <meta
+      name="description"
+      content="PRD Genie is a local-first macOS workbench for writing, reviewing and exporting product requirements."
+    />
+    <title>PRD Genie - Requirements, with a record of why</title>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: #1b282d;
+        background: #fafbf9;
+        font-synthesis: none;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      a {
+        color: inherit;
+      }
+      header,
+      main,
+      footer {
+        max-width: 1080px;
+        margin: auto;
+        padding: 0 32px;
+      }
+      header {
+        height: 86px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid #dde4e1;
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: -0.04em;
+        font-size: 19px;
+        text-decoration: none;
+      }
+      .nav {
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        font-size: 14px;
+      }
+      .nav a {
+        text-decoration: none;
+      }
+      .nav a:hover,
+      .text-link:hover {
+        text-decoration: underline;
+      }
+      .eyebrow {
+        font-size: 12px;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: #276e67;
+      }
+      .hero {
+        padding: 104px 0 88px;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 76px;
+        align-items: center;
+      }
+      h1 {
+        font-size: clamp(48px, 6vw, 79px);
+        line-height: 1.02;
+        letter-spacing: -0.065em;
+        font-weight: 650;
+        margin: 20px 0 26px;
+      }
+      .lead {
+        font-size: 20px;
+        line-height: 1.55;
+        color: #51615f;
+        max-width: 510px;
+        margin: 0 0 32px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 13px 20px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .primary {
+        background: #17665e;
+        color: #fff;
+      }
+      .primary:hover {
+        background: #104d47;
+      }
+      .secondary {
+        border: 1px solid #b8c9c5;
+      }
+      .secondary:hover {
+        background: #eef4f1;
+      }
+      .fine {
+        font-size: 13px;
+        line-height: 1.6;
+        color: #677773;
+        margin-top: 20px;
+      }
+      .preview {
+        border: 1px solid #d5dfdb;
+        box-shadow: 0 26px 80px #224d3b15;
+        background: #fff;
+        border-radius: 12px;
+        padding: 28px 28px 30px;
+        transform: rotate(1deg);
+      }
+      .preview-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid #e4e9e7;
+        padding-bottom: 17px;
+        margin-bottom: 24px;
+        color: #70807a;
+        font-size: 12px;
+      }
+      .preview h2 {
+        font-size: 23px;
+        letter-spacing: -0.04em;
+        margin: 0 0 21px;
+      }
+      .preview h3 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: #276e67;
+        margin: 25px 0 9px;
+      }
+      .preview p,
+      .preview li {
+        font-size: 14px;
+        line-height: 1.55;
+        color: #384c49;
+      }
+      .preview ul {
+        padding-left: 20px;
+      }
+      .tag {
+        padding: 5px 9px;
+        border-radius: 99px;
+        background: #e8f3ef;
+        color: #236b5f;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .features {
+        border-top: 1px solid #dde4e1;
+        padding: 58px 0 76px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 42px;
+      }
+      .features h2 {
+        font-size: 18px;
+        letter-spacing: -0.03em;
+      }
+      .features p {
+        font-size: 15px;
+        line-height: 1.6;
+        color: #61716c;
+      }
+      .closing {
+        border-top: 1px solid #dde4e1;
+        padding: 55px 0 70px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 28px;
+      }
+      .closing h2 {
+        font-size: 32px;
+        line-height: 1.14;
+        letter-spacing: -0.045em;
+        max-width: 490px;
+      }
+      footer {
+        border-top: 1px solid #dde4e1;
+        padding-top: 25px;
+        padding-bottom: 40px;
+        color: #74817e;
+        font-size: 13px;
+        display: flex;
+        gap: 22px;
+      }
+      footer a {
+        color: #51615f;
+      }
+      @media (max-width: 800px) {
+        header,
+        main,
+        footer {
+          padding-left: 22px;
+          padding-right: 22px;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 45px;
+          padding-top: 70px;
+        }
+        .preview {
+          transform: none;
+        }
+        .features {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+        .closing {
+          display: block;
+        }
+        .nav {
+          gap: 12px;
+        }
+        h1 {
+          font-size: 52px;
+        }
+      }
+      @media (max-width: 420px) {
+        .nav a:first-child {
+          display: none;
+        }
+        h1 {
+          font-size: 46px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="#top">PRD Genie</a>
+      <nav class="nav" aria-label="Main">
+        <a href="#how-it-works">How it works</a
+        ><a href="https://github.com/prashanthnimmagadda/prd-genie">GitHub</a>
+      </nav>
+    </header>
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">Local-first · macOS</p>
+          <h1 id="hero-title">Write requirements with sources and history.</h1>
+          <p class="lead">
+            Turn rough ideas and source material into a PRD your team can use. Keep the evidence,
+            revisions and final decisions together as the document changes.
+          </p>
+          <div class="actions">
+            <a
+              class="button primary"
+              href="https://github.com/prashanthnimmagadda/prd-genie#quick-start"
+              >Get started on GitHub</a
+            ><a class="button secondary" href="https://github.com/prashanthnimmagadda/prd-genie"
+              >View the source</a
+            >
+          </div>
+          <p class="fine">
+            No PRD Genie account. Write and export offline. Connect AI only if you choose.
+          </p>
+        </div>
+        <div class="preview" aria-label="Illustrative PRD preview">
+          <div class="preview-top">
+            <span>Meeting scheduler / Requirements</span><span class="tag">Revision 3</span>
+          </div>
+          <h2>Make room conflicts visible before confirmation</h2>
+          <h3>Problem</h3>
+          <p>
+            Coordinators compare calendars and rooms by hand. A conflicting room can invalidate a
+            proposed meeting late in the process.
+          </p>
+          <h3>Requirement</h3>
+          <ul>
+            <li>Recheck room availability before confirming the proposal.</li>
+            <li>When a conflict appears, block confirmation and explain the next step.</li>
+          </ul>
+          <h3>Evidence and decision</h3>
+          <p>
+            <span class="tag">Source note</span> &nbsp; The accepted revision stays in the project
+            history.
+          </p>
+        </div>
+      </section>
+      <section class="features" id="how-it-works">
+        <div>
+          <p class="eyebrow">01 / Bring material</p>
+          <h2>Add notes, files, or a saved PRD.</h2>
+          <p>
+            Write a request, reopen a PRD, or add local files. Extraction warnings tell you what
+            could not be read.
+          </p>
+        </div>
+        <div>
+          <p class="eyebrow">02 / Work through it</p>
+          <h2>Review changes before applying them.</h2>
+          <p>
+            Draft and review against your chosen structure. AI changes are proposals until you
+            accept them.
+          </p>
+        </div>
+        <div>
+          <p class="eyebrow">03 / Share the result</p>
+          <h2>Export PDF or Word.</h2>
+          <p>
+            Keep versions and sources in your local project. Export the latest edits when ready.
+          </p>
+        </div>
+      </section>
+      <section class="closing">
+        <h2>Begin with a blank project or explore a finished example.</h2>
+        <a
+          class="button secondary"
+          href="https://github.com/prashanthnimmagadda/prd-genie#quick-start"
+          >Installation and first steps</a
+        >
+      </section>
+    </main>
+    <footer>
+      <span>PRD Genie · Open source</span
+      ><a href="https://github.com/prashanthnimmagadda/prd-genie">GitHub repository</a
+      ><a href="https://github.com/prashanthnimmagadda/prd-genie/blob/main/docs/PRIVACY.md"
+        >Privacy</a
+      >
+    </footer>
+  </body>
+</html>

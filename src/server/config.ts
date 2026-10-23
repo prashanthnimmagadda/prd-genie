@@ -32,10 +32,7 @@ export function isAllowedBrowserOrigin(
   if (!hostHeader || !isAllowedRequestHost(hostHeader)) return false;
   try {
     const origin = new URL(originHeader);
-    return (
-      (origin.protocol === 'http:' || origin.protocol === 'https:') &&
-      loopbackRequestHostnames.has(origin.hostname.toLowerCase())
-    );
+    return origin.origin === new URL(`http://${hostHeader}`).origin;
   } catch {
     return false;
   }

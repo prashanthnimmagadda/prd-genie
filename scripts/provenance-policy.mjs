@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {
+  collectMacosArtifactPaths,
+  macosZipName,
+  validateMacosReleaseEvidence,
+} from './macos-release-policy.mjs';
 
 export const publicProductName = 'PRD Genie';
 export const publicReleaseTarget = 'https://github.com/prashanthnimmagadda/prd-genie';
@@ -132,6 +137,7 @@ export const requiredArtifactFiles = [
   'scripts/container-entrypoint.sh',
   'scripts/provenance.mjs',
   'scripts/provenance-policy.mjs',
+  'scripts/macos-release-policy.mjs',
   'scripts/record-container-smoke.mjs',
   'scripts/record-test-coverage.mjs',
   'scripts/verify-promotion-approval.mjs',
@@ -155,6 +161,7 @@ export const requiredArtifactDirectories = ['dist/client', 'dist/server', 'drizz
 export function collectArtifactPaths(root) {
   const collected = [...requiredArtifactFiles];
   for (const relative of requiredArtifactFiles) requireRegularFile(root, relative);
+  collected.push(...collectMacosArtifactPaths(root));
   for (const relative of requiredArtifactDirectories) {
     const absolute = path.join(root, relative);
     const stat = fs.lstatSync(absolute, { throwIfNoEntry: false });
@@ -262,6 +269,7 @@ export function validateEvidenceReports(root, gitSha) {
   if (!validateContainerSmokeReport(container, gitSha)) {
     throw new Error('Container smoke evidence does not validate the clean current SHA.');
   }
+  validateMacosReleaseEvidence(root, gitSha);
 }
 
 function validCoverageSummary(coverage) {
@@ -456,13 +464,15 @@ export function validateFinalPromotionApproval({
   }
 }
 
-export function collectFinalReleaseAssets({ releaseDirectory, gitSha, tag }) {
+export function collectFinalReleaseAssets({ releaseDirectory, gitSha, tag, root }) {
   if (!/^[a-f0-9]{40}$/.test(gitSha ?? '')) {
     throw new Error('Final release inventory requires an exact Git SHA.');
   }
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag ?? '')) {
     throw new Error('Final release inventory requires a valid tag.');
   }
+  const macosName = macosZipName(tag.slice(1));
+  const includesMacos = fs.existsSync(path.join(releaseDirectory, macosName));
   const expectedNames = [
     'SHA256SUMS.txt',
     `prd-genie-${gitSha.slice(0, 12)}.tar.gz`,
@@ -470,6 +480,7 @@ export function collectFinalReleaseAssets({ releaseDirectory, gitSha, tag }) {
     `prd-genie-${tag}-licenses.json`,
     `prd-genie-${tag}-provenance.json`,
     `prd-genie-${tag}-sbom.cdx.json`,
+    ...(includesMacos ? [macosName] : []),
   ].sort();
   const observedNames = fs
     .readdirSync(releaseDirectory, { withFileTypes: true })
@@ -497,6 +508,44 @@ export function collectFinalReleaseAssets({ releaseDirectory, gitSha, tag }) {
     .join('\n')}\n`;
   if (fs.readFileSync(path.join(releaseDirectory, manifestName), 'utf8') !== expectedManifest) {
     throw new Error('Final checksum manifest does not exactly bind every public payload.');
+  }
+  if (includesMacos) {
+    if (!root) throw new Error('macOS promotion requires the verified release checkout.');
+    const packageVersion = readJson(root, 'package.json').version;
+    if (tag !== `v${packageVersion}`)
+      throw new Error('macOS release tag must match package version.');
+    validateEvidenceReports(root, gitSha);
+    if (
+      hashFile(macosName) !==
+      createHash('sha256')
+        .update(fs.readFileSync(path.join(root, 'dist/mac', macosName)))
+        .digest('hex')
+    ) {
+      throw new Error('Final macOS ZIP differs from the verified preparation artifact.');
+    }
+    const provenance = readJson(releaseDirectory, `prd-genie-${tag}-provenance.json`);
+    const currentArtifacts = collectArtifactPaths(root).map((relative) => ({
+      path: relative,
+      sha256: createHash('sha256')
+        .update(fs.readFileSync(path.join(root, relative)))
+        .digest('hex'),
+    }));
+    if (
+      provenance.git?.sha !== gitSha ||
+      provenance.git?.clean !== true ||
+      provenance.claims?.releasePreparationAuthorized !== true ||
+      provenance.claims?.releaseTag !== tag ||
+      provenance.claims?.rightsConfirmed !== true ||
+      provenance.claims?.sourceVisibility !== 'public-github' ||
+      provenance.claims?.publicTarget !== publicReleaseTarget ||
+      provenance.claims?.publicName !== publicProductName ||
+      provenance.claims?.validationStatus !== 'passed' ||
+      provenance.claims?.publicPromotionApprovalRequired !== true ||
+      JSON.stringify(normalizeInventory(provenance.artifacts)) !==
+        JSON.stringify(normalizeInventory(currentArtifacts))
+    ) {
+      throw new Error('macOS promotion requires matching authorized preparation provenance.');
+    }
   }
   return expectedNames.map((name) => ({ path: name, sha256: hashFile(name) }));
 }

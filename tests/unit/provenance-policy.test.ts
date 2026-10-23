@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 import {
   collectArtifactPaths,
   collectFinalReleaseAssets,
@@ -28,14 +34,390 @@ import {
   validatePublicProvenanceAuthorization,
 } from '../../scripts/provenance-policy.mjs';
 
+import {
+  collectMacosArtifactPaths,
+  macosBundlePath,
+  macosChecks,
+  macosZipName,
+  validateMacosApplicationInputs,
+  validateMacosReleaseReport,
+  validateMacosReleaseEvidence,
+  inspectMacosArchive,
+} from '../../scripts/macos-release-policy.mjs';
+
 const gitSha = 'a'.repeat(40);
 
 describe('release provenance policy', () => {
   const directories: string[] = [];
   afterEach(() => {
+    vi.mocked(execFileSync).mockReset();
     for (const directory of directories.splice(0)) {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('binds macOS attestation to the final package, identity and observed installation', () => {
+    const archive = { path: `dist/mac/${macosZipName('0.1.0-rc.3')}`, sha256: 'b'.repeat(64) };
+    const components = [
+      { path: `${macosBundlePath}/Contents/MacOS/PRD Genie`, sha256: 'c'.repeat(64) },
+    ];
+    const notarization = {
+      jobId: '12345678-1234-1234-1234-123456789abc',
+      status: 'Accepted',
+      sha256: 'd'.repeat(64),
+    };
+    const expected = {
+      gitSha,
+      version: '0.1.0-rc.3',
+      build: '112',
+      archive,
+      components,
+      nativeCode: components,
+      notarization,
+      notarizationLogSha256: 'e'.repeat(64),
+      verificationLogSha256: 'f'.repeat(64),
+    };
+    // Policy fixture only; this is not a signed-package or installation result.
+    const report = {
+      schemaVersion: 1,
+      git: { sha: gitSha, clean: true },
+      passed: true,
+      architecture: 'arm64',
+      version: expected.version,
+      build: expected.build,
+      bundleIdentifier: 'app.stillform.prdgenie',
+      archive,
+      components,
+      nativeCode: components,
+      teamIdentifier: 'ABCDE12345',
+      signingName: 'Policy Fixture',
+      signingAuthority: 'Developer ID Application: Policy Fixture (ABCDE12345)',
+      notarization: { id: notarization.jobId, logSha256: expected.notarizationLogSha256 },
+      verificationLogSha256: expected.verificationLogSha256,
+      installation: {
+        archiveSha256: archive.sha256,
+        architecture: 'arm64',
+        version: expected.version,
+        build: expected.build,
+        macOSVersion: '26.0',
+        verifiedAt: '2026-10-23T12:00:00Z',
+        reviewer: 'Policy fixture',
+      },
+      checks: trueChecks(macosChecks),
+    };
+    expect(() => validateMacosReleaseReport(report, expected)).not.toThrow();
+    const mutations: Array<(value: typeof report) => void> = [
+      (value) => {
+        value.git.sha = '0'.repeat(40);
+      },
+      (value) => {
+        value.git.clean = false;
+      },
+      (value) => {
+        value.architecture = 'x64';
+      },
+      (value) => {
+        value.version = '0.1.0';
+      },
+      (value) => {
+        value.build = '111';
+      },
+      (value) => {
+        value.archive.sha256 = '0'.repeat(64);
+      },
+      (value) => {
+        value.components = [];
+      },
+      (value) => {
+        value.nativeCode = [];
+      },
+      (value) => {
+        value.signingAuthority = 'adhoc';
+      },
+      (value) => {
+        value.notarization.id = 'different';
+      },
+      (value) => {
+        value.installation.archiveSha256 = '0'.repeat(64);
+      },
+      (value) => {
+        value.installation.reviewer = '';
+      },
+      (value) => {
+        value.verificationLogSha256 = '0'.repeat(64);
+      },
+      (value) => {
+        delete value.checks.stapleValidated;
+      },
+      (value) => {
+        value.checks.launchSucceeded = false;
+      },
+    ];
+    for (const mutate of mutations) {
+      const invalid = structuredClone(report);
+      mutate(invalid);
+      expect(() => validateMacosReleaseReport(invalid, expected)).toThrow('macOS release evidence');
+    }
+    expect(() =>
+      validateMacosReleaseReport(report, {
+        ...expected,
+        notarization: { ...notarization, status: 'Invalid' },
+      }),
+    ).toThrow('macOS release evidence');
+  });
+
+  it('requires macOS evidence and binds packaged application files to the validated build', () => {
+    const root = artifactFixture();
+    writeJson(root, 'package.json', { version: '0.1.0-rc.3' });
+    expect(collectMacosArtifactPaths(root)).toEqual([]);
+    const packaged = path.join(root, macosBundlePath, 'Contents/Resources/app');
+    fs.mkdirSync(packaged, { recursive: true });
+    for (const relative of ['dist/client', 'dist/server', 'drizzle', 'package.json']) {
+      fs.mkdirSync(path.dirname(path.join(packaged, relative)), { recursive: true });
+      fs.cpSync(path.join(root, relative), path.join(packaged, relative), { recursive: true });
+    }
+    expect(() => validateMacosApplicationInputs(root)).not.toThrow();
+    fs.writeFileSync(path.join(packaged, 'dist/client/assets/app.js'), 'stale');
+    expect(() => validateMacosApplicationInputs(root)).toThrow('differs from validated build');
+    fs.writeFileSync(path.join(root, 'dist/mac', macosZipName('0.1.0-rc.3')), 'unsigned');
+    expect(() => collectMacosArtifactPaths(root)).toThrow('requires its release evidence');
+  });
+
+  it('allows only the one named macOS addition and requires its verified checkout', () => {
+    const releaseDirectory = finalReleaseFixture();
+    directories.push(releaseDirectory);
+    const name = macosZipName('0.1.0-rc.3');
+    fs.writeFileSync(path.join(releaseDirectory, name), 'unverified archive');
+    const names = fs
+      .readdirSync(releaseDirectory)
+      .filter((entry) => entry !== 'SHA256SUMS.txt')
+      .sort();
+    fs.writeFileSync(
+      path.join(releaseDirectory, 'SHA256SUMS.txt'),
+      names
+        .map(
+          (entry) =>
+            `${createHash('sha256')
+              .update(fs.readFileSync(path.join(releaseDirectory, entry)))
+              .digest('hex')}  ${entry}\n`,
+        )
+        .join(''),
+    );
+    expect(() =>
+      collectFinalReleaseAssets({ releaseDirectory, gitSha, tag: 'v0.1.0-rc.3' }),
+    ).toThrow('requires the verified release checkout');
+    fs.renameSync(
+      path.join(releaseDirectory, name),
+      path.join(releaseDirectory, 'prd-genie-v0.1.0-rc.3-macos-x64.zip'),
+    );
+    expect(() =>
+      collectFinalReleaseAssets({ releaseDirectory, gitSha, tag: 'v0.1.0-rc.3' }),
+    ).toThrow('exact required asset inventory');
+  });
+
+  it('requires platform verification and exact prepared provenance for the seventh asset', () => {
+    // Mock platform responses exercise policy wiring only, never claim Apple verification.
+    const root = artifactFixture();
+    writeEvidence(root);
+    const version = '0.1.0-rc.3';
+    writeJson(root, 'package.json', { version });
+    const bundle = path.join(root, macosBundlePath);
+    const app = path.join(bundle, 'Contents/Resources/app');
+    fs.mkdirSync(app, { recursive: true });
+    for (const relative of ['dist/client', 'dist/server', 'drizzle', 'package.json']) {
+      fs.mkdirSync(path.dirname(path.join(app, relative)), { recursive: true });
+      fs.cpSync(path.join(root, relative), path.join(app, relative), { recursive: true });
+    }
+    const native = [
+      'Contents/MacOS/PRD Genie',
+      'Contents/Resources/node',
+      'Contents/Resources/jpeg-ocr',
+    ];
+    const header = Buffer.alloc(8);
+    header.writeUInt32LE(0xfeedfacf, 0);
+    header.writeUInt32LE(0x0100000c, 4);
+    for (const relative of native) {
+      fs.mkdirSync(path.dirname(path.join(bundle, relative)), { recursive: true });
+      fs.writeFileSync(path.join(bundle, relative), header);
+    }
+    fs.writeFileSync(path.join(bundle, 'Contents/Info.plist'), 'Policy fixture');
+    const archiveName = macosZipName(version);
+    fs.writeFileSync(path.join(root, 'dist/mac', archiveName), 'Policy fixture archive');
+    const notarization = {
+      jobId: '12345678-1234-1234-1234-123456789abc',
+      status: 'Accepted',
+      sha256: 'a'.repeat(64),
+      ticketContents: [{ arch: 'arm64', cdhash: 'a'.repeat(40) }],
+    };
+    writeJson(root, 'reports/macos-notarization.json', notarization);
+    fs.writeFileSync(
+      path.join(root, 'reports/macos-verification.txt'),
+      'Mock platform observations, not release evidence',
+    );
+    writeJson(root, 'reports/macos-release.json', {});
+    const hash = (relative: string) =>
+      createHash('sha256')
+        .update(fs.readFileSync(path.join(root, relative)))
+        .digest('hex');
+    const components = collectMacosArtifactPaths(root)
+      .filter((file) => file.startsWith(`${macosBundlePath}/`))
+      .map((file) => ({ path: file, sha256: hash(file) }));
+    const nativeCode = components.filter((item) =>
+      native.some((file) => item.path === `${macosBundlePath}/${file}`),
+    );
+    const archive = { path: `dist/mac/${archiveName}`, sha256: hash(`dist/mac/${archiveName}`) };
+    const report = {
+      schemaVersion: 1,
+      passed: true,
+      git: { sha: gitSha, clean: true },
+      architecture: 'arm64',
+      version,
+      build: '112',
+      bundleIdentifier: 'app.stillform.prdgenie',
+      archive,
+      components,
+      nativeCode,
+      teamIdentifier: 'ABCDE12345',
+      signingName: 'Policy Fixture',
+      signingAuthority: 'Developer ID Application: Policy Fixture (ABCDE12345)',
+      notarization: { id: notarization.jobId, logSha256: hash('reports/macos-notarization.json') },
+      verificationLogSha256: hash('reports/macos-verification.txt'),
+      installation: {
+        archiveSha256: archive.sha256,
+        architecture: 'arm64',
+        version,
+        build: '112',
+        macOSVersion: '26.0',
+        verifiedAt: '2026-10-23T12:00:00Z',
+        reviewer: 'Policy fixture',
+      },
+      checks: trueChecks(macosChecks),
+    };
+    writeJson(root, 'reports/macos-release.json', report);
+    const plist: Record<string, string> = {
+      PRDGenieGitCommit: gitSha,
+      PRDGenieReleaseVersion: version,
+      CFBundleShortVersionString: '0.1.0',
+      CFBundleVersion: '112',
+      CFBundleIdentifier: 'app.stillform.prdgenie',
+    };
+    const names = components.map((item) => item.path.slice('dist/mac/'.length));
+    let signatureFailure = false;
+    vi.mocked(execFileSync).mockImplementation(((command: string, args: string[]) => {
+      if (command === 'git') return '112';
+      if (command === '/usr/bin/plutil') return plist[args[1]!]!;
+      if (command === '/usr/bin/zipinfo')
+        return args[0] === '-1'
+          ? names.join('\n')
+          : [
+              'Archive: fixture',
+              'Zip file size: fixture',
+              ...names.map((name) => `-rw-r--r-- fixture ${name}`),
+              'Totals',
+            ].join('\n');
+      if (command === '/usr/bin/ditto') {
+        fs.cpSync(bundle, path.join(args[3]!, 'PRD Genie.app'), { recursive: true });
+        return '';
+      }
+      if (command === '/bin/sh')
+        return `Authority=${report.signingAuthority}\nTeamIdentifier=${report.teamIdentifier}\nflags=0x10000(runtime)\nTimestamp=Oct 23, 2026\nCDHash=${'a'.repeat(40)}\n`;
+      if (command === '/usr/bin/codesign' && signatureFailure) throw new Error('Invalid signature');
+      if (['/usr/bin/codesign', '/usr/bin/xcrun', '/usr/sbin/spctl'].includes(command)) return '';
+      throw new Error(`Unexpected command ${command}`);
+    }) as typeof execFileSync);
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).not.toThrow();
+    signatureFailure = true;
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).toThrow('Invalid signature');
+    signatureFailure = false;
+    plist.PRDGenieGitCommit = '0'.repeat(40);
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).toThrow('bundle identity');
+    plist.PRDGenieGitCommit = gitSha;
+    const releaseDirectory = finalReleaseFixture();
+    directories.push(releaseDirectory);
+    fs.copyFileSync(path.join(root, archive.path), path.join(releaseDirectory, archiveName));
+    const publicProvenance = {
+      git: { sha: gitSha, clean: true },
+      claims: {
+        releasePreparationAuthorized: true,
+        releaseTag: `v${version}`,
+        rightsConfirmed: true,
+        sourceVisibility: 'public-github',
+        publicTarget: publicReleaseTarget,
+        publicName: publicProductName,
+        validationStatus: 'passed',
+        publicPromotionApprovalRequired: true,
+      },
+      artifacts: collectArtifactPaths(root).map((file) => ({ path: file, sha256: hash(file) })),
+    };
+    writeJson(releaseDirectory, `prd-genie-v${version}-provenance.json`, publicProvenance);
+    const manifest = () =>
+      fs.writeFileSync(
+        path.join(releaseDirectory, 'SHA256SUMS.txt'),
+        fs
+          .readdirSync(releaseDirectory)
+          .filter((file) => file !== 'SHA256SUMS.txt')
+          .sort()
+          .map(
+            (file) =>
+              `${createHash('sha256')
+                .update(fs.readFileSync(path.join(releaseDirectory, file)))
+                .digest('hex')}  ${file}\n`,
+          )
+          .join(''),
+      );
+    manifest();
+    expect(
+      collectFinalReleaseAssets({ releaseDirectory, root, gitSha, tag: `v${version}` }),
+    ).toHaveLength(7);
+    publicProvenance.claims.rightsConfirmed = false;
+    writeJson(releaseDirectory, `prd-genie-v${version}-provenance.json`, publicProvenance);
+    manifest();
+    expect(() =>
+      collectFinalReleaseAssets({ releaseDirectory, root, gitSha, tag: `v${version}` }),
+    ).toThrow('authorized preparation provenance');
+    fs.writeFileSync(path.join(releaseDirectory, archiveName), 'changed');
+    manifest();
+    expect(() =>
+      collectFinalReleaseAssets({ releaseDirectory, root, gitSha, tag: `v${version}` }),
+    ).toThrow('differs from the verified preparation');
+    expect(() =>
+      validateMacosReleaseEvidence(root, gitSha, path.join(releaseDirectory, archiveName)),
+    ).toThrow('differs from the verified preparation');
+    header.writeUInt32LE(0x01000007, 4);
+    fs.writeFileSync(path.join(bundle, native[0]!), header);
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).toThrow('ARM64 only');
+    header.writeUInt32LE(0x0100000c, 4);
+    fs.writeFileSync(path.join(bundle, native[0]!), header);
+    fs.writeFileSync(path.join(root, 'reports/macos-verification.txt'), '');
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).toThrow('transcript is empty');
+    fs.writeFileSync(
+      path.join(root, 'reports/macos-verification.txt'),
+      'Mock platform observations, not release evidence',
+    );
+    fs.rmSync(path.join(bundle, 'Contents/Resources/jpeg-ocr'));
+    expect(() => validateMacosReleaseEvidence(root, gitSha)).toThrow('native component is missing');
+    fs.symlinkSync(path.join(bundle, native[0]!), path.join(bundle, 'Contents/Resources/jpeg-ocr'));
+    expect(() => collectMacosArtifactPaths(root)).toThrow('symbolic links');
+  });
+
+  it('rejects ZIP aliases before extraction', () => {
+    const name = 'PRD Genie.app/Contents/a';
+    vi.mocked(execFileSync).mockImplementation(((command: string, args: string[]) => {
+      if (command !== '/usr/bin/zipinfo') throw new Error('Extraction must not occur');
+      const names = [name, 'PRD Genie.app/Contents//a'];
+      return args[0] === '-1'
+        ? names.join('\n')
+        : ['Archive', 'Size', ...names.map((item) => `-rw-r--r-- fixture ${item}`), 'Totals'].join(
+            '\n',
+          );
+    }) as typeof execFileSync);
+    expect(() =>
+      inspectMacosArchive(
+        'fixture.zip',
+        [{ path: `dist/mac/${name}`, sha256: 'a'.repeat(64) }],
+        () => {},
+      ),
+    ).toThrow('entry inventory differs');
   });
 
   it('fails closed when any required artifact is absent', () => {

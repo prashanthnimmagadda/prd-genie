@@ -35,6 +35,10 @@ describe('portable project archive restore', () => {
 
   it('round trips project revisions and lexical source data with remapped IDs', async () => {
     const project = repository.createProject('Portable project', 'Synthetic archive fixture');
+    const custom = repository.createStructure(project.id, 'Client requirements', [
+      { title: 'Problem', purpose: 'Explain the client problem.', required: true },
+      { title: 'Acceptance', purpose: 'Define checkable acceptance.', required: true },
+    ]);
     const prd = repository.getPrd(project.id);
     repository.savePrd(
       project.id,
@@ -53,6 +57,14 @@ describe('portable project archive restore', () => {
     expect(restored.id).not.toBe(project.id);
     expect(restoredAgain.id).not.toBe(restored.id);
     const restoredPrd = repository.getPrd(restored.id);
+    const restoredStructures = repository.listStructures(restored.id);
+    expect(restoredStructures.map((item) => item.name)).toEqual([
+      'Standard PRD',
+      'Client requirements',
+    ]);
+    expect(restoredStructures[1]?.id).not.toBe(custom.id);
+    expect(restoredStructures[1]?.sections[1]?.purpose).toBe('Define checkable acceptance.');
+    expect(repository.getProject(restored.id).selectedStructureId).toBe(restoredStructures[0]?.id);
     expect(restoredPrd.revision).toBe(1);
     expect(restoredPrd.sections).toContainEqual(
       expect.objectContaining({ body: 'People lose a synthetic draft.' }),
@@ -118,6 +130,25 @@ describe('portable project archive restore', () => {
       .all(firstRestored.id, secondRestored.id) as Array<{ binaryPath: string }>;
     expect(new Set(restoredPaths.map((row) => row.binaryPath)).size).toBe(1);
     expect(fs.readFileSync(restoredPaths[0]!.binaryPath, 'utf8')).toBe(content);
+  });
+
+  it('restores the selected custom structure with section guidance', async () => {
+    const project = repository.createProject('Structured project', '');
+    const custom = repository.createStructure(project.id, 'Client memo', [
+      { title: 'Decision', purpose: 'Describe the decision.', required: true },
+      { title: 'Evidence', purpose: 'Cite supporting evidence.', required: false },
+    ]);
+    repository.selectStructure(project.id, custom.id, 0);
+    const archive = await exporter.create(project.id, 'archive');
+    const restored = await exporter.restoreArchive(archive.body);
+    const selected = repository
+      .listStructures(restored.id)
+      .find((item) => item.id === repository.getProject(restored.id).selectedStructureId);
+    expect(selected).toMatchObject({ name: 'Client memo' });
+    expect(repository.getPrd(restored.id).sections).toMatchObject([
+      { title: 'Decision', purpose: 'Describe the decision.', required: true },
+      { title: 'Evidence', purpose: 'Cite supporting evidence.', required: false },
+    ]);
   });
 
   it('round trips exact applied ChatGPT handoff provenance with remapped digests', async () => {

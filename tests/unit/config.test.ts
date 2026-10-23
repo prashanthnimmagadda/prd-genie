@@ -25,8 +25,9 @@ describe('server host policy', () => {
 
     expect(isAllowedBrowserOrigin(undefined, '127.0.0.1:3210')).toBe(true);
     expect(isAllowedBrowserOrigin('http://127.0.0.1:3210', '127.0.0.1:3210')).toBe(true);
-    expect(isAllowedBrowserOrigin('https://localhost:3210', 'localhost:3210')).toBe(true);
+    expect(isAllowedBrowserOrigin('https://localhost:3210', 'localhost:3210')).toBe(false);
     expect(isAllowedBrowserOrigin('https://private.example', '127.0.0.1:3210')).toBe(false);
-    expect(isAllowedBrowserOrigin('http://localhost:9999', 'localhost:3210')).toBe(true);
+    expect(isAllowedBrowserOrigin('http://localhost:9999', 'localhost:3210')).toBe(false);
+    expect(isAllowedBrowserOrigin('http://localhost:3210', '127.0.0.1:3210')).toBe(false);
   });
 });

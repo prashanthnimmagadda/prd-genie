@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { PDFDocument } from 'pdf-lib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../../src/server/config.js';
 import type { AppDatabase } from '../../src/server/db/client.js';
@@ -83,6 +84,27 @@ describe('source lifecycle and retrieval fallback', () => {
     expect(repository.listSources(project.id)).toHaveLength(0);
     expect(fs.readdirSync(directory)).toHaveLength(0);
     expect(() => repository.deleteSource(project.id, source.id)).toThrow('Source not found');
+  });
+
+  it('retains extraction warnings when indexing fails and is retried', async () => {
+    const project = repository.createProject('Partial PDF', '');
+    const pdf = await PDFDocument.create();
+    pdf.addPage().drawText('Recover drafts offline');
+    pdf.addPage();
+    const service = new SourceService(database, unavailableEmbeddings);
+    const source = await service.add(project.id, 'notes.pdf', Buffer.from(await pdf.save()));
+    await expect.poll(() => repository.listSources(project.id)[0]?.status).toBe('partial');
+    expect(repository.listSources(project.id)[0]?.error).toContain(
+      'Page 2 contained no extractable text',
+    );
+    expect(repository.listSources(project.id)[0]?.error).toContain(
+      'Semantic indexing is unavailable',
+    );
+    service.retry(project.id, source.id);
+    await expect.poll(() => repository.listSources(project.id)[0]?.status).toBe('partial');
+    expect(repository.listSources(project.id)[0]?.error).toContain(
+      'Page 2 contained no extractable text',
+    );
   });
 
   it('cancels pending binary cleanup when the same content is uploaded again', async () => {
