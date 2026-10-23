@@ -2,6 +2,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  lstatSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -12,6 +13,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
+if (process.arch !== 'arm64')
+  throw new Error('This macOS distribution supports Apple Silicon ARM64 only.');
 if (process.platform !== 'darwin') throw new Error('macOS packaging must run on macOS.');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'dist/mac/PRD Genie.app');
@@ -37,6 +40,10 @@ if (
   throw new Error('Use a full Git checkout to derive the native build number.');
 }
 const buildNumber = execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+  cwd: root,
+  encoding: 'utf8',
+}).trim();
+const gitCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
   cwd: root,
   encoding: 'utf8',
 }).trim();
@@ -80,7 +87,24 @@ for (const source of installed) {
     throw new Error(`Unexpected dependency location: ${source}`);
   const target = path.join(appRoot, 'node_modules', relative);
   mkdirSync(path.dirname(target), { recursive: true });
-  cpSync(source, target, { recursive: true, dereference: true });
+  cpSync(source, target, {
+    recursive: true,
+    dereference: true,
+    filter: (entry) => {
+      // Dependencies ship foreign prebuilds alongside the selected macOS runtime.
+      // Omit only those binaries; keep package metadata, sources and licences.
+      const parts = path.relative(source, entry).split(path.sep);
+      const prebuild = parts.indexOf('prebuilds');
+      const platform = parts[prebuild + 1];
+      return !(
+        prebuild >= 0 &&
+        platform &&
+        !/^darwin-arm64(?:[./-]|$)/.test(platform) &&
+        /\.(?:node|bare|so|dll|dylib)$/.test(entry) &&
+        lstatSync(entry).isFile()
+      );
+    },
+  });
 }
 
 const swiftEnv = {
@@ -134,6 +158,7 @@ writeFileSync(
 <key>CFBundleVersion</key><string>${buildNumber}</string>
 <key>CFBundleShortVersionString</key><string>${nativeVersion}</string>
 <key>PRDGenieReleaseVersion</key><string>${packageJson.version}</string>
+<key>PRDGenieGitCommit</key><string>${gitCommit}</string>
 <key>CFBundleExecutable</key><string>PRD Genie</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>

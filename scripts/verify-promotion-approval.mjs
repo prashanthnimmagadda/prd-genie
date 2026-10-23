@@ -31,7 +31,7 @@ const tagObjectSha = (() => {
   }
 })();
 
-const releaseAssets = collectFinalReleaseAssets({ releaseDirectory, gitSha, tag });
+const releaseAssets = collectFinalReleaseAssets({ releaseDirectory, gitSha, tag, root });
 validateFinalPromotionApproval({
   approval,
   releaseAssets,

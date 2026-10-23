@@ -68,6 +68,7 @@ export function collectFinalReleaseAssets(input: {
   releaseDirectory: string;
   gitSha: string;
   tag: string;
+  root?: string;
 }): ArtifactRecord[];
 export function validateContainerSmokeReport(report: unknown, gitSha: string): boolean;
 export function containsUnsupportedQualifier(value: string): boolean;

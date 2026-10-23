@@ -49,7 +49,7 @@ This case proves the recorded real-source workflow and rejection behavior, not r
 
 ## Real-model evaluation
 
-`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is an optional release gate that requires explicitly installed local models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
+`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is a required release gate for the exact clean release commit and requires explicitly installed local models. Missing runtime or model access blocks release evidence; it does not waive the gate or authorize starting services or installing models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
 
 Prepare the bounded evaluation model before the first run:
 
