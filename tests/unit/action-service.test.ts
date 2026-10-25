@@ -186,6 +186,7 @@ describe('ActionService', () => {
     expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
       model: 'evaluation-only',
       maxRetries: 0,
+      toolChoice: 'none',
       maxOutputTokens: 1800,
     });
     expect(providers.model).not.toHaveBeenCalled();

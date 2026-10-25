@@ -93,7 +93,13 @@ export function exactBonsaiMessages(
     (options.toolChoice && options.toolChoice.type !== 'none') ||
     (options.responseFormat && options.responseFormat.type !== 'text') ||
     options.stopSequences?.length ||
-    (options.headers && Object.values(options.headers).some((value) => value !== undefined))
+    // generateText adds this transport-only identifier even without caller
+    // headers. Admit only the exact pinned SDK value; it is not part of the
+    // native body. Caller-supplied prefixes and every other header still fail.
+    (options.headers &&
+      Object.entries(options.headers).some(
+        ([name, value]) => value !== undefined && !(name === 'user-agent' && value === 'ai/7.0.77'),
+      ))
   ) {
     throw new Error('Bonsai evaluation accepts only the unchanged text-only corpus requests.');
   }

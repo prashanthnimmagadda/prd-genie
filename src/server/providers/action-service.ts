@@ -191,7 +191,9 @@ export class ActionService {
                             assertGenerationComplete(
                               await generateText({
                                 model: model!,
-                                ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
+                                ...(this.evaluation?.disableRetries
+                                  ? { maxRetries: 0, toolChoice: 'none' as const }
+                                  : {}),
                                 system: ollamaReviewSystemPrompt(),
                                 prompt:
                                   attempt === 0
@@ -212,7 +214,9 @@ export class ActionService {
                           assertGenerationComplete(
                             await generateText({
                               model: model!,
-                              ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
+                              ...(this.evaluation?.disableRetries
+                                ? { maxRetries: 0, toolChoice: 'none' as const }
+                                : {}),
                               output: Output.object({ schema: reviewGenerationSchema }),
                               system: reviewSystemPrompt(),
                               prompt,
@@ -368,7 +372,9 @@ export class ActionService {
             } else {
               const result = streamText({
                 model: model!,
-                ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
+                ...(this.evaluation?.disableRetries
+                  ? { maxRetries: 0, toolChoice: 'none' as const }
+                  : {}),
                 system: actionSystemPrompt(request.action, request.scope, isFreshDocumentDraft),
                 prompt: buildPrompt(
                   prd,
@@ -431,7 +437,9 @@ export class ActionService {
                     : assertGenerationComplete(
                         await generateText({
                           model: model!,
-                          ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
+                          ...(this.evaluation?.disableRetries
+                            ? { maxRetries: 0, toolChoice: 'none' as const }
+                            : {}),
                           system: actionSystemPrompt(
                             request.action,
                             request.scope,
