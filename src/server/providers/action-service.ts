@@ -2,6 +2,7 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateText,
+  type LanguageModel,
   Output,
   streamText,
 } from 'ai';
@@ -38,11 +39,18 @@ type ResolvedReviewFinding = {
   section: PrdSection;
 };
 
+// In-process evaluation injection only. No route or user provider enables this.
+export interface ActionEvaluationOptions {
+  model: LanguageModel;
+  disableRetries: true;
+}
+
 export class ActionService {
   constructor(
     private readonly repository: Repository,
     private readonly retrieval: RetrievalService,
     private readonly providers: ProviderService,
+    private readonly evaluation?: ActionEvaluationOptions,
   ) {}
 
   async run(
@@ -76,9 +84,10 @@ export class ActionService {
           ? filterExcludedProposalEvidence(retrievedEvidence, request.instruction ?? '')
           : retrievedEvidence;
     const model =
-      request.provider === 'chatgpt'
+      this.evaluation?.model ??
+      (request.provider === 'chatgpt'
         ? undefined
-        : this.providers.model(sessionId, request.provider, request.model);
+        : this.providers.model(sessionId, request.provider, request.model));
     const citationInputs = evidence.map((citation) => {
       if (!citation.sourceId || !citation.locationId || !citation.chunkId) {
         throw new ApiError(
@@ -155,7 +164,11 @@ export class ActionService {
             ].join('\n');
             let output: GeneratedReview | undefined;
             let resolvedFindings: ResolvedReviewFinding[] | undefined;
-            const attempts = request.provider === 'ollama' ? 3 : 1;
+            const attempts = this.evaluation?.disableRetries
+              ? 1
+              : request.provider === 'ollama'
+                ? 3
+                : 1;
             const allowedCitationChunkIds = [...citationIds.keys()];
             for (let attempt = 0; attempt < attempts; attempt += 1) {
               try {
@@ -178,6 +191,7 @@ export class ActionService {
                             assertGenerationComplete(
                               await generateText({
                                 model: model!,
+                                ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
                                 system: ollamaReviewSystemPrompt(),
                                 prompt:
                                   attempt === 0
@@ -198,6 +212,7 @@ export class ActionService {
                           assertGenerationComplete(
                             await generateText({
                               model: model!,
+                              ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
                               output: Output.object({ schema: reviewGenerationSchema }),
                               system: reviewSystemPrompt(),
                               prompt,
@@ -353,6 +368,7 @@ export class ActionService {
             } else {
               const result = streamText({
                 model: model!,
+                ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
                 system: actionSystemPrompt(request.action, request.scope, isFreshDocumentDraft),
                 prompt: buildPrompt(
                   prd,
@@ -391,7 +407,11 @@ export class ActionService {
                 .filter((item) => !isInstructionLikeEvidence(item.excerpt))
                 .map((item) => item.excerpt),
             ].filter((item) => item.trim().length > 0);
-            const attempts = request.provider === 'ollama' ? 3 : 1;
+            const attempts = this.evaluation?.disableRetries
+              ? 1
+              : request.provider === 'ollama'
+                ? 3
+                : 1;
             let output: string | undefined;
             for (let attempt = 0; attempt < attempts; attempt += 1) {
               try {
@@ -411,6 +431,7 @@ export class ActionService {
                     : assertGenerationComplete(
                         await generateText({
                           model: model!,
+                          ...(this.evaluation?.disableRetries ? { maxRetries: 0 } : {}),
                           system: actionSystemPrompt(
                             request.action,
                             request.scope,
@@ -1090,7 +1111,7 @@ function sectionBoundaryGuidance(title: string): string {
   }
 }
 
-function actionSystemPrompt(
+export function actionSystemPrompt(
   action: AiActionRequest['action'],
   scope: AiActionRequest['scope'],
   isFreshDocumentDraft = false,
@@ -1145,7 +1166,7 @@ function reviewSystemPrompt(): string {
   ].join(' ');
 }
 
-function ollamaReviewSystemPrompt(): string {
+export function ollamaReviewSystemPrompt(): string {
   return [
     reviewSystemPrompt(),
     'Return one JSON object only, with no Markdown fence or commentary.',

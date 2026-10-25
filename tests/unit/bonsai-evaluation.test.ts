@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import retained from '../fixtures/bonsai/retained-encoding-task.json';
 import {
   bonsaiBudgetPairs,
+  bonsaiEvaluationPolicy,
   canonicalJson,
   decodeBonsaiResult,
   encodeBonsaiTask,
@@ -51,6 +52,27 @@ describe('Bonsai revision02 evaluation boundary', () => {
         'Unsupported Bonsai budget',
       );
     }
+  });
+
+  it('applies the approved corpus policy only to its exact cases and allowances', () => {
+    const rows = Object.entries(bonsaiEvaluationPolicy.originalBudgets).map(
+      ([id, maxOutputTokens]) => ({ id, maxOutputTokens }),
+    );
+    const configured = inspectBonsaiBudgets(rows);
+    expect(configured).toHaveLength(6);
+    expect(
+      configured.every(
+        (row) =>
+          row.status === 'configured' && row.maxTokens === 8192 && row.reasoningTokens === 4096,
+      ),
+    ).toBe(true);
+    expect(
+      inspectBonsaiBudgets([{ id: 'grounded-problem', maxOutputTokens: 9000 }])[0]?.status,
+    ).toBe('pending');
+    expect(inspectBonsaiBudgets([{ id: 'new-case', maxOutputTokens: 1800 }])[0]?.status).toBe(
+      'pending',
+    );
+    expect(bonsaiEvaluationPolicy.application9000CeilingVerified).toBe(false);
   });
 
   it('refuses malformed input and a purported completion without revision02 evidence', () => {

@@ -15,7 +15,10 @@ export function inspectBonsaiBudgets<T extends { id: string; maxOutputTokens: nu
   requirements: T[],
 ): Array<
   T & {
-    status: 'pending';
+    status: 'configured' | 'pending';
+    policyId: string | null;
+    maxTokens: number | null;
+    reasoningTokens: number | null;
     nativePairs: typeof bonsaiBudgetPairs;
     reason: string;
   }
@@ -43,3 +46,12 @@ export function decodeBonsaiResult(
     public_wrapper_sha256: string;
   },
 ): { result: Record<string, unknown>; usable: boolean; stopBatch: boolean };
+
+export const bonsaiEvaluationPolicy: Readonly<{
+  id: 'bonsai-release-corpus-v1';
+  maxTokens: 8192;
+  reasoningTokens: 4096;
+  originalBudgets: Readonly<Record<string, number>>;
+  equivalentToApplicationBudgets: false;
+  application9000CeilingVerified: false;
+}>;

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
 import {
   collectMacosArtifactPaths,
   macosZipName,
@@ -137,6 +138,11 @@ export const requiredArtifactFiles = [
   'scripts/container-entrypoint.sh',
   'scripts/provenance.mjs',
   'scripts/provenance-policy.mjs',
+  'scripts/bonsai-evidence-policy.mjs',
+  'evaluations/prd-corpus-v3.json',
+  'scripts/bonsai-evaluation.mjs',
+  'evaluations/bonsai-revision02/task.schema.json',
+  'evaluations/bonsai-revision02/result.schema.json',
   'scripts/macos-release-policy.mjs',
   'scripts/record-container-smoke.mjs',
   'scripts/record-test-coverage.mjs',
@@ -622,7 +628,7 @@ function validModelEvidence(model, gitSha) {
     typeof model.reviewModel !== 'string' ||
     !model.reviewModel.trim() ||
     !/^[a-f0-9]{64}$/.test(model.reviewModelDigest ?? '') ||
-    model.provider !== 'ollama' ||
+    !(model.provider === 'ollama' || validBonsaiEvidence(model)) ||
     model.retrievalMode !== 'lexical' ||
     model.corpusVersion !== 3 ||
     !hasExactModelScenarios(model.scenarios) ||

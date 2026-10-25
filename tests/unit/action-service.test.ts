@@ -160,6 +160,41 @@ describe('ActionService', () => {
     providers.chatGptResponse.mockResolvedValue('People lose unsaved drafts.');
   });
 
+  it('disables repair and SDK retries for the injected evaluation model', async () => {
+    const evaluation = new ActionService(
+      repository as unknown as Repository,
+      retrieval as unknown as RetrievalService,
+      providers as unknown as ProviderService,
+      { model: 'evaluation-only', disableRetries: true },
+    );
+    aiMocks.generateText.mockResolvedValue({ text: 'unfinished', finishReason: 'length' });
+    const response = await evaluation.run(
+      'session',
+      {
+        projectId,
+        revision: 2,
+        action: 'rewrite',
+        scope: 'section',
+        provider: 'ollama',
+        model: 'evaluation-only',
+        targetSectionId: sectionId,
+      },
+      new AbortController().signal,
+    );
+    expect(await response.text()).toContain('incomplete_generation');
+    expect(aiMocks.generateText).toHaveBeenCalledTimes(1);
+    expect(aiMocks.generateText.mock.calls[0]?.[0]).toMatchObject({
+      model: 'evaluation-only',
+      maxRetries: 0,
+      maxOutputTokens: 1800,
+    });
+    expect(providers.model).not.toHaveBeenCalled();
+    expect(repository.completeAiRun).toHaveBeenCalledExactlyOnceWith(
+      'run-id',
+      'incomplete_generation',
+    );
+  });
+
   it('packages workflow, project context, section purpose, and evidence separately from instructions', async () => {
     repository.getPrd.mockReturnValueOnce({
       ...prd,

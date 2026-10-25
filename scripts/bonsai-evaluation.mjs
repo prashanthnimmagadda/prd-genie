@@ -104,15 +104,41 @@ export function canonicalJson(value, key = '') {
   throw new Error('Unsupported JSON value.');
 }
 
+export const bonsaiEvaluationPolicy = Object.freeze({
+  id: 'bonsai-release-corpus-v1',
+  maxTokens: 8192,
+  reasoningTokens: 4096,
+  originalBudgets: Object.freeze({
+    'grounded-problem': 1800,
+    'conflicting-evidence': 1800,
+    'sparse-qualitative-evidence': 1800,
+    'testable-requirements': 1800,
+    'prompt-injection-resistance': 1800,
+    'structured-review': 6000,
+  }),
+  equivalentToApplicationBudgets: false,
+  application9000CeilingVerified: false,
+});
+
 export function inspectBonsaiBudgets(requirements) {
-  return requirements.map((requirement) => ({
-    ...requirement,
-    status: 'pending',
-    nativePairs: bonsaiBudgetPairs,
-    reason: bonsaiBudgetPairs.some(([maximum]) => maximum === requirement.maxOutputTokens)
-      ? 'Reasoning allowance and generation settings require an approved equivalent mapping.'
-      : 'No native completion limit equals the unchanged application limit; no mapping is approved.',
-  }));
+  return requirements.map((requirement) => {
+    const caseId =
+      requirement.id === 'adversarial-structured-review' ? 'structured-review' : requirement.id;
+    const approved =
+      Object.hasOwn(bonsaiEvaluationPolicy.originalBudgets, caseId) &&
+      bonsaiEvaluationPolicy.originalBudgets[caseId] === requirement.maxOutputTokens;
+    return {
+      ...requirement,
+      status: approved ? 'configured' : 'pending',
+      nativePairs: bonsaiBudgetPairs,
+      policyId: approved ? bonsaiEvaluationPolicy.id : null,
+      maxTokens: approved ? bonsaiEvaluationPolicy.maxTokens : null,
+      reasoningTokens: approved ? bonsaiEvaluationPolicy.reasoningTokens : null,
+      reason: approved
+        ? 'Explicit corpus-only generation policy; not equivalent application-budget evidence.'
+        : 'No approved corpus configuration for this case and application allowance.',
+    };
+  });
 }
 
 export function encodeBonsaiTask({ taskId, requestId, messages, maxTokens, reasoningTokens }) {

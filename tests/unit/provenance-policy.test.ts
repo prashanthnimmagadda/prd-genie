@@ -4,6 +4,14 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import corpus from '../../evaluations/prd-corpus-v3.json';
+import {
+  bonsaiEvaluationPolicy,
+  canonicalJson,
+  encodeBonsaiTask,
+  sha256,
+  type BonsaiTaskInput,
+} from '../../scripts/bonsai-evaluation.mjs';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -590,6 +598,98 @@ describe('release provenance policy', () => {
     }
   });
 
+  it('requires six exact terminal Bonsai receipts without changing the corpus assertions', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    const report = bonsaiModelFixture();
+    writeJson(root, 'reports/model-evaluation.json', report);
+    expect(() => validateEvidenceReports(root, gitSha)).not.toThrow();
+    const mutations: Array<(value: ReturnType<typeof bonsaiModelFixture>) => void> = [
+      (value) => {
+        value.bonsai.records.pop();
+      },
+      (value) => {
+        value.bonsai.records[0]!.caseId = 'substitute';
+      },
+      (value) => {
+        value.bonsai.records[0]!.originalMaxOutputTokens = 1000;
+      },
+      (value) => {
+        value.bonsai.records[0]!.runId = 'unrelated-run';
+      },
+      (value) => {
+        value.bonsai.records[0]!.result.status = 'UNKNOWN';
+      },
+      (value) => {
+        Object.assign(value.bonsai.records[0]!, { status: 'UNKNOWN' });
+      },
+      (value) => {
+        value.bonsai.records[0]!.result.response.finish_reason = 'length';
+      },
+      (value) => {
+        value.bonsai.records[0]!.taskJson = value.bonsai.records[0]!.taskJson.replace(
+          '8192',
+          '4096',
+        );
+      },
+      (value) => {
+        value.bonsai.records[0]!.result.body_sha256 = '0'.repeat(64);
+      },
+      (value) => {
+        const record = value.bonsai.records[0]!;
+        const task = JSON.parse(record.taskJson) as {
+          task_id: string;
+          request_id: string;
+          body: { messages: BonsaiTaskInput['messages'] };
+        };
+        task.body.messages[0]!.content = 'Unrelated system instructions.';
+        const encoded = encodeBonsaiTask({
+          taskId: task.task_id,
+          requestId: task.request_id,
+          messages: task.body.messages,
+          maxTokens: 8192,
+          reasoningTokens: 4096,
+        });
+        record.taskJson = encoded.bytes.toString('utf8');
+        record.result.task_json_sha256 = sha256(encoded.bytes);
+        record.result.body_sha256 = String(encoded.task.expected_body_sha256);
+        record.result.messages_sha256 = sha256(canonicalJson(task.body.messages));
+      },
+      (value) => {
+        const result = value.bonsai.records[0]!.result;
+        result.response.content = 'Unrelated output with a valid response hash.';
+        result.response_sha256 = sha256(canonicalJson(result.response));
+      },
+      (value) => {
+        value.structuredReview.findings[0]!.rationale = 'Unrelated reported finding.';
+      },
+      (value) => {
+        value.bonsai.records[0]!.result.generation = '0'.repeat(64);
+      },
+      (value) => {
+        value.bonsai.records[0]!.result.no_tools.attempted_tool_calls = 1;
+      },
+      (value) => {
+        value.bonsai.sourceIdentity = { ...value.bonsai.sourceIdentity, commit: '0'.repeat(40) };
+      },
+      (value) => {
+        value.modelDigest = '0'.repeat(64);
+      },
+      (value) => {
+        value.scenarios[0]!.checks.mentionsInterviewBase = false;
+      },
+      (value) => {
+        value.dirtyWorkingTree = true;
+      },
+    ];
+    for (const mutate of mutations) {
+      const changed = structuredClone(report);
+      mutate(changed);
+      writeJson(root, 'reports/model-evaluation.json', changed);
+      expect(() => validateEvidenceReports(root, gitSha)).toThrow('Model evaluation evidence');
+    }
+  });
+
   it('requires complete normalized container evidence for the clean SHA', () => {
     const root = artifactFixture();
     writeEvidence(root);
@@ -1038,6 +1138,217 @@ function modelFixture() {
     persistence,
     score: { passed: total, total, percentage: 100 },
     limitations: ['Synthetic corpus only.'],
+  };
+}
+
+// Schema fixtures only. No native entry, model or shared runtime is contacted.
+function bonsaiModelFixture() {
+  const model = modelFixture();
+  const sourceIdentity = {
+    commit: '1'.repeat(40),
+    tree: '2'.repeat(40),
+    module_sha256: '3'.repeat(64),
+    consumer_record_sha256: '4'.repeat(64),
+    public_wrapper_sha256: '5'.repeat(64),
+  };
+  const generatedTexts = [
+    'Eight of twelve interviewed product managers lost unsaved PRD work in the previous 30 days. Those participants estimated a mean reconstruction time of 23 minutes per incident.',
+    'Study A observed 42 percent of 50 new users completed setup without help. Study B observed 61 percent of 44 new users completed setup without help. These conflicting results used different recruitment channels and non-overlapping samples.',
+    'Interview participants described difficulty finding the most recent approved decision. They said this creates uncertainty before stakeholder reviews.',
+    'The editor must save a recoverable draft at least every 5 seconds while text is changing. Given an edited draft and an interrupted process, when the application relaunches, then the last successful draft is visible within 10 seconds.',
+    'Seven of nine participants reported losing a draft change before a weekly review. The average reconstruction time reported by those participants was 18 minutes.',
+  ];
+  const reviewFindings = [
+    {
+      targetSectionId: 'section-1',
+      rationale: 'The Context section is empty.',
+      proposedMarkdown: null,
+    },
+  ];
+  const reviewSummary = 'The Context section is empty.';
+  const records = Object.entries(bonsaiEvaluationPolicy.originalBudgets).map(
+    ([caseId, originalMaxOutputTokens], index) => {
+      const review = caseId === 'structured-review';
+      const scenario = corpus.cases[index] ?? corpus.cases[0]!;
+      const expectedSections = review
+        ? corpus.defaultSections
+        : corpus.defaultSections.filter((section) => section.title === scenario.targetSection);
+      const sections = expectedSections.map((section, sectionIndex) => ({
+        id: `section-${sectionIndex}`,
+        title: section.title,
+        body: review
+          ? section.title === 'Problem'
+            ? generatedTexts[0]!
+            : ''
+          : scenario.initialBody,
+      }));
+      const evidence = [
+        {
+          chunkId: `chunk-${index}`,
+          sourceName: `${scenario.id}.md`,
+          locator: 'Paragraph 1',
+          excerpt: scenario.sourceText.split('\n\n')[1]!,
+          evidenceStatus: 'supported',
+        },
+      ];
+      const messages = [
+        { role: 'system' as const, content: corpus.systemPrompts[review ? 'review' : 'rewrite'] },
+        {
+          role: 'user' as const,
+          content:
+            corpus.taskPrefix +
+            '\n' +
+            JSON.stringify({
+              formatVersion: 2,
+              qualitySpecVersion: corpus.qualitySpecVersion,
+              action: review ? 'review' : 'rewrite',
+              scope: review ? 'document' : 'section',
+              userInstruction: review ? corpus.reviewInstruction : scenario.instruction,
+              projectContext: {
+                name: `Evaluation ${review ? 'grounded-problem' : scenario.id}`,
+                description: 'Synthetic evaluation fixture',
+              },
+              currentDocument: { revision: review ? 2 : 1, sections },
+              sections: sections.map(({ id, title }) => ({ id, title })),
+              selectedStructure: sections.map(({ id, title }, sectionIndex) => ({
+                id,
+                title,
+                purpose: expectedSections[sectionIndex]!.purpose,
+                required: expectedSections[sectionIndex]!.required,
+              })),
+              scopedPrdContent: sections
+                .map((section) => `## ${section.title}\n${section.body}`)
+                .join('\n\n'),
+              allowedCitationChunkIds: evidence.map((item) => item.chunkId),
+              evidence,
+            }),
+        },
+      ];
+      const taskId = `fixture-task-${index}`;
+      const requestId = `fixture-request-${index}`;
+      const encoded = encodeBonsaiTask({
+        taskId,
+        requestId,
+        messages,
+        maxTokens: 8192,
+        reasoningTokens: 4096,
+      });
+      const task = JSON.parse(encoded.bytes.toString()) as { expected_body_sha256: string };
+      const response = {
+        content: review
+          ? JSON.stringify({
+              summary: reviewSummary,
+              findings: reviewFindings.map((finding) => ({
+                ...finding,
+                category: 'completeness',
+                severity: 'warning',
+                citationChunkIds: [],
+              })),
+            })
+          : generatedTexts[index]!,
+        finish_reason: 'stop',
+        usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+      };
+      const result = {
+        schema: 'bonsai-evaluation-result-v1',
+        status: 'COMPLETED',
+        ok: true,
+        task_id: taskId,
+        request_id: requestId,
+        task_json_sha256: sha256(encoded.bytes),
+        body_sha256: task.expected_body_sha256,
+        messages_sha256: sha256(canonicalJson(messages)),
+        response,
+        response_sha256: sha256(canonicalJson(response)),
+        raw_provider_response_sha256: '6'.repeat(64),
+        generation: '7'.repeat(64),
+        api_request_id: requestId,
+        guard: 'PASSED',
+        admission: 'PASSED',
+        no_tools: {
+          contract: 'hermes-task-no-tools-v1',
+          requested: true,
+          enforced: true,
+          attempted_tool_calls: 0,
+          executed_tool_calls: 0,
+        },
+        source_identity: sourceIdentity,
+        reason: null,
+        policy_failure: null,
+        provider_outcome: 'TERMINAL_RESPONSE',
+        hold: false,
+        redispatch_allowed: false,
+        registration_closure_confirmed: true,
+        intent_sha256: '8'.repeat(64),
+        local_settlement: {
+          task_id: `evaluation-${sha256(taskId)}`,
+          generation: `scope-${index}`,
+          nonce: 'fixture',
+          status: 'LOCAL_REGISTERED_SCOPE_SETTLED',
+          sealed_at: 1,
+          registration_count: 1,
+          records_sha256: '9'.repeat(64),
+          provider_outcome: 'NOT_ATTESTED',
+        },
+        custody: {
+          role: 'controller',
+          pid: 1,
+          start: 1,
+          slot_device: 1,
+          slot_inode: 1,
+          intent_sha256: '8'.repeat(64),
+          provider_settlement: 'NOT_ATTESTED',
+          automatic_release: false,
+        },
+        policy: {
+          execution_seconds: 1800,
+          interrupt_seconds: 30,
+          term_seconds: 15,
+          kill_settlement_seconds: 15,
+        },
+        coverage: 'participating KAIROS/PRD slot; registered local custody only',
+      };
+      return {
+        caseId,
+        originalMaxOutputTokens,
+        taskJson: encoded.bytes.toString('utf8'),
+        result,
+        runId: `fixture-run-${index}`,
+      };
+    },
+  );
+  return {
+    ...model,
+    model: 'Ternary-Bonsai-2-27B-PQ2_0',
+    reviewModel: 'Ternary-Bonsai-2-27B-PQ2_0',
+    reviewModelDigest: model.modelDigest,
+    provider: 'custom:bonsai-v2',
+    scenarios: model.scenarios.map((scenario, index) => ({
+      ...scenario,
+      runId: records[index]!.runId,
+      generatedText: generatedTexts[index]!,
+    })),
+    structuredReview: {
+      ...model.structuredReview,
+      runId: records[5]!.runId,
+      summary: reviewSummary,
+      findings: reviewFindings,
+      findingCount: reviewFindings.length,
+    },
+    adversarialStructuredReview: {
+      ...model.adversarialStructuredReview,
+      output: {
+        summary: reviewSummary,
+        rationales: reviewFindings.map((finding) => finding.rationale),
+        proposedMarkdown: [null],
+      },
+    },
+    bonsai: {
+      policy: bonsaiEvaluationPolicy,
+      sourceIdentity,
+      modelDigest: model.modelDigest,
+      records,
+    },
   };
 }
 

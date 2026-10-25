@@ -49,7 +49,7 @@ This case proves the recorded real-source workflow and rejection behavior, not r
 
 ## Real-model evaluation
 
-`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is a required release gate for the exact clean release commit and requires explicitly installed local models. Missing runtime or model access blocks release evidence; it does not waive the gate or authorize starting services or installing models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
+`npm run eval:model` defaults to the real Ollama-compatible provider path with synthetic sources and PRDs. The release gate accepts that configuration or the explicitly approved Bonsai corpus configuration below, with every existing quality assertion retained. Both require the exact clean release commit and explicitly available local models. Missing runtime or model access blocks release evidence; it does not waive the gate or authorize starting services or installing models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
 
 Prepare the bounded evaluation model before the first run:
 
@@ -82,48 +82,59 @@ The generated report is written to `reports/model-evaluation.json`. No current r
 
 ### Shared Bonsai evaluation preparation
 
-`PRD_GENIE_EVAL_PROVIDER=bonsai npm run eval:model` performs a local readiness
-check and currently exits 75 with a pending report on stdout. It creates no
-evaluation database, starts no provider or model process, makes no provider request and
-does not overwrite `reports/model-evaluation.json`. All five existing rewrite
-cases, structured/adversarial review and dependent persistence remain required.
-There is no automatic Ollama or cloud fallback.
+The Bonsai evaluation uses the same five rewrite cases and the same structured
+review containing adversarial evidence. The latter is one request with two sets
+of assertions: six model requests in total. All prompts, cases, acceptance and
+persistence assertions remain unchanged. The explicit corpus policy is 8,192
+completion tokens, including up to 4,096 reasoning tokens. It is a different
+generation configuration, not an equivalent mapping of application limits.
 
-The revision02 task/result schemas are pinned under
-`evaluations/bonsai-revision02/`. The evaluation-only codec in
-`scripts/bonsai-evaluation.mjs` preserves messages, matches the native canonical
-digest convention and validates completed receipts against an expected native
-source identity. These are preparation checks, not live model-quality evidence.
-The native entry is staged separately; this repository does not install it or
-read its credentials. Process dispatch and shared-slot custody integration are
-not enabled by the readiness command.
+The application still requests 1,800 tokens for section rewrites and 6,000 for
+a default 13-section review. Reviews of larger structures have a 9,000 ceiling.
+This corpus does not verify that ceiling, selection rewrites, section-only
+reviews, or direct Bonsai connection through the application's generic provider.
+It does not establish Qwen results. No provider or billing fallback is permitted.
 
-| Existing application limit | Use                                               | Bonsai revision02 status            |
-| -------------------------- | ------------------------------------------------- | ----------------------------------- |
-| 1,000                      | Selection rewrite                                 | No exact approved completion pair   |
-| 1,800                      | Section rewrite, including all five corpus cases  | No exact approved completion pair   |
-| 3,000                      | Section review                                    | No exact approved completion pair   |
-| 6,000                      | Document draft/rewrite; default 13-section review | No exact approved completion pair   |
-| Up to 9,000                | Review of larger structures                       | Exceeds the native maximum of 8,192 |
+`PRD_GENIE_EVAL_PROVIDER=bonsai node --import tsx scripts/evaluate-prd.ts`
+performs a read-only readiness check and exits 75 with a pending report. It
+makes no provider request and does not overwrite the model-evaluation report.
+The revision02 task/result schemas in `evaluations/bonsai-revision02/` and their
+codec are pinned to the independently reviewed native contract. The retained
+`evaluations/prd-corpus-v3.json` records the existing inputs and system prompts;
+preflight refuses drift, and the evidence verifier binds receipts to these inputs
+and their reported, normalized outputs.
 
-The native completion/reasoning pairs are 64/16, 256/32, 512/128, 1024/512,
-1536/768, 2048/1024, 4095/3072, 4096/3072 and 8192/4096. Reasoning consumes part
-of that allowance. No equivalent mapping is approved; selecting the closest
-number would change the evaluation configuration. Native seed and sampling
-settings also differ from the current evaluator. An explicit decision is needed
-before enabling live corpus dispatch or accepting Bonsai release evidence.
-The existing release verifier remains unchanged and does not accept a pending
-readiness report as model evidence.
+Live execution additionally requires separate installation/execution authority,
+a clean checkout, `PRD_GENIE_BONSAI_LIVE=1`, and
+`PRD_GENIE_BONSAI_READINESS=/absolute/path/to/reviewed-readiness.json`. The readiness
+file contains schema `prd-bonsai-readiness-v1`, the exact `contractSha256`, the
+five native `sourceIdentity` pins (commit, tree, module, consumer record, public
+wrapper), and the actual model artifact `modelDigest`. Staged source is not
+installation evidence. Never invent these identities or supply credentials.
+The fixed existing native launcher and shared participating slot perform fresh
+admission; this repository does not install them or change their safeguards.
 
-A completed native receipt alone would prove neither all PRD assertions nor
-direct generic-provider compatibility. Only validated terminal completion plus
-the unchanged corpus, explicit acceptance and persistence checks could establish
-a release result. INCOMPLETE, NOT_SENT and UNKNOWN stop the batch. UNKNOWN can
-arrive as bounded JSON and EOF while its descriptor holder remains alive;
-process exit is not required to receive that outcome, and the holder must not be
-terminated for cleanup or retried. Local settlement does not attest provider
-cancellation. The participating shared slot does not exclude every native model
-user, and this work makes no universal concurrency claim.
+The evaluator retains the application's existing local prompt profile while
+injecting an evaluation-only language model. Reports label the actual provider
+`custom:bonsai-v2`, preserve the original requested allowance, and record the
+complete dispatched generation settings, exact task bytes, receipt, native
+identity and case/run association. Both application repair attempts and SDK
+retries are disabled for this evaluation. Normal product behaviour is unchanged.
+The release verifier requires every existing assertion plus six validated
+terminal receipts at the exact clean repository commit. A readiness report or
+receipt alone cannot pass that gate.
+
+Dispatch preparation and results are flushed to a unique directory under
+the system temporary directory at `prd-genie-bonsai-evidence/` before proceeding. The command prints the exact journal path; retain it with
+the final evidence before clearing temporary storage. A stopped batch preserves its journal
+and failure report without replacing the last completed model report. Native
+responses are buffered, not streamed. INCOMPLETE, NOT_SENT, UNKNOWN, malformed
+receipts and missing terminal evidence stop the batch without automatic retry.
+UNKNOWN may arrive as JSON and EOF while its descriptor holder remains alive:
+process exit is not required, the holder must not be killed for cleanup, and
+local settlement does not prove provider cancellation. The existing shared slot
+serializes participating workers; it is not universal exclusion against every
+native model caller. No new concurrency framework is introduced.
 
 ## What this does not prove
 

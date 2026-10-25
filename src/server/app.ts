@@ -11,7 +11,7 @@ import { createDatabase } from './db/client.js';
 import { Repository } from './db/repository.js';
 import { SourceService } from './documents/source-service.js';
 import { ExportService } from './export/export-service.js';
-import { ActionService } from './providers/action-service.js';
+import { ActionService, type ActionEvaluationOptions } from './providers/action-service.js';
 import { ProviderService } from './providers/provider-service.js';
 import { ChatGptService } from './providers/chatgpt-service.js';
 import { ProposalService } from './providers/proposal-service.js';
@@ -21,7 +21,12 @@ import { RetrievalService } from './retrieval/retrieval-service.js';
 import { registerApi } from './routes/api.js';
 
 export async function buildApp(
-  options: { databasePath?: string; embeddings?: EmbeddingService; clientRoot?: string } = {},
+  options: {
+    databasePath?: string;
+    embeddings?: EmbeddingService;
+    clientRoot?: string;
+    evaluation?: ActionEvaluationOptions;
+  } = {},
 ) {
   const app = Fastify({
     logger: {
@@ -118,7 +123,7 @@ export async function buildApp(
     sessions,
     chatgpt,
     providers,
-    actions: new ActionService(repository, retrieval, providers),
+    actions: new ActionService(repository, retrieval, providers, options.evaluation),
     proposals: new ProposalService(repository),
   };
   registerApi(app, services);
