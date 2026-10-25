@@ -677,7 +677,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     name: 'research.md',
     mimeType: 'text/markdown',
     buffer: Buffer.from(
-      '# Research\nEight of twelve product managers lost an unsaved PRD draft.\n\nReconstruction took 23 minutes on average.',
+      '# Research\n\nEight of twelve product managers lost an unsaved PRD draft.\n\nReconstruction took 23 minutes on average.',
     ),
   });
   await expect(
