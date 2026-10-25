@@ -80,6 +80,51 @@ Coverage has a 90% per-module gate for retrieval, credential handling, provider 
 
 The generated report is written to `reports/model-evaluation.json`. No current real-model pass is claimed until that command succeeds for the exact release candidate.
 
+### Shared Bonsai evaluation preparation
+
+`PRD_GENIE_EVAL_PROVIDER=bonsai npm run eval:model` performs a local readiness
+check and currently exits 75 with a pending report on stdout. It creates no
+evaluation database, starts no provider or model process, makes no provider request and
+does not overwrite `reports/model-evaluation.json`. All five existing rewrite
+cases, structured/adversarial review and dependent persistence remain required.
+There is no automatic Ollama or cloud fallback.
+
+The revision02 task/result schemas are pinned under
+`evaluations/bonsai-revision02/`. The evaluation-only codec in
+`scripts/bonsai-evaluation.mjs` preserves messages, matches the native canonical
+digest convention and validates completed receipts against an expected native
+source identity. These are preparation checks, not live model-quality evidence.
+The native entry is staged separately; this repository does not install it or
+read its credentials. Process dispatch and shared-slot custody integration are
+not enabled by the readiness command.
+
+| Existing application limit | Use                                               | Bonsai revision02 status            |
+| -------------------------- | ------------------------------------------------- | ----------------------------------- |
+| 1,000                      | Selection rewrite                                 | No exact approved completion pair   |
+| 1,800                      | Section rewrite, including all five corpus cases  | No exact approved completion pair   |
+| 3,000                      | Section review                                    | No exact approved completion pair   |
+| 6,000                      | Document draft/rewrite; default 13-section review | No exact approved completion pair   |
+| Up to 9,000                | Review of larger structures                       | Exceeds the native maximum of 8,192 |
+
+The native completion/reasoning pairs are 64/16, 256/32, 512/128, 1024/512,
+1536/768, 2048/1024, 4095/3072, 4096/3072 and 8192/4096. Reasoning consumes part
+of that allowance. No equivalent mapping is approved; selecting the closest
+number would change the evaluation configuration. Native seed and sampling
+settings also differ from the current evaluator. An explicit decision is needed
+before enabling live corpus dispatch or accepting Bonsai release evidence.
+The existing release verifier remains unchanged and does not accept a pending
+readiness report as model evidence.
+
+A completed native receipt alone would prove neither all PRD assertions nor
+direct generic-provider compatibility. Only validated terminal completion plus
+the unchanged corpus, explicit acceptance and persistence checks could establish
+a release result. INCOMPLETE, NOT_SENT and UNKNOWN stop the batch. UNKNOWN can
+arrive as bounded JSON and EOF while its descriptor holder remains alive;
+process exit is not required to receive that outcome, and the holder must not be
+terminated for cleanup or retried. Local settlement does not attest provider
+cancellation. The participating shared slot does not exclude every native model
+user, and this work makes no universal concurrency claim.
+
 ## What this does not prove
 
 A deterministic synthetic corpus is not a general model benchmark. Provider behavior, model capability, prompt wording, source quality, language, and context size all affect output. A passing rubric proves only the recorded scenarios and model. PRD Genie never treats model output as automatically correct. Users inspect citations and proposed changes before accepting them, and should review exported documents before using them for product decisions.

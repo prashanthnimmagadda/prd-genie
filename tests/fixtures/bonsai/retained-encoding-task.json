@@ -1,0 +1,31 @@
+{
+  "body": {
+    "chat_template_kwargs": { "enable_thinking": true, "preserve_thinking": true },
+    "max_tokens": 2048,
+    "messages": [
+      {
+        "content": "You are helping a product manager improve a product requirements document.",
+        "role": "system"
+      },
+      {
+        "content": "{\"initialBody\": \"Product managers can lose work while drafting review documents.\", \"userInstruction\": \"Rewrite only the present user problem and consequence. Include the interview base, observed loss, and reconstruction cost. Exclude goals, solutions, rollout, and unsupported business claims.\", \"evidence\": \"# Draft recovery research\\n\\nTwelve working product managers were interviewed in June 2026.\\n\\nEight of the twelve participants lost unsaved PRD work during the previous 30 days.\\n\\nThose participants estimated a mean reconstruction time of 23 minutes per incident.\\n\\nNo adoption volume, market size, or revenue effect has been validated.\\n\\nA recovered draft must reopen within 10 seconds.\"}",
+        "role": "user"
+      }
+    ],
+    "min_p": 0.05,
+    "model": "Ternary-Bonsai-2-27B-PQ2_0",
+    "presence_penalty": 0.0,
+    "reasoning_budget_tokens": 1024,
+    "reasoning_effort": "medium",
+    "repeat_penalty": 1.0,
+    "seed": 42,
+    "stream": false,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+  },
+  "expected_body_sha256": "4301d7a4a5edd6f6712a66f9c56c1596a00f70befd4701bc7ac14e7ddbe678c4",
+  "request_id": "contract-check.01",
+  "schema": "bonsai-evaluation-task-v1",
+  "task_id": "contract-check.grounded-problem"
+}

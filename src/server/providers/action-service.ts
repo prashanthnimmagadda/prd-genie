@@ -961,7 +961,7 @@ function localProviderOptions(provider: AiActionRequest['provider']) {
   return provider === 'ollama' ? { ollama: { reasoningEffort: 'none', think: false } } : undefined;
 }
 
-function outputTokenLimit(
+export function outputTokenLimit(
   action: AiActionRequest['action'],
   scope: AiActionRequest['scope'],
 ): number {
@@ -970,7 +970,7 @@ function outputTokenLimit(
   return action === 'ask' ? 1800 : 1800;
 }
 
-function reviewTokenLimit(scope: AiActionRequest['scope'], sectionCount: number): number {
+export function reviewTokenLimit(scope: AiActionRequest['scope'], sectionCount: number): number {
   return scope === 'document' ? Math.min(9000, 3000 + Math.max(0, sectionCount - 3) * 300) : 3000;
 }
 

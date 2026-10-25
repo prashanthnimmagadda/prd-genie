@@ -8,7 +8,11 @@ import { config } from '../src/server/config.js';
 import {
   containsNumericTargetProposal,
   containsUnsupportedReviewClaim,
+  outputTokenLimit,
+  reviewTokenLimit,
 } from '../src/server/providers/action-service.js';
+import { DEFAULT_STRUCTURE_SECTIONS } from '../src/shared/types.js';
+import { bonsaiContract, inspectBonsaiBudgets } from './bonsai-evaluation.mjs';
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
 import { RetrievalService } from '../src/server/retrieval/retrieval-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
@@ -24,11 +28,6 @@ interface Scenario {
 
 const model = process.env.PRD_GENIE_EVAL_MODEL ?? 'prd-genie-qwen3-4b-instruct:latest';
 const reviewModel = process.env.PRD_GENIE_EVAL_REVIEW_MODEL ?? model;
-const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-model-eval-'));
-const databasePath = path.join(directory, 'evaluation.sqlite');
-const originalSourceDir = config.sourceDir;
-Object.assign(config, { sourceDir: path.join(directory, 'sources') });
-
 const lexicalEmbeddings = {
   getStatus: () => ({
     mode: 'lexical',
@@ -148,6 +147,58 @@ const scenarios: Scenario[] = [
   },
 ];
 
+const evaluationProvider = process.env.PRD_GENIE_EVAL_PROVIDER ?? 'ollama';
+if (evaluationProvider === 'bonsai') {
+  // Refuse before DB creation, provider discovery or dispatch. These are the
+  // actual corpus cases and application limits, not substituted smaller tasks.
+  const requirements = inspectBonsaiBudgets([
+    ...scenarios.map((scenario) => ({
+      id: scenario.id,
+      maxOutputTokens: outputTokenLimit('rewrite', 'section'),
+    })),
+    {
+      id: 'structured-review',
+      maxOutputTokens: reviewTokenLimit('document', DEFAULT_STRUCTURE_SECTIONS.length),
+    },
+    {
+      id: 'adversarial-structured-review',
+      maxOutputTokens: reviewTokenLimit('document', DEFAULT_STRUCTURE_SECTIONS.length),
+    },
+  ]);
+  console.log(
+    JSON.stringify(
+      {
+        schema: 'prd-bonsai-evaluation-readiness-v1',
+        status: 'pending',
+        gitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+        dirtyWorkingTree: Boolean(
+          execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(),
+        ),
+        provider: 'custom:bonsai-v2',
+        contract: bonsaiContract,
+        requirements,
+        persistence: 'Pending completed generation and explicit acceptance; not skipped.',
+        inferenceRequests: 0,
+        releaseEvidence: false,
+        limitations: [
+          'No equivalent release budget/reasoning mapping is approved.',
+          'Native installation and live acceptance are not verified by this preflight.',
+          'This does not prove generic application-provider or Qwen compatibility.',
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(75);
+}
+if (evaluationProvider !== 'ollama')
+  throw new Error('Unsupported evaluation provider; no fallback.');
+
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-model-eval-'));
+const databasePath = path.join(directory, 'evaluation.sqlite');
+const originalSourceDir = config.sourceDir;
+Object.assign(config, { sourceDir: path.join(directory, 'sources') });
 let app: FastifyInstance | undefined;
 try {
   const built = await buildApp({ databasePath, embeddings: lexicalEmbeddings });
