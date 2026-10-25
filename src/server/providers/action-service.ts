@@ -1250,7 +1250,7 @@ export function actionSystemPrompt(
     action === 'draft'
       ? 'Draft concrete, measurable PRD content using the supplied section structure. Keep problem, goals, solution scope, requirements, measures, risks, and rollout content in their appropriate sections.'
       : action === 'rewrite'
-        ? 'Return a replacement for only the supplied scope. Preserve facts, improve clarity and testability, and omit material that belongs in a different PRD section.'
+        ? 'Return a replacement for only the supplied scope. Preserve facts, improve clarity and testability, and omit material that belongs in a different PRD section. When summarising observed problems or consequences, retain the source’s descriptive wording. Do not turn an observation or estimated cost into a necessity or obligation ("must", "mandatory") unless the supplied evidence or authorised instruction establishes it. Omit an unsupported concluding inference rather than strengthening the claim.'
         : 'Answer the question using the scoped PRD and cite source chunk IDs in square brackets when relevant.',
     outputContract,
   ].join(' ');

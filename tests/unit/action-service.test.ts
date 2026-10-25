@@ -368,40 +368,56 @@ describe('ActionService', () => {
     expect(repository.completeAiRun).not.toHaveBeenCalled();
   });
 
-  it('streams a scoped draft, stores evidence, and completes the run', async () => {
-    const response = await service.run('session', request(), new AbortController().signal);
-    const body = await response.text();
-    expect(body).toContain('data-citation');
-    expect(body).toContain('"id":"stored-citation"');
-    expect(body).not.toContain('"id":"citation-display"');
-    expect(retrieval.retrieve).toHaveBeenCalledWith(
-      projectId,
-      expect.stringContaining('People lose unsaved drafts.'),
-    );
-    expect(repository.createAiRunWithCitations).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId, action: 'draft' }),
-      [expect.objectContaining({ chunkId: evidence.chunkId })],
-    );
-    const generationInput = aiMocks.generateText.mock.calls[0]?.[0] as
-      | {
-          maxOutputTokens: number;
-          prompt: string;
-          providerOptions?: { ollama?: { reasoningEffort?: string; think?: boolean } };
-          temperature?: number;
-        }
-      | undefined;
-    expect(generationInput?.maxOutputTokens).toBe(1800);
-    expect(generationInput?.prompt).toContain('authorized user task');
-    expect(generationInput?.providerOptions?.ollama?.reasoningEffort).toBe('none');
-    expect(generationInput?.providerOptions?.ollama?.think).toBe(false);
-    expect(generationInput?.temperature).toBe(0);
-    expect(repository.completeAiRun).toHaveBeenCalledWith(
-      'run-id',
-      undefined,
-      'People lose unsaved drafts.',
-      expect.objectContaining({ status: 'checks_passed', policyVersion: '2026-10-25.1' }),
-    );
-  });
+  it.each(['draft', 'rewrite'] as const)(
+    'streams a scoped %s, stores evidence, and completes the run',
+    async (action) => {
+      const response = await service.run(
+        'session',
+        request({ action }),
+        new AbortController().signal,
+      );
+      const body = await response.text();
+      expect(body).toContain('data-citation');
+      expect(body).toContain('"id":"stored-citation"');
+      expect(body).not.toContain('"id":"citation-display"');
+      expect(retrieval.retrieve).toHaveBeenCalledWith(
+        projectId,
+        expect.stringContaining('People lose unsaved drafts.'),
+      );
+      expect(repository.createAiRunWithCitations).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId, action }),
+        [expect.objectContaining({ chunkId: evidence.chunkId })],
+      );
+      const generationInput = aiMocks.generateText.mock.calls[0]?.[0] as
+        | {
+            maxOutputTokens: number;
+            system: string;
+            prompt: string;
+            providerOptions?: { ollama?: { reasoningEffort?: string; think?: boolean } };
+            temperature?: number;
+          }
+        | undefined;
+      expect(generationInput?.maxOutputTokens).toBe(1800);
+      expect(generationInput?.prompt).toContain('authorized user task');
+      const observationInstruction =
+        'When summarising observed problems or consequences, retain the source’s descriptive wording.';
+      expect(generationInput?.system.includes(observationInstruction)).toBe(action === 'rewrite');
+      if (action === 'rewrite') {
+        expect(generationInput?.system).toContain(
+          'unless the supplied evidence or authorised instruction establishes it',
+        );
+      }
+      expect(generationInput?.providerOptions?.ollama?.reasoningEffort).toBe('none');
+      expect(generationInput?.providerOptions?.ollama?.think).toBe(false);
+      expect(generationInput?.temperature).toBe(0);
+      expect(repository.completeAiRun).toHaveBeenCalledWith(
+        'run-id',
+        undefined,
+        'People lose unsaved drafts.',
+        expect.objectContaining({ status: 'checks_passed', policyVersion: '2026-10-25.1' }),
+      );
+    },
+  );
 
   it('retries an Ollama proposal with an unsupported qualifier and stores only grounded output', async () => {
     retrieval.retrieve.mockResolvedValue([
@@ -1595,6 +1611,18 @@ describe('proposal grounding assessment', () => {
     expect(
       assessProposalGrounding('Draft loss causes revenue harm.', passages, '', []).failure,
     ).not.toBeNull();
+    expect(
+      assessProposalGrounding('Drafts must be reconstructed.', passages, '', []).failure,
+    ).not.toBeNull();
+    for (const [trusted, instruction] of [
+      [['Exports must include drafts.'], ''],
+      [[], 'Exports must include drafts.'],
+    ] as const) {
+      expect(
+        assessProposalGrounding('Exports must include drafts.', [...trusted], instruction, [])
+          .failure,
+      ).toBeNull();
+    }
   });
 
   it('retains conditions and requires the cited excerpt itself to support a claim', () => {
