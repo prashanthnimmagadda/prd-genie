@@ -427,6 +427,25 @@ describe('ActionService', () => {
     );
   });
 
+  it('validates inline citations against selected source chunks without changing stored output', async () => {
+    const chunkId = 'dbaad835-75b3-4e53-8211-6356ce0f4dc7';
+    retrieval.retrieve.mockResolvedValue([{ ...evidence, chunkId }]);
+    const output = `Five participants lost unsaved drafts [${chunkId}].`;
+    aiMocks.generateText.mockResolvedValue({ text: output });
+
+    const response = await service.run('session', request(), new AbortController().signal);
+    expect(await response.text()).toContain(output);
+    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, output);
+
+    repository.completeAiRun.mockClear();
+    aiMocks.generateText.mockResolvedValue({
+      text: 'Five participants lost unsaved drafts [00000000-0000-4000-8000-000000000000].',
+    });
+    const rejected = await service.run('session', request(), new AbortController().signal);
+    expect(await rejected.text()).toContain('not traceable to one supplied passage');
+    expect(repository.completeAiRun).toHaveBeenCalledExactlyOnceWith('run-id', 'malformed_output');
+  });
+
   it('allows a useful provisional document from a short typed request without sources', async () => {
     repository.getPrd.mockReturnValue({
       ...prd,
@@ -1522,6 +1541,64 @@ describe('Ollama review JSON parsing', () => {
 });
 
 describe('proposal grounding guard', () => {
+  const chunkId = 'dbaad835-75b3-4e53-8211-6356ce0f4dc7';
+
+  it('excludes only validated citation markers from claim tokens', () => {
+    const text = 'Twelve product managers were interviewed in June 2026';
+    expect(containsUnsupportedProposalClaim(`${text} [${chunkId}].`, [text], '', [chunkId])).toBe(
+      false,
+    );
+    expect(containsUnsupportedProposalClaim(`${text} [${chunkId}].`, [text])).toBe(true);
+    expect(
+      containsUnsupportedProposalClaim(`Revenue doubled [${chunkId}].`, [text], '', [chunkId]),
+    ).toBe(true);
+  });
+
+  it.each([
+    '[00000000-0000-4000-8000-000000000000]',
+    `[ ${chunkId}]`,
+    `[[${chunkId}]]`,
+    `[${chunkId}`,
+  ])('rejects unknown or malformed citation metadata: %s', (marker) => {
+    expect(
+      containsUnsupportedProposalClaim(
+        `People lose drafts ${marker}.`,
+        ['People lose drafts.', marker],
+        '',
+        [chunkId],
+      ),
+    ).toBe(true);
+  });
+
+  it('does not accept citation-only output or change ordinary Markdown grounding', () => {
+    expect(containsUnsupportedProposalClaim(`[${chunkId}].`, ['Drafts'], '', [chunkId])).toBe(true);
+    for (const text of ['Use [drafts].', '- [ ] Save drafts.', 'Read [drafts](drafts.md).']) {
+      expect(containsUnsupportedProposalClaim(text, [text], '', [chunkId])).toBe(false);
+    }
+    expect(
+      containsUnsupportedProposalClaim('Use [unsupported claims].', ['Use drafts.'], '', [chunkId]),
+    ).toBe(true);
+  });
+
+  it('keeps single-passage grounding and instruction exclusions with valid citations', () => {
+    expect(
+      containsUnsupportedProposalClaim(
+        `Exports must include secrets [${chunkId}].`,
+        ['Admins must authenticate.', 'Exports include secrets.'],
+        '',
+        [chunkId],
+      ),
+    ).toBe(true);
+    expect(
+      containsUnsupportedProposalClaim(
+        `Exports include secrets [${chunkId}].`,
+        ['Exports include secrets.'],
+        'Do not include secrets.',
+        [chunkId],
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ['This causes launch delays.', ['Users lose unsaved drafts.']],
     ['Exports must include secrets.', ['Admins must authenticate.', 'Exports include secrets.']],

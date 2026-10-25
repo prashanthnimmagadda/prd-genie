@@ -468,6 +468,9 @@ export class ActionService {
                         candidate,
                         trustedProposalPassages,
                         request.instruction ?? '',
+                        evidence
+                          .filter((item) => !isInstructionLikeEvidence(item.excerpt))
+                          .flatMap((item) => (item.chunkId ? [item.chunkId] : [])),
                       )
                 ) {
                   throw new ApiError(
@@ -722,7 +725,36 @@ export function containsUnsupportedProposalClaim(
   generated: string,
   trustedPassages: string[],
   authorizedInstruction = '',
+  allowedCitationChunkIds: readonly string[] = [],
 ): boolean {
+  const allowedIds = new Set(allowedCitationChunkIds);
+  let invalidCitation = false;
+  let removedCitation = false;
+  const claimText = generated.replace(
+    /\[([^\r\n[\]]*)(\]|(?=\r?\n|$))/g,
+    (marker, id: string, closing: string, offset: number) => {
+      // Production chunk IDs are UUIDs. Ordinary Markdown brackets remain claim text.
+      const citationShaped = /[0-9a-f]{8}-[0-9a-f-]{27,}/i.test(id);
+      const mentionsAllowedId = allowedIds.has(id.trim());
+      if (!citationShaped && !mentionsAllowedId) return marker;
+      if (
+        !allowedIds.has(id) ||
+        closing !== ']' ||
+        generated[offset - 1] === '[' ||
+        generated[offset + marker.length] === ']'
+      ) {
+        invalidCitation = true;
+        return marker;
+      }
+      // Do not erase a Markdown link label or escaped literal as citation metadata.
+      if (generated[offset + marker.length] === '(' || generated[offset - 1] === '\\')
+        return marker;
+      removedCitation = true;
+      return ' ';
+    },
+  );
+  const generatedClauses = claimClauses(claimText);
+  if (invalidCitation || (removedCitation && generatedClauses.length === 0)) return true;
   const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
   const instructionTokens = claimClauses(authorizedInstruction).flat();
   const excludedTokens = instructionExclusionTokens(authorizedInstruction);
@@ -730,7 +762,7 @@ export function containsUnsupportedProposalClaim(
     ...new Set([...instructionTokens, ...clause]),
   ]);
   const trustedTokens = new Set(supportingClauses.flat());
-  return claimClauses(generated).some(
+  return generatedClauses.some(
     (generatedClause) =>
       generatedClause.some((token) => excludedTokens.has(token)) ||
       generatedClause.some((token) => !trustedTokens.has(token)) ||
