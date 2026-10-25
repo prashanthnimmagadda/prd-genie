@@ -136,6 +136,12 @@ describe('database migrations', () => {
     const upgraded = createDatabase(databasePath);
     try {
       const repository = new Repository(upgraded);
+      expect(repository.getAiRun(projectId, runId).grounding).toBeNull();
+      expect(
+        upgraded.sqlite
+          .prepare("SELECT name FROM app_migrations WHERE name = '0009_proposal_grounding'")
+          .get(),
+      ).toBeTruthy();
       expect(repository.listStructures(projectId)[0]).toMatchObject({
         name: 'Current structure',
         sections: [{ title: 'Problem', required: true }],

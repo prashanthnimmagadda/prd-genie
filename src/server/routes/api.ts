@@ -368,7 +368,13 @@ export function registerApi(app: FastifyInstance, services: Services): void {
   app.post('/api/projects/:projectId/ai-runs/:runId/apply', (request) => {
     const { projectId, runId } = request.params as { projectId: string; runId: string };
     const body = parse(applyAiRunSchema, request.body);
-    return services.proposals.apply(projectId, runId, body.revision, body.proposedMarkdown);
+    return services.proposals.apply(
+      projectId,
+      runId,
+      body.revision,
+      body.proposedMarkdown,
+      body.groundingReviewed,
+    );
   });
   app.get('/api/projects/:id/ai-runs', (request) => {
     const { id } = request.params as { id: string };

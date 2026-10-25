@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
+import {
+  validAutomaticGrounding,
+  validBonsaiEvidence,
+  validCorpusGrounding,
+} from './bonsai-evidence-policy.mjs';
 import {
   collectMacosArtifactPaths,
   macosZipName,
@@ -139,6 +143,8 @@ export const requiredArtifactFiles = [
   'scripts/provenance.mjs',
   'scripts/provenance-policy.mjs',
   'scripts/bonsai-evidence-policy.mjs',
+  'src/shared/grounding-policy.mjs',
+  'src/shared/grounding-policy.d.mts',
   'evaluations/prd-corpus-v3.json',
   'scripts/bonsai-evaluation.mjs',
   'evaluations/bonsai-revision02/task.schema.json',
@@ -631,10 +637,13 @@ function validModelEvidence(model, gitSha) {
     !(model.provider === 'ollama' || validBonsaiEvidence(model)) ||
     model.retrievalMode !== 'lexical' ||
     model.corpusVersion !== 3 ||
+    model.qualitySpecVersion !== '2026-10-25.1' ||
+    !validCorpusGrounding(model) ||
     !hasExactModelScenarios(model.scenarios) ||
     !validAdversarialStructuredReview(model.adversarialStructuredReview) ||
     !hasExactTrueChecks(model.structuredReview?.checks, requiredStructuredReviewChecks) ||
     !scoreMatches(model.structuredReview?.score, model.structuredReview?.checks) ||
+    !validAutomaticGrounding(model.structuredReview?.grounding) ||
     !hasExactTrueChecks(model.persistence, requiredPersistenceChecks) ||
     !validUniqueStrings(model.limitations, true)
   ) {
@@ -693,7 +702,8 @@ function hasExactModelScenarios(scenarios) {
     const scenario = byId.get(id);
     return (
       hasExactTrueChecks(scenario?.checks, checks) &&
-      scoreMatches(scenario?.score, scenario?.checks)
+      scoreMatches(scenario?.score, scenario?.checks) &&
+      validAutomaticGrounding(scenario?.grounding)
     );
   });
 }

@@ -15,6 +15,7 @@ import {
   ollamaReviewSystemPrompt,
 } from '../src/server/providers/action-service.js';
 import { DEFAULT_STRUCTURE_SECTIONS } from '../src/shared/types.js';
+import { PRD_QUALITY_SPEC_VERSION } from '../src/server/providers/quality-spec.js';
 import {
   bonsaiContract,
   bonsaiEvaluationPolicy,
@@ -29,7 +30,7 @@ import {
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
 import { RetrievalService } from '../src/server/retrieval/retrieval-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
-import { validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
+import { validAutomaticGrounding, validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
 
 interface Scenario {
   id: string;
@@ -62,6 +63,7 @@ const evaluationDirty = Boolean(
 let bonsai: ReturnType<typeof createBonsaiEvaluationBridge> | undefined;
 let bonsaiReadiness: ReturnType<typeof parseBonsaiReadiness> | undefined;
 let bonsaiJournal: string | undefined;
+let groundingStop: Record<string, unknown> | undefined;
 const bonsaiRunIds = new Map<string, string>();
 const lexicalEmbeddings = {
   getStatus: () => ({
@@ -387,13 +389,25 @@ try {
     bonsai?.assertBatchHealthy();
     if (bonsai && action.runId) bonsaiRunIds.set(scenario.id, action.runId);
     if (!action.runId) throw new Error(`${scenario.id} did not emit a completion run ID.`);
+    const completedRun = built.services.repository.getAiRun(project.id, action.runId);
+    if (!validAutomaticGrounding(completedRun.grounding)) {
+      groundingStop = {
+        caseId: scenario.id,
+        runId: action.runId,
+        grounding: completedRun.grounding ?? null,
+        generatedText: action.text,
+        citations: action.citations,
+      };
+      throw new Error(
+        `${scenario.id} has unresolved or missing grounding assessment; generation is not a passing case. No automatic acceptance or further request is allowed.`,
+      );
+    }
     const checks = {
       ...scenario.evaluate(action.text),
       returnsPrdOnly: !/```|section id|source excerpt|the request asks/i.test(action.text),
       meaningfulLength: action.text.trim().length >= 50 && action.text.trim().length <= 2_000,
       emitsCitation: action.citations.length > 0,
-      persistsCompletedRun:
-        built.services.repository.getAiRun(project.id, action.runId).status === 'completed',
+      persistsCompletedRun: completedRun.status === 'completed',
     };
     const applied = await app.inject({
       method: 'POST',
@@ -423,6 +437,7 @@ try {
       generatedText: action.text.trim(),
       citations: action.citations,
       runId: action.runId,
+      grounding: completedRun.grounding,
     });
     if (scenario.id === 'grounded-problem') {
       reviewProject = {
@@ -484,6 +499,20 @@ try {
   });
   bonsai?.assertBatchHealthy();
   if (bonsai && review.runId) bonsaiRunIds.set('structured-review', review.runId);
+  if (!review.runId) throw new Error('Structured review did not emit a completion run ID.');
+  const completedReview = built.services.repository.getAiRun(reviewProject.id, review.runId);
+  if (!validAutomaticGrounding(completedReview.grounding)) {
+    groundingStop = {
+      caseId: 'structured-review',
+      runId: review.runId,
+      grounding: completedReview.grounding ?? null,
+      generatedText: review.text,
+      citations: review.citations,
+    };
+    throw new Error(
+      'Structured review has unresolved or missing grounding assessment; generation is not a passing case. No automatic acceptance or further request is allowed.',
+    );
+  }
   const findings = (
     await app.inject({ method: 'GET', url: `/api/projects/${reviewProject.id}/review-findings` })
   ).json<{
@@ -645,6 +674,7 @@ try {
       : {}),
     retrievalMode: 'lexical',
     corpusVersion: 3,
+    qualitySpecVersion: PRD_QUALITY_SPEC_VERSION,
     scenarios: scenarioReports,
     adversarialStructuredReview: {
       marker: hostileReviewMarker,
@@ -677,6 +707,13 @@ try {
     },
     structuredReview: {
       runId: review.runId,
+      grounding: completedReview.grounding,
+      sections: [...reviewProject.sectionIds].map((id) => ({
+        id,
+        title: reviewProject.sectionTitles.get(id) ?? '',
+        body: reviewProject.sectionBodies.get(id) ?? '',
+      })),
+      citations: review.citations,
       checks: reviewChecks,
       score: score(reviewChecks),
       summary: review.text.trim(),
@@ -684,6 +721,9 @@ try {
       findings: findings.map((finding) => ({
         targetSectionId: finding.targetSectionId,
         rationale: finding.rationale,
+        citationChunkIds: finding.citations.flatMap((citation) =>
+          citation.chunkId ? [citation.chunkId] : [],
+        ),
         proposedMarkdown: finding.proposedPatch?.afterMarkdown ?? null,
       })),
     },
@@ -697,6 +737,7 @@ try {
       'This is a deterministic rubric over a synthetic English corpus.',
       'It validates the recorded local model and prompts, not every provider or future model.',
       'The corpus uses lexical retrieval so model quality is measured separately from embeddings.',
+      'Grounding metadata records deterministic checks, not semantic proof; unresolved grounding review stops the evaluation.',
       'Human review remains required before a PRD is used for product decisions.',
       ...(bonsai
         ? [
@@ -738,21 +779,28 @@ try {
     process.exitCode = 1;
   }
 } catch (error) {
-  if (bonsaiJournal) {
+  if (bonsaiJournal || groundingStop) {
+    const failureDirectory = bonsaiJournal
+      ? path.dirname(bonsaiJournal)
+      : path.join(os.tmpdir(), 'prd-genie-evaluation-failures', randomUUID());
+    fs.mkdirSync(failureDirectory, { recursive: true, mode: 0o700 });
     const failed = {
-      schema: 'prd-bonsai-evaluation-failure-v1',
+      schema: bonsaiJournal ? 'prd-bonsai-evaluation-failure-v1' : 'prd-evaluation-failure-v1',
       gitSha: evaluationGitSha,
+      qualitySpecVersion: PRD_QUALITY_SPEC_VERSION,
       releaseEvidence: false,
       status: 'stopped',
       reason: error instanceof Error ? error.message : 'Evaluation failed.',
       records: bonsai?.records ?? [],
+      ...(groundingStop ? { groundingStop } : {}),
       automaticRetry: false,
     };
     fs.writeFileSync(
-      path.join(path.dirname(bonsaiJournal), 'failure.json'),
+      path.join(failureDirectory, 'failure.json'),
       `${JSON.stringify(failed, null, 2)}\n`,
       { flag: 'wx', mode: 0o600 },
     );
+    console.error(`Evaluation stopped; failure evidence retained at ${failureDirectory}.`);
   }
   throw error;
 } finally {

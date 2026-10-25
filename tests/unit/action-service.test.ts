@@ -37,6 +37,7 @@ vi.mock('ai', () => ({
 
 import {
   ActionService,
+  assessProposalGrounding,
   containsNewNumericValue,
   containsNumericTargetProposal,
   containsUnsupportedProposalClaim,
@@ -252,6 +253,7 @@ describe('ActionService', () => {
       'run-id',
       undefined,
       'People lose unsaved drafts.',
+      expect.objectContaining({ status: 'checks_passed', policyVersion: '2026-10-25.1' }),
     );
   });
 
@@ -397,6 +399,7 @@ describe('ActionService', () => {
       'run-id',
       undefined,
       'People lose unsaved drafts.',
+      expect.objectContaining({ status: 'checks_passed', policyVersion: '2026-10-25.1' }),
     );
   });
 
@@ -418,12 +421,13 @@ describe('ActionService', () => {
     expect(await response.text()).toContain('Five participants lost unsaved drafts.');
     expect(aiMocks.generateText).toHaveBeenCalledTimes(2);
     expect((aiMocks.generateText.mock.calls[1]?.[0] as { prompt: string }).prompt).toContain(
-      'not traceable to one supplied passage',
+      'failed a citation, factual or instruction constraint',
     );
     expect(repository.completeAiRun).toHaveBeenCalledWith(
       'run-id',
       undefined,
       'Five participants lost unsaved drafts.',
+      expect.objectContaining({ status: 'checks_passed', policyVersion: '2026-10-25.1' }),
     );
   });
 
@@ -435,14 +439,19 @@ describe('ActionService', () => {
 
     const response = await service.run('session', request(), new AbortController().signal);
     expect(await response.text()).toContain(output);
-    expect(repository.completeAiRun).toHaveBeenCalledWith('run-id', undefined, output);
+    expect(repository.completeAiRun).toHaveBeenCalledWith(
+      'run-id',
+      undefined,
+      output,
+      expect.objectContaining({ status: 'checks_passed' }),
+    );
 
     repository.completeAiRun.mockClear();
     aiMocks.generateText.mockResolvedValue({
       text: 'Five participants lost unsaved drafts [00000000-0000-4000-8000-000000000000].',
     });
     const rejected = await service.run('session', request(), new AbortController().signal);
-    expect(await rejected.text()).toContain('not traceable to one supplied passage');
+    expect(await rejected.text()).toContain('unknown or malformed source citation');
     expect(repository.completeAiRun).toHaveBeenCalledExactlyOnceWith('run-id', 'malformed_output');
   });
 
@@ -469,6 +478,7 @@ describe('ActionService', () => {
       'run-id',
       undefined,
       expect.stringContaining('Proposed requirement'),
+      expect.objectContaining({ status: 'review_required' }),
     );
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'clearly labelled assumptions',
@@ -731,11 +741,17 @@ describe('ActionService', () => {
     if (overrides.scope === 'document') expect(modelInput?.providerOptions).toBeUndefined();
   });
 
-  it('reviews the complete document and persists grounded findings', async () => {
+  it.each([
+    {
+      summary: 'The Problem section has one evidence gap. The Problem section lacks cited support.',
+      status: 'review_required',
+      patch: false,
+    },
+    { summary: 'Five participants lost unsaved drafts.', status: 'checks_passed', patch: true },
+  ])('reviews the complete document with $status grounding', async ({ summary, status, patch }) => {
     aiMocks.generateText.mockResolvedValue({
       output: {
-        summary:
-          'The Problem section has one evidence gap. The Problem section lacks cited support.',
+        summary,
         findings: [
           {
             category: 'evidence',
@@ -766,16 +782,18 @@ describe('ActionService', () => {
     expect((aiMocks.generateText.mock.calls[0]?.[0] as { system: string }).system).toContain(
       'e.g., for example, for instance, or such as',
     );
-    expect(body).toContain('The Problem section has one evidence gap.');
+    expect(body).toContain(summary);
     expect(repository.storeFinding).toHaveBeenCalledTimes(1);
     const storedFinding = repository.storeFinding.mock.calls[0]?.[0] as
-      { citationIds: string[]; proposedPatch: { sectionId: string } } | undefined;
+      { citationIds: string[]; proposedPatch: { sectionId: string } | null } | undefined;
     expect(storedFinding?.citationIds).toEqual(['stored-citation']);
-    expect(storedFinding?.proposedPatch.sectionId).toBe(sectionId);
+    if (patch) expect(storedFinding?.proposedPatch?.sectionId).toBe(sectionId);
+    else expect(storedFinding?.proposedPatch).toBeNull();
     expect(repository.completeAiRun).toHaveBeenCalledWith(
       'run-id',
       undefined,
-      'The Problem section has one evidence gap. The Problem section lacks cited support.',
+      summary,
+      expect.objectContaining({ status, policyVersion: '2026-10-25.1' }),
     );
   });
 
@@ -1537,6 +1555,76 @@ describe('Ollama review JSON parsing', () => {
     expect(() =>
       parseOllamaReviewJson('{"summary":"first","findings":[]} {"summary":"second","findings":[]}'),
     ).toThrow('invalid review JSON');
+  });
+});
+
+describe('proposal grounding assessment', () => {
+  const passages = [
+    'Twelve working product managers were interviewed in June 2026.',
+    'Eight of the twelve participants lost unsaved PRD work during the previous 30 days.',
+    'Those participants estimated a mean reconstruction time of 23 minutes per incident.',
+  ];
+
+  it('retains useful paraphrase and synthesis for review without claiming semantic verification', () => {
+    for (const text of [
+      'Participants estimated an average reconstruction time of 23 minutes per incident.',
+      'Eight of the twelve interviewed product managers lost unsaved PRD work during the previous 30 days.',
+      'Eight participants reported losing unsaved PRD work during the previous 30 days.',
+    ]) {
+      const assessment = assessProposalGrounding(text, passages, '', []);
+      expect(assessment.failure).toBeNull();
+      expect(assessment.grounding.status).toBe('review_required');
+      expect(assessment.grounding.reasons.length).toBeGreaterThan(0);
+    }
+    expect(assessProposalGrounding(passages[0]!, passages, '', []).grounding.status).toBe(
+      'checks_passed',
+    );
+  });
+
+  it('does not clear reordered quantities and still blocks invented values and unsupported causation', () => {
+    const swapped = assessProposalGrounding(
+      'Twelve of the eight participants lost unsaved PRD work during the previous 30 days.',
+      passages,
+      '',
+      [],
+    );
+    expect(swapped.grounding.status).toBe('review_required');
+    expect(
+      assessProposalGrounding('Reconstruction takes 99 minutes.', passages, '', []).failure,
+    ).not.toBeNull();
+    expect(
+      assessProposalGrounding('Draft loss causes revenue harm.', passages, '', []).failure,
+    ).not.toBeNull();
+  });
+
+  it('retains conditions and requires the cited excerpt itself to support a claim', () => {
+    expect(
+      assessProposalGrounding(
+        'Exports include drafts.',
+        ['Only after approval:\nExports include drafts.'],
+        '',
+        [],
+      ).grounding.status,
+    ).toBe('review_required');
+    expect(
+      assessProposalGrounding(
+        'Draft loss causes uncertainty.',
+        ['Draft loss creates uncertainty.'],
+        '',
+        [],
+      ),
+    ).toMatchObject({ failure: null, grounding: { status: 'review_required' } });
+    expect(
+      assessProposalGrounding(
+        `${passages[0]} [chunk-b]`,
+        passages,
+        '',
+        ['chunk-a', 'chunk-b'],
+        [],
+        false,
+        { 'chunk-a': passages[0]!, 'chunk-b': passages[1]! },
+      ).grounding.status,
+    ).toBe('review_required');
   });
 });
 

@@ -576,6 +576,77 @@ test('exports current AI evidence immediately and clears handoff selection bound
   ).toBeVisible();
 });
 
+test('keeps uncertain grounding visible and requires renewed source review before applying', async ({
+  page,
+  request,
+}) => {
+  await expect
+    .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
+    .toBe(200);
+  const name = `Grounding review ${crypto.randomUUID().slice(0, 8)}`;
+  const created = await request.post('/api/projects', {
+    data: { name, description: 'Local grounding UI fixture' },
+  });
+  expect(created.ok(), `${created.status()} ${await created.text()}`).toBe(true);
+  const project = (await created.json()) as { id: string };
+  await page.goto('/');
+  await selectProject(page, name);
+  await page.getByLabel('Add source file').setInputFiles({
+    name: 'research.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(
+      '# Research\nEight of twelve product managers lost an unsaved PRD draft. Reconstruction took 23 minutes on average.',
+    ),
+  });
+  await closeSheet(page, 'Sources');
+  await openSettings(page);
+  const settings = page.getByRole('dialog', { name: 'AI settings' });
+  await settings.getByRole('combobox').first().selectOption('openai-compatible');
+  await settings.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
+  await settings.getByLabel('API key for this session').fill('synthetic-session-key');
+  await settings.getByRole('button', { name: 'Configure and discover' }).click();
+  await expect(settings.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
+  await settings.getByRole('button', { name: 'Use provider' }).click();
+  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
+  await page.getByLabel('Submit').click();
+  const notice = page.getByRole('region', { name: 'Grounding review' });
+  const apply = page.getByRole('button', { name: 'Apply to Problem' });
+  const acknowledgement = page.getByRole('checkbox', {
+    name: "I reviewed the supporting material and this proposal's claims.",
+  });
+  await expect(notice).toBeVisible();
+  await expect(apply).toBeDisabled();
+  await notice.getByText(/Compare source excerpts/).click();
+  await expect(notice.locator('blockquote')).toContainText('Reconstruction took 23 minutes');
+  await acknowledgement.check();
+  await expect(apply).toBeEnabled();
+  await page.reload();
+  await selectProject(page, name);
+  await openHistory(page);
+  const row = page.locator('.history-row').filter({ hasText: 'rewrite on section' }).first();
+  await expect(row).toContainText('Grounding review required');
+  await row.getByRole('button', { name: 'Inspect' }).click();
+  await expect(acknowledgement).not.toBeChecked();
+  await expect(apply).toBeDisabled();
+  await acknowledgement.check();
+  await page.getByText('Revise proposal before applying').click();
+  await page
+    .getByLabel('Revised AI proposal')
+    .fill('Eight of twelve product managers lost an unsaved PRD draft. Reviewed locally.');
+  await expect(acknowledgement).not.toBeChecked();
+  await expect(apply).toBeDisabled();
+  await acknowledgement.check();
+  await apply.click();
+  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toBeVisible();
+  const runs = (await (await request.get(`/api/projects/${project.id}/ai-runs`)).json()) as {
+    runs: Array<{ grounding: { status: string }; appliedRevision: number | null }>;
+  };
+  expect(runs.runs[0]?.grounding.status).toBe('review_required');
+  expect(runs.runs[0]?.appliedRevision).not.toBeNull();
+});
+
 test('completes the provider, evidence, proposal, review, undo, and export workflow', async ({
   page,
   request,

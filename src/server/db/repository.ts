@@ -7,6 +7,7 @@ import type {
   ChatGptHandoffResponse,
   ChatGptHandoffSummary,
   Citation,
+  GroundingAssessment,
   PrdDocument,
   PrdSection,
   ProjectSummary,
@@ -738,13 +739,19 @@ export class Repository {
     })();
   }
 
-  completeAiRun(id: string, errorCode?: string, outputText?: string): void {
+  completeAiRun(
+    id: string,
+    errorCode?: string,
+    outputText?: string,
+    grounding?: GroundingAssessment,
+  ): void {
     this.database.db
       .update(aiRuns)
       .set({
         status: errorCode ? 'failed' : 'completed',
         errorCode: errorCode ?? null,
         outputText: outputText ?? null,
+        grounding: errorCode ? null : (grounding ?? null),
         completedAt: now(),
       })
       .where(eq(aiRuns.id, id))
@@ -767,6 +774,7 @@ export class Repository {
       targetSectionId: row.targetSectionId,
       selectionText: row.selectionText,
       outputText: row.outputText,
+      grounding: row.grounding,
       appliedRevision: row.appliedRevision,
       status: row.status as AiRunProposal['status'],
       errorCode: row.errorCode,

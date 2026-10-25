@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -26,6 +26,7 @@ import {
 import type {
   AiAction,
   AiRunProposal,
+  GroundingAssessment,
   ChatGptHandoffSummary,
   ActionScope,
   Citation,
@@ -82,6 +83,7 @@ interface ProposalContext {
   appliedRevision: number | null;
   targetSectionId: string | null;
   selectionText: string | null;
+  grounding?: GroundingAssessment | null;
 }
 
 export default function App() {
@@ -454,12 +456,36 @@ function Workbench({
   );
   const [selectedSectionId, setSelectedSectionId] = useState('');
   const [selection, setSelection] = useState('');
-  const [tab, setTab] = useState<PanelTab>('assist');
+  const [groundingAcknowledgement, setGroundingAcknowledgement] = useState<{
+    context: ProposalContext;
+    text: string;
+  } | null>(null);
+  const [tab, setPanelTab] = useState<PanelTab>('assist');
+  const setTab = useCallback((next: PanelTab) => {
+    setGroundingAcknowledgement(null);
+    setPanelTab(next);
+  }, []);
   const [railOpen, setRailOpen] = useState(true);
-  const [documentOpen, setDocumentOpen] = useState(false);
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [structureOpen, setStructureOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [documentOpen, setDocumentVisibility] = useState(false);
+  const setDocumentOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
+    setGroundingAcknowledgement(null);
+    setDocumentVisibility(next);
+  }, []);
+  const [sourcesOpen, setSourcesVisibility] = useState(false);
+  const setSourcesOpen = useCallback((next: boolean) => {
+    setGroundingAcknowledgement(null);
+    setSourcesVisibility(next);
+  }, []);
+  const [structureOpen, setStructureVisibility] = useState(false);
+  const setStructureOpen = useCallback((next: boolean) => {
+    setGroundingAcknowledgement(null);
+    setStructureVisibility(next);
+  }, []);
+  const [exportOpen, setExportVisibility] = useState(false);
+  const setExportOpen = useCallback((next: boolean) => {
+    setGroundingAcknowledgement(null);
+    setExportVisibility(next);
+  }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -477,6 +503,15 @@ function Workbench({
   const [prompt, setPrompt] = useState(() => readLocalPrompt(project.id));
   const [interrupted, setInterrupted] = useState(false);
   const [proposalContext, setProposalContext] = useState<ProposalContext | null>(null);
+  const [activeReviewGrounding, setActiveReviewGrounding] = useState<{
+    runId: string;
+    sourceRevision: number;
+    grounding: GroundingAssessment;
+  } | null>(null);
+  const groundingReviewRequired = proposalContext?.grounding?.status === 'review_required';
+  const groundingReviewed =
+    groundingAcknowledgement?.context === proposalContext &&
+    groundingAcknowledgement?.text === output;
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -779,6 +814,7 @@ function Workbench({
     const savedBeforeAction = dirty ? await save('Saved before AI action') : prd;
     if (!savedBeforeAction) return;
     const current = savedBeforeAction;
+    setActiveReviewGrounding(null);
     setBusy(true);
     setSubmittedPrompt(instruction.trim());
     const turnId = crypto.randomUUID();
@@ -848,6 +884,17 @@ function Workbench({
             setStatus(next.detail);
           },
           onCompletion: (completion) => {
+            if (requestedAction === 'review') {
+              setActiveReviewGrounding(
+                completion.grounding
+                  ? {
+                      runId: completion.runId,
+                      sourceRevision: completion.revision,
+                      grounding: completion.grounding,
+                    }
+                  : null,
+              );
+            }
             setTurns((items) =>
               items.map((turn) =>
                 turn.id === turnId
@@ -867,6 +914,7 @@ function Workbench({
                 appliedRevision: null,
                 targetSectionId: requestedTargetSectionId,
                 selectionText: requestedSelectionText,
+                grounding: completion.grounding ?? null,
               });
             }
             void api.aiRuns(project.id).then((result) => setAiRuns(result.runs));
@@ -897,6 +945,7 @@ function Workbench({
       (proposalContext.action !== 'draft' && proposalContext.action !== 'rewrite') ||
       proposalContext.sourceRevision !== prd.revision ||
       !output.trim() ||
+      (groundingReviewRequired && !groundingReviewed) ||
       citations.some((citation) => !citation.available) ||
       dirty ||
       documentMutationRef.current
@@ -904,7 +953,7 @@ function Workbench({
       return;
     const { runId, sourceRevision } = proposalContext;
     const saved = await runDocumentMutation(() =>
-      api.applyAiRun(project.id, runId, sourceRevision, output.trim()),
+      api.applyAiRun(project.id, runId, sourceRevision, output.trim(), groundingReviewed),
     );
     if (!saved) return;
     setUndoRevision(sourceRevision);
@@ -1907,6 +1956,13 @@ function Workbench({
                                 ? 'Review completed. Open findings or History for the result.'
                                 : 'This response did not finish.')}
                           </MessageResponse>
+                          {aiRuns.find((run) => run.id === turn.runId)?.grounding?.status ===
+                            'review_required' && (
+                            <p className="recovery-note" role="status">
+                              Grounding review required. Inspect the saved run in History to compare
+                              its claims with the source excerpts.
+                            </p>
+                          )}
                         </MessageContent>
                         {turn.status === 'interrupted' && (
                           <p className="recovery-note">
@@ -1968,6 +2024,15 @@ function Workbench({
                         </p>
                       )}
                       <MessageResponse>{output}</MessageResponse>
+                      {!busy &&
+                        !proposalContext &&
+                        activeReviewGrounding?.grounding.status === 'review_required' && (
+                          <GroundingNotice
+                            assessment={activeReviewGrounding.grounding}
+                            citations={citations}
+                            onOpenCitation={openCitation}
+                          />
+                        )}
                       {!busy && output && (
                         <Button variant="ghost" size="sm" onClick={() => setDocumentOpen(true)}>
                           Open document
@@ -2003,6 +2068,35 @@ function Workbench({
                             ? `. Selected text: "${truncateText(proposalContext.selectionText)}"`
                             : ''}
                         </p>
+                        {!busy && groundingReviewRequired && (
+                          <GroundingNotice
+                            assessment={proposalContext.grounding!}
+                            citations={citations}
+                            onOpenCitation={openCitation}
+                          >
+                            <label className="grounding-acknowledgement">
+                              <input
+                                type="checkbox"
+                                checked={groundingReviewed}
+                                disabled={documentMutationBusy || recoveryUnavailable}
+                                onChange={(event) =>
+                                  setGroundingAcknowledgement(
+                                    event.target.checked
+                                      ? { context: proposalContext, text: output }
+                                      : null,
+                                  )
+                                }
+                              />
+                              I reviewed the supporting material and this proposal's claims.
+                            </label>
+                          </GroundingNotice>
+                        )}
+                        {!busy && !proposalContext.grounding && (
+                          <p className="proposal-provenance">
+                            Grounding assessment unavailable for this saved proposal. Review its
+                            sources and claims before applying it.
+                          </p>
+                        )}
                         {citations.some((citation) => !citation.available) && (
                           <p className="proposal-provenance" role="alert">
                             This proposal cannot be applied because its source evidence was deleted.
@@ -2026,6 +2120,7 @@ function Workbench({
                                   )
                                     return;
                                   setOutput(event.target.value);
+                                  setGroundingAcknowledgement(null);
                                   setProposalDraft({
                                     runId: proposalContext?.sourceRunId ?? null,
                                     text: event.target.value,
@@ -2042,6 +2137,7 @@ function Workbench({
                             tooltip="Creates a revision bound to this AI run"
                             disabled={
                               !proposalContext.runId ||
+                              (groundingReviewRequired && !groundingReviewed) ||
                               proposalContext.sourceRevision !== prd.revision ||
                               citations.some((citation) => !citation.available) ||
                               busy ||
@@ -2220,6 +2316,30 @@ function Workbench({
 
         {tab === 'review' && (
           <div className="review-panel">
+            {aiRuns
+              .filter(
+                (run) =>
+                  run.action === 'review' &&
+                  run.sourceRevision === prd.revision &&
+                  run.grounding?.status === 'review_required',
+              )
+              .map((run) => (
+                <GroundingNotice
+                  key={run.id}
+                  assessment={run.grounding!}
+                  citations={run.citations}
+                  onOpenCitation={openCitation}
+                />
+              ))}
+            {activeReviewGrounding?.sourceRevision === prd.revision &&
+              activeReviewGrounding.grounding.status === 'review_required' &&
+              !aiRuns.some((run) => run.id === activeReviewGrounding.runId) && (
+                <GroundingNotice
+                  assessment={activeReviewGrounding.grounding}
+                  citations={citations}
+                  onOpenCitation={openCitation}
+                />
+              )}
             <div className="panel-intro">
               <div>
                 <p className="eyebrow">Structured review</p>
@@ -2660,6 +2780,9 @@ function Workbench({
                         Revision {run.sourceRevision}, {run.status},{' '}
                         {new Date(run.startedAt).toLocaleString()}
                       </small>
+                      {run.grounding?.status === 'review_required' && (
+                        <small>Grounding review required</small>
+                      )}
                     </div>
                     {run.outputText && (
                       <Button
@@ -2677,6 +2800,15 @@ function Workbench({
                               : (run.outputText ?? ''),
                           );
                           setCitations(run.citations);
+                          setActiveReviewGrounding(
+                            run.action === 'review' && run.grounding
+                              ? {
+                                  runId: run.id,
+                                  sourceRevision: run.sourceRevision,
+                                  grounding: run.grounding,
+                                }
+                              : null,
+                          );
                           setHandoffCitationIds([]);
                           setProposalContext(contextForRun(run, prd.revision));
                           setActiveTurnId(turns.find((turn) => turn.runId === run.id)?.id ?? null);
@@ -2985,5 +3117,54 @@ function contextForRun(run: AiRunProposal, revision: number): ProposalContext | 
     appliedRevision: run.appliedRevision,
     targetSectionId: run.targetSectionId,
     selectionText: run.selectionText,
+    grounding: run.grounding ?? null,
   };
+}
+
+function GroundingNotice({
+  assessment,
+  citations,
+  onOpenCitation,
+  children,
+}: {
+  assessment: GroundingAssessment;
+  citations: Citation[];
+  onOpenCitation: (citation: Citation) => Promise<void>;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="grounding-review" aria-label="Grounding review">
+      <p role="status">
+        <strong>Grounding review required</strong>
+      </p>
+      <p>
+        Check that the wording preserves the sources' meaning, quantities, people, timing and
+        qualifications. Completion is not confirmation that these claims are supported.
+      </p>
+      <ul>
+        {assessment.reasons.map((reason, index) => (
+          <li key={index}>{reason}</li>
+        ))}
+      </ul>
+      {citations.length > 0 ? (
+        <details>
+          <summary>Compare source excerpts ({citations.length})</summary>
+          {citations.map((citation) => (
+            <div key={citation.id}>
+              <Button variant="link" size="sm" onClick={() => void onOpenCitation(citation)}>
+                {citation.sourceName} · {citation.locator}
+              </Button>
+              <blockquote>{citation.excerpt}</blockquote>
+            </div>
+          ))}
+        </details>
+      ) : (
+        <p>
+          No source excerpts were supplied. Compare the claims with your instructions and current
+          document.
+        </p>
+      )}
+      {children}
+    </section>
+  );
 }

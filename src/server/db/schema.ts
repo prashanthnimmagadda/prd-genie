@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import type { GroundingAssessment } from '../../shared/types.js';
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -163,6 +164,7 @@ export const aiRuns = sqliteTable('ai_runs', {
   targetSectionId: text('target_section_id'),
   selectionText: text('selection_text'),
   outputText: text('output_text'),
+  grounding: text('grounding_json', { mode: 'json' }).$type<GroundingAssessment>(),
   appliedRevision: integer('applied_revision'),
   status: text('status').notNull(),
   errorCode: text('error_code'),

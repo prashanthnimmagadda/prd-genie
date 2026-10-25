@@ -10,6 +10,7 @@ export class ProposalService {
     runId: string,
     expectedRevision: number,
     proposedMarkdown?: string,
+    groundingReviewed?: boolean,
   ): PrdDocument {
     const run = this.repository.getAiRun(projectId, runId);
     if (run.status !== 'completed' || !run.outputText) {
@@ -32,6 +33,14 @@ export class ProposalService {
     if (current.revision !== expectedRevision || run.sourceRevision !== expectedRevision) {
       throw new ApiError(409, 'stale_proposal', 'This proposal targets an older PRD revision.');
     }
+    const requiresGroundingReview = run.grounding?.status === 'review_required';
+    if (requiresGroundingReview && groundingReviewed !== true) {
+      throw new ApiError(
+        409,
+        'grounding_review_required',
+        'Review this proposal against its source excerpts and acknowledge the grounding review before applying it.',
+      );
+    }
     const output = (proposedMarkdown ?? run.outputText).trim();
     if (!output) throw new ApiError(400, 'empty_proposal', 'The proposal is empty.');
 
@@ -45,7 +54,7 @@ export class ProposalService {
       runId,
       expectedRevision,
       sections,
-      `AI run ${runId} ${revised ? 'revised and accepted' : 'accepted'}`,
+      `AI run ${runId} ${revised ? 'revised and accepted' : 'accepted'}${requiresGroundingReview ? '; user acknowledged grounding review' : ''}`,
     );
   }
 }

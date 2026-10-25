@@ -741,6 +741,31 @@ select {
 .finding-warning header {
   color: #826000;
 }
+.grounding-review {
+  margin-block: 16px;
+  padding-inline-start: 14px;
+  border-inline-start: 3px solid #826000;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.grounding-review > * + * {
+  margin-top: 10px;
+}
+.grounding-review blockquote {
+  margin: 4px 0 12px;
+  white-space: pre-wrap;
+}
+.grounding-review summary {
+  cursor: pointer;
+}
+.grounding-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.grounding-acknowledgement input {
+  margin-top: 4px;
+}
 .finding p {
   line-height: 1.6;
 }

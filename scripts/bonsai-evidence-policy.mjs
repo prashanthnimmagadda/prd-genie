@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import { URL } from 'node:url';
 import {
+  hasLiteralClaimSupport,
+  isInstructionLikeEvidence,
+} from '../src/shared/grounding-policy.mjs';
+import {
   bonsaiEvaluationPolicy,
   canonicalJson,
   decodeBonsaiResult,
@@ -15,6 +19,149 @@ const instructions = Object.fromEntries([
   ['structured-review', corpus.reviewInstruction],
 ]);
 
+// Generation completion and human acceptance are not automatic grounding clearance.
+export function validAutomaticGrounding(assessment) {
+  return (
+    assessment !== null &&
+    typeof assessment === 'object' &&
+    !Array.isArray(assessment) &&
+    Object.keys(assessment).length === 3 &&
+    assessment.policyVersion === '2026-10-25.1' &&
+    assessment.status === 'checks_passed' &&
+    Array.isArray(assessment.reasons) &&
+    assessment.reasons.length === 0
+  );
+}
+
+function completeSourceExcerpt(source, excerpt) {
+  if (typeof excerpt !== 'string' || !excerpt.trim()) return false;
+  const index = source.indexOf(excerpt);
+  return (
+    index >= 0 &&
+    (index === 0 || source[index - 1] === '\n') &&
+    (index + excerpt.length === source.length || source[index + excerpt.length] === '\n')
+  );
+}
+
+function groundedReview(summaryText, findings, sections, evidence, instruction) {
+  const structural = sections.map(
+    (section) =>
+      `The ${section.title} section ${section.body.trim() ? 'contains the supplied text' : 'is empty'}.`,
+  );
+  const trustedEvidence = evidence.filter((item) => !isInstructionLikeEvidence(item.excerpt));
+  if (
+    !hasLiteralClaimSupport(
+      summaryText,
+      [
+        ...structural,
+        ...sections.map((section) => section.body),
+        ...trustedEvidence.map((item) => item.excerpt),
+        instruction,
+      ],
+      trustedEvidence.map((item) => item.chunkId),
+      Object.fromEntries(trustedEvidence.map((item) => [item.chunkId, item.excerpt])),
+    )
+  )
+    return false;
+  return findings.every((finding) => {
+    const index = sections.findIndex((section) => section.id === finding.targetSectionId);
+    if (index < 0 || !Array.isArray(finding.citationChunkIds)) return false;
+    if (finding.citationChunkIds.some((id) => !trustedEvidence.some((item) => item.chunkId === id)))
+      return false;
+    const cited = trustedEvidence.filter((item) => finding.citationChunkIds.includes(item.chunkId));
+    const support = [
+      structural[index],
+      sections[index].body,
+      ...cited.map((item) => item.excerpt),
+      instruction,
+    ];
+    const citationPassages = Object.fromEntries(cited.map((item) => [item.chunkId, item.excerpt]));
+    return (
+      hasLiteralClaimSupport(
+        finding.rationale,
+        support,
+        finding.citationChunkIds,
+        citationPassages,
+      ) &&
+      (finding.proposedMarkdown === null ||
+        hasLiteralClaimSupport(
+          finding.proposedMarkdown,
+          support,
+          finding.citationChunkIds,
+          citationPassages,
+        ))
+    );
+  });
+}
+
+/** Recompute automatic clearance from corpus-bound text, not a report's status label. */
+export function validCorpusGrounding(model) {
+  try {
+    if (model.qualitySpecVersion !== corpus.qualitySpecVersion || !Array.isArray(model.scenarios))
+      return false;
+    for (const scenario of corpus.cases) {
+      const report = model.scenarios.find((item) => item.id === scenario.id);
+      if (!validAutomaticGrounding(report?.grounding) || !Array.isArray(report.citations))
+        return false;
+      if (
+        report.citations.some(
+          (item) =>
+            typeof item.chunkId !== 'string' ||
+            !completeSourceExcerpt(scenario.sourceText, item.excerpt),
+        ) ||
+        new Set(report.citations.map((item) => item.chunkId)).size !== report.citations.length
+      )
+        return false;
+      const trusted = report.citations.filter((item) => !isInstructionLikeEvidence(item.excerpt));
+      if (
+        !hasLiteralClaimSupport(
+          report.generatedText,
+          [scenario.initialBody, scenario.instruction, ...trusted.map((item) => item.excerpt)],
+          trusted.map((item) => item.chunkId),
+          Object.fromEntries(trusted.map((item) => [item.chunkId, item.excerpt])),
+        )
+      )
+        return false;
+    }
+    const review = model.structuredReview;
+    const grounded = model.scenarios.find((item) => item.id === 'grounded-problem');
+    if (
+      !validAutomaticGrounding(review?.grounding) ||
+      !Array.isArray(review.sections) ||
+      review.sections.length !== corpus.defaultSections.length ||
+      !Array.isArray(review.citations) ||
+      !Array.isArray(review.findings) ||
+      review.sections.some(
+        (section, index) =>
+          typeof section.id !== 'string' ||
+          !section.id ||
+          section.title !== corpus.defaultSections[index].title ||
+          section.body !== (section.title === 'Problem' ? grounded.generatedText : ''),
+      ) ||
+      new Set(review.sections.map((section) => section.id)).size !== review.sections.length ||
+      review.citations.some(
+        (item) =>
+          typeof item.chunkId !== 'string' ||
+          !(
+            completeSourceExcerpt(corpus.cases[0].sourceText, item.excerpt) ||
+            completeSourceExcerpt(corpus.hostileReviewSource, item.excerpt)
+          ),
+      ) ||
+      new Set(review.citations.map((item) => item.chunkId)).size !== review.citations.length
+    )
+      return false;
+    return groundedReview(
+      review.summary,
+      review.findings,
+      review.sections,
+      review.citations,
+      corpus.reviewInstruction,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function validBonsaiEvidence(model) {
   try {
     const evidence = model.bonsai;
@@ -22,6 +169,9 @@ export function validBonsaiEvidence(model) {
     const expectedCases = Object.keys(instructions);
     if (
       model.provider !== 'custom:bonsai-v2' ||
+      model.qualitySpecVersion !== '2026-10-25.1' ||
+      model.qualitySpecVersion !== corpus.qualitySpecVersion ||
+      !validCorpusGrounding(model) ||
       model.model !== 'Ternary-Bonsai-2-27B-PQ2_0' ||
       model.reviewModel !== model.model ||
       !/^[a-f0-9]{64}$/.test(evidence?.modelDigest ?? '') ||
@@ -57,6 +207,7 @@ export function validBonsaiEvidence(model) {
         typeof record.runId !== 'string' ||
         !record.runId ||
         associated?.runId !== record.runId ||
+        !validAutomaticGrounding(associated?.grounding) ||
         runIds.has(record.runId) ||
         typeof record.taskJson !== 'string'
       ) {
@@ -119,6 +270,31 @@ export function validBonsaiEvidence(model) {
             associated.generatedText
       )
         return false;
+      if (!review) {
+        const trusted = taskData.evidence.filter(
+          (item) => !isInstructionLikeEvidence(item.excerpt),
+        );
+        if (
+          !hasLiteralClaimSupport(
+            associated.generatedText,
+            [
+              ...taskData.currentDocument.sections.map((section) => section.body),
+              taskData.userInstruction,
+              ...trusted.map((item) => item.excerpt),
+            ],
+            trusted.map((item) => item.chunkId),
+            Object.fromEntries(trusted.map((item) => [item.chunkId, item.excerpt])),
+          )
+        )
+          return false;
+        if (
+          canonicalJson(
+            associated.citations.map(({ chunkId, excerpt }) => ({ chunkId, excerpt })),
+          ) !==
+          canonicalJson(taskData.evidence.map(({ chunkId, excerpt }) => ({ chunkId, excerpt })))
+        )
+          return false;
+      }
       generation = decoded.result.generation;
       taskIds.add(task.task_id);
       requestIds.add(task.request_id);
@@ -195,6 +371,7 @@ function bindReviewOutput(raw, taskData, model) {
     targetSectionId: section.id,
     rationale: allEmpty ? `The ${section.title} section is empty.` : finding.rationale,
     proposedMarkdown: allEmpty ? null : finding.proposedMarkdown,
+    citationChunkIds: allEmpty ? [] : finding.citationChunkIds,
   }));
   const expectedSummary = summary(
     allEmpty ? normalized.map((finding) => finding.rationale).join(' ') : output.summary,
@@ -211,9 +388,19 @@ function bindReviewOutput(raw, taskData, model) {
       (finding, index) =>
         stored[index].targetSectionId !== finding.targetSectionId ||
         stored[index].rationale !== finding.rationale ||
+        canonicalJson(stored[index].citationChunkIds) !== canonicalJson(finding.citationChunkIds) ||
         (stored[index].proposedMarkdown !== null &&
           stored[index].proposedMarkdown !== finding.proposedMarkdown),
     )
+  )
+    return false;
+  if (
+    canonicalJson(model.structuredReview.sections) !==
+      canonicalJson(sections.map(({ id, title, body }) => ({ id, title, body }))) ||
+    canonicalJson(
+      model.structuredReview.citations.map(({ chunkId, excerpt }) => ({ chunkId, excerpt })),
+    ) !== canonicalJson(taskData.evidence.map(({ chunkId, excerpt }) => ({ chunkId, excerpt }))) ||
+    !groundedReview(expectedSummary, stored, sections, taskData.evidence, taskData.userInstruction)
   )
     return false;
   // The app can reject an unsafe proposed patch. It cannot invent a replacement.

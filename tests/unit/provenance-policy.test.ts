@@ -562,6 +562,10 @@ describe('release provenance policy', () => {
       (report) => (report.provider = 'openai'),
       (report) => (report.retrievalMode = 'vector'),
       (report) => (report.corpusVersion = 1),
+      (report) => (report.qualitySpecVersion = '2026-10-22.2'),
+      (report) => {
+        Reflect.deleteProperty(report, 'qualitySpecVersion');
+      },
       (report) => (report.scenarios = []),
       (report) => report.scenarios.push(structuredClone(report.scenarios[0]!)),
       (report) => (report.scenarios[0]!.id = 'substituted-scenario'),
@@ -569,6 +573,21 @@ describe('release provenance policy', () => {
       (report) => (report.scenarios[0]!.checks.substitutedCheck = true),
       (report) => (report.scenarios[0]!.checks.mentionsInterviewBase = false),
       (report) => (report.scenarios[0]!.score.total += 1),
+      (report) => {
+        Reflect.deleteProperty(report.scenarios[0]!, 'grounding');
+      },
+      (report) => (report.scenarios[0]!.grounding.status = 'review_required'),
+      (report) => (report.scenarios[0]!.grounding.policyVersion = '2026-10-22.2'),
+      (report) => report.scenarios[0]!.grounding.reasons.push('Source relationship needs review.'),
+      (report) => {
+        report.scenarios[0]!.generatedText = report.scenarios[0]!.generatedText.replace(
+          'Eight of the twelve participants',
+          'Twelve of the eight participants',
+        );
+      },
+      (report) => {
+        report.scenarios[0]!.generatedText = `${report.scenarios[0]!.citations[0]!.excerpt} [${report.scenarios[0]!.citations[1]!.chunkId}]`;
+      },
       (report) => delete report.adversarialStructuredReview.checks.avoidsHostileReviewClaims,
       (report) => (report.adversarialStructuredReview.checks.substitutedCheck = true),
       (report) => (report.adversarialStructuredReview.checks.avoidsHostileReviewClaims = false),
@@ -582,6 +601,13 @@ describe('release provenance policy', () => {
       (report) => (report.structuredReview.checks.substitutedCheck = true),
       (report) => (report.structuredReview.checks.emitsSummary = false),
       (report) => (report.structuredReview.score.percentage = 99),
+      (report) => {
+        Reflect.deleteProperty(report.structuredReview, 'grounding');
+      },
+      (report) => (report.structuredReview.grounding.status = 'review_required'),
+      (report) => {
+        report.structuredReview.summary = 'The Problem section is empty.';
+      },
       (report) => delete report.persistence.allProjectsPersisted,
       (report) => (report.persistence.substitutedCheck = true),
       (report) => (report.persistence.allProjectsPersisted = false),
@@ -677,6 +703,12 @@ describe('release provenance policy', () => {
       },
       (value) => {
         value.scenarios[0]!.checks.mentionsInterviewBase = false;
+      },
+      (value) => {
+        value.scenarios[0]!.grounding.status = 'review_required';
+      },
+      (value) => {
+        value.structuredReview.grounding.status = 'review_required';
       },
       (value) => {
         value.dirtyWorkingTree = true;
@@ -1086,8 +1118,24 @@ function nodeFixture(major: 22 | 24) {
 }
 
 function modelFixture() {
-  const scenarios = Object.entries(requiredModelScenarioChecks).map(([id, names]) => ({
+  const grounding = () => ({
+    policyVersion: '2026-10-25.1',
+    status: 'checks_passed',
+    reasons: [] as string[],
+  });
+  const scenarios = Object.entries(requiredModelScenarioChecks).map(([id, names], index) => ({
     id,
+    generatedText: corpus.cases[index]!.sourceText.split('\n\n')
+      .slice(1, 1 + [3, 3, 2, 3, 2][index]!)
+      .join('\n'),
+    citations: corpus.cases[index]!.sourceText.split('\n\n')
+      .slice(1, 1 + [3, 3, 2, 3, 2][index]!)
+      .map((excerpt, paragraph) => ({
+        chunkId: `chunk-${index}-${paragraph}`,
+        locator: `Paragraph ${paragraph + 1}`,
+        excerpt,
+      })),
+    grounding: grounding(),
     checks: trueChecks(names),
     score: { passed: names.length, total: names.length, percentage: 100 },
   }));
@@ -1109,6 +1157,7 @@ function modelFixture() {
     provider: 'ollama',
     retrievalMode: 'lexical',
     corpusVersion: 3,
+    qualitySpecVersion: '2026-10-25.1',
     scenarios,
     adversarialStructuredReview: {
       marker: 'PINEAPPLE_REVIEW_INJECTION',
@@ -1116,8 +1165,8 @@ function modelFixture() {
       selectedCitationChunkIds: ['safe-chunk'],
       findingCitationChunkIds: [],
       output: {
-        summary: 'The Problem section is empty.',
-        rationales: ['The Problem section is empty.'],
+        summary: 'The Context section is empty.',
+        rationales: ['The Context section is empty.'],
         proposedMarkdown: [null],
       },
       checks: adversarialReviewChecks,
@@ -1128,6 +1177,23 @@ function modelFixture() {
       },
     },
     structuredReview: {
+      grounding: grounding(),
+      summary: 'The Context section is empty.',
+      sections: corpus.defaultSections.map((section, index) => ({
+        id: `section-${index}`,
+        title: section.title,
+        body: section.title === 'Problem' ? scenarios[0]!.generatedText : '',
+      })),
+      citations: scenarios[0]!.citations,
+      findingCount: 1,
+      findings: [
+        {
+          targetSectionId: 'section-1',
+          rationale: 'The Context section is empty.',
+          proposedMarkdown: null as string | null,
+          citationChunkIds: [] as string[],
+        },
+      ],
       checks: reviewChecks,
       score: {
         passed: requiredStructuredReviewChecks.length,
@@ -1151,18 +1217,13 @@ function bonsaiModelFixture() {
     consumer_record_sha256: '4'.repeat(64),
     public_wrapper_sha256: '5'.repeat(64),
   };
-  const generatedTexts = [
-    'Eight of twelve interviewed product managers lost unsaved PRD work in the previous 30 days. Those participants estimated a mean reconstruction time of 23 minutes per incident.',
-    'Study A observed 42 percent of 50 new users completed setup without help. Study B observed 61 percent of 44 new users completed setup without help. These conflicting results used different recruitment channels and non-overlapping samples.',
-    'Interview participants described difficulty finding the most recent approved decision. They said this creates uncertainty before stakeholder reviews.',
-    'The editor must save a recoverable draft at least every 5 seconds while text is changing. Given an edited draft and an interrupted process, when the application relaunches, then the last successful draft is visible within 10 seconds.',
-    'Seven of nine participants reported losing a draft change before a weekly review. The average reconstruction time reported by those participants was 18 minutes.',
-  ];
+  const generatedTexts = model.scenarios.map((scenario) => scenario.generatedText);
   const reviewFindings = [
     {
       targetSectionId: 'section-1',
       rationale: 'The Context section is empty.',
       proposedMarkdown: null,
+      citationChunkIds: [] as string[],
     },
   ];
   const reviewSummary = 'The Context section is empty.';
@@ -1182,15 +1243,11 @@ function bonsaiModelFixture() {
             : ''
           : scenario.initialBody,
       }));
-      const evidence = [
-        {
-          chunkId: `chunk-${index}`,
-          sourceName: `${scenario.id}.md`,
-          locator: 'Paragraph 1',
-          excerpt: scenario.sourceText.split('\n\n')[1]!,
-          evidenceStatus: 'supported',
-        },
-      ];
+      const evidence = model.scenarios[review ? 0 : index]!.citations.map((citation) => ({
+        ...citation,
+        sourceName: `${scenario.id}.md`,
+        evidenceStatus: 'supported',
+      }));
       const messages = [
         { role: 'system' as const, content: corpus.systemPrompts[review ? 'review' : 'rewrite'] },
         {

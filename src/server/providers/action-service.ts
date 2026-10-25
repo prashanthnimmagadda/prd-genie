@@ -7,9 +7,16 @@ import {
   streamText,
 } from 'ai';
 import type { z } from 'zod';
+import {
+  citationClaimText,
+  claimClauses,
+  hasLiteralClaimSupport,
+  isInstructionLikeEvidence,
+} from '../../shared/grounding-policy.mjs';
 import type {
   AiActionRequest,
   Citation,
+  GroundingAssessment,
   PrdDocument,
   PrdSection,
   ProjectSummary,
@@ -133,6 +140,7 @@ export class ActionService {
     }));
     const stream = createUIMessageStream<WorkbenchMessage>({
       execute: async ({ writer }) => {
+        let grounding: GroundingAssessment | undefined;
         writer.write({
           type: 'data-status',
           transient: true,
@@ -198,7 +206,7 @@ export class ActionService {
                                 prompt:
                                   attempt === 0
                                     ? prompt
-                                    : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims. For a finding about an empty section, use only "The <exact section title> section is empty." as its rationale and use an empty citationChunkIds array. Do not explain consequences, solutions, audiences, needs, obstacles, outcomes, project hazards, or what the empty section prevents, leaves, or omits.`,
+                                    : `${prompt}\n\nThe previous response was invalid. Return exactly one JSON object matching the required shape. The only allowed citationChunkIds are ${JSON.stringify(allowedCitationChunkIds)}. Copy an ID exactly from that array or use an empty array. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or explicitly related cited excerpts. Preserve entities, quantities, time, attribution and strength when paraphrasing. Do not add unsupported causal, impact, prediction, obligation, recommendation, or universal claims. For a finding about an empty section, use only "The <exact section title> section is empty." as its rationale and use an empty citationChunkIds array. Do not explain consequences, solutions, audiences, needs, obstacles, outcomes, project hazards, or what the empty section prevents, leaves, or omits.`,
                                 providerOptions: localProviderOptions(request.provider),
                                 abortSignal: signal,
                                 maxOutputTokens: reviewTokenLimit(
@@ -254,7 +262,15 @@ export class ActionService {
                 if (containsUnsafeReviewLanguage(normalizedReview)) {
                   invalidStructuredReview();
                 }
+                const citationPassages = Object.fromEntries(
+                  evidence
+                    .filter((item) => item.chunkId)
+                    .map((item) => [item.chunkId!, item.excerpt]),
+                );
                 const reviewPassages = [
+                  ...prd.sections
+                    .filter((section) => !section.body.trim())
+                    .map((section) => `The ${section.title} section is empty.`),
                   ...prd.sections.map(
                     (section) =>
                       `${section.title} section ${section.body.trim() ? 'contains the supplied text' : 'is empty'}`,
@@ -262,7 +278,35 @@ export class ActionService {
                   scopedContent,
                   ...evidence.map((citation) => citation.excerpt),
                 ];
+                const reviewText = [
+                  normalizedReview.summary,
+                  ...normalizedReview.findings.map((item) => item.rationale),
+                ].join('\n');
                 if (
+                  containsHostileSourceOutput(
+                    reviewText,
+                    retrievedEvidence
+                      .filter((item) => !evidence.includes(item))
+                      .map((item) => item.excerpt),
+                    request.instruction ?? '',
+                  )
+                )
+                  invalidStructuredReview();
+                if (
+                  containsNewNumericValue(normalizedReview.summary, trustedReviewContent) ||
+                  resolvedFindings.some(({ item }) =>
+                    containsNewNumericValue(item.rationale, trustedReviewContent),
+                  ) ||
+                  hasUnsupportedHighRiskClaim(
+                    [
+                      normalizedReview.summary,
+                      ...normalizedReview.findings.map((item) => item.rationale),
+                    ].join('\n'),
+                    [trustedReviewContent],
+                  )
+                )
+                  invalidStructuredReview();
+                const uncertainReview =
                   containsUnsupportedReviewClaim(
                     normalizedReview.summary,
                     reviewPassages,
@@ -283,10 +327,49 @@ export class ActionService {
                       ],
                       request.instruction ?? '',
                     ),
-                  )
-                ) {
-                  invalidStructuredReview();
-                }
+                  ) ||
+                  !hasLiteralClaimSupport(
+                    normalizedReview.summary,
+                    [...reviewPassages, request.instruction ?? ''],
+                    allowedCitationChunkIds,
+                    citationPassages,
+                  ) ||
+                  resolvedFindings.some(
+                    ({ item, section }) =>
+                      !hasLiteralClaimSupport(
+                        item.rationale,
+                        [
+                          section.body,
+                          `${section.title} section ${section.body.trim() ? 'contains the supplied text' : 'is empty'}.`,
+                          ...(!section.body.trim()
+                            ? [`The ${section.title} section is empty.`]
+                            : []),
+                          ...item.citationChunkIds.flatMap((id) =>
+                            evidence
+                              .filter((citation) => citation.chunkId === id)
+                              .map((citation) => citation.excerpt),
+                          ),
+                          request.instruction ?? '',
+                        ],
+                        item.citationChunkIds,
+                        citationPassages,
+                      ),
+                  ) ||
+                  resolvedFindings.some(
+                    ({ item }) =>
+                      item.proposedMarkdown !== null &&
+                      !hasLiteralClaimSupport(
+                        item.proposedMarkdown,
+                        [
+                          scopedContent,
+                          ...evidence.map((citation) => citation.excerpt),
+                          request.instruction ?? '',
+                        ],
+                        allowedCitationChunkIds,
+                        citationPassages,
+                      ),
+                  );
+                grounding = groundingAssessment(uncertainReview);
                 output = normalizedReview;
                 break;
               } catch (error) {
@@ -304,6 +387,7 @@ export class ActionService {
             if (!output || !resolvedFindings) invalidStructuredReview();
             for (const { item, section } of resolvedFindings) {
               const safeProposedMarkdown =
+                grounding?.status === 'review_required' ||
                 item.proposedMarkdown === null ||
                 containsNumericTargetProposal(item.proposedMarkdown) ||
                 containsNewNumericValue(item.proposedMarkdown, trustedReviewContent) ||
@@ -345,7 +429,7 @@ export class ActionService {
             writer.write({ type: 'text-start', id: runId });
             writer.write({ type: 'text-delta', id: runId, delta: output.summary });
             writer.write({ type: 'text-end', id: runId });
-            this.repository.completeAiRun(runId, undefined, output.summary);
+            this.repository.completeAiRun(runId, undefined, output.summary, grounding);
           } else if (request.action === 'ask') {
             if (request.provider === 'chatgpt') {
               const output = await this.providers.chatGptResponse(
@@ -408,7 +492,13 @@ export class ActionService {
               projectContext,
             );
             const trustedProposalPassages = [
-              scopedContent,
+              ...(request.scope === 'document'
+                ? prd.sections.map((section) => section.body)
+                : request.scope === 'section'
+                  ? prd.sections
+                      .filter((section) => section.id === request.targetSectionId)
+                      .map((section) => section.body)
+                  : [scopedContent]),
               ...evidence
                 .filter((item) => !isInstructionLikeEvidence(item.excerpt))
                 .map((item) => item.excerpt),
@@ -424,7 +514,7 @@ export class ActionService {
                 const attemptPrompt =
                   attempt === 0
                     ? prompt
-                    : `${prompt}\n\nThe previous proposal introduced content that was not traceable to one supplied passage or repeated an excluded category. For each clause, copy factual wording from userInstruction plus one scoped PRD or source passage. Do not paraphrase with synonyms or combine a modal, causal, impact, risk, or recommendation phrase from one fact with another. Omit excluded categories completely, including negative caveats or statements that they were not measured.`;
+                    : `${prompt}\n\nThe previous proposal failed a citation, factual or instruction constraint. Preserve supported meaning when paraphrasing or combining explicitly related passages, and cite the supporting evidence. Do not invent values, entities, attribution, causal relationships or stronger obligations. Omit excluded categories completely, including negative caveats or statements that they were not measured.`;
                 const resultText =
                   request.provider === 'chatgpt'
                     ? await this.providers.chatGptResponse(
@@ -453,32 +543,31 @@ export class ActionService {
                         }),
                       ).text;
                 const candidate = normalizeGeneratedProposal(prd, request, resultText);
-                if (
-                  isFreshDocumentDraft
-                    ? containsUnsafeProvisionalDraft(
-                        candidate,
-                        prd,
-                        trustedProposalPassages,
-                        request.instruction ?? '',
-                        retrievedEvidence
-                          .filter((item) => isInstructionLikeEvidence(item.excerpt))
-                          .map((item) => item.excerpt),
-                      )
-                    : containsUnsupportedProposalClaim(
-                        candidate,
-                        trustedProposalPassages,
-                        request.instruction ?? '',
-                        evidence
-                          .filter((item) => !isInstructionLikeEvidence(item.excerpt))
-                          .flatMap((item) => (item.chunkId ? [item.chunkId] : [])),
-                      )
-                ) {
-                  throw new ApiError(
-                    502,
-                    'malformed_output',
-                    'The provider returned proposal content that was not traceable to one supplied passage.',
-                  );
+                const assessment = assessProposalGrounding(
+                  request.scope === 'document'
+                    ? parseDocumentProposal(candidate, prd.sections)
+                        .map((section) => section.body)
+                        .join('\n')
+                    : candidate,
+                  trustedProposalPassages,
+                  request.instruction ?? '',
+                  evidence
+                    .filter((item) => !isInstructionLikeEvidence(item.excerpt))
+                    .flatMap((item) => (item.chunkId ? [item.chunkId] : [])),
+                  retrievedEvidence
+                    .filter((item) => isInstructionLikeEvidence(item.excerpt))
+                    .map((item) => item.excerpt),
+                  isFreshDocumentDraft,
+                  Object.fromEntries(
+                    evidence
+                      .filter((item) => item.chunkId && !isInstructionLikeEvidence(item.excerpt))
+                      .map((item) => [item.chunkId!, item.excerpt]),
+                  ),
+                );
+                if (assessment.failure) {
+                  throw new ApiError(502, 'malformed_output', assessment.failure);
                 }
+                grounding = assessment.grounding;
                 output = candidate;
                 break;
               } catch (error) {
@@ -503,11 +592,11 @@ export class ActionService {
             writer.write({ type: 'text-start', id: runId });
             writer.write({ type: 'text-delta', id: runId, delta: output });
             writer.write({ type: 'text-end', id: runId });
-            this.repository.completeAiRun(runId, undefined, output);
+            this.repository.completeAiRun(runId, undefined, output, grounding);
           }
           writer.write({
             type: 'data-completion',
-            data: { runId, revision: request.revision },
+            data: { runId, revision: request.revision, ...(grounding ? { grounding } : {}) },
           });
         } catch (error) {
           const normalized = normalizeProviderError(error);
@@ -659,102 +748,15 @@ function containsUnsafeReviewLanguage(output: GeneratedReview): boolean {
   );
 }
 
-const nonClaimWords = new Set([
-  'a',
-  'an',
-  'and',
-  'are',
-  'as',
-  'at',
-  'about',
-  'be',
-  'been',
-  'before',
-  'based',
-  'being',
-  'but',
-  'by',
-  'can',
-  'could',
-  'each',
-  'for',
-  'from',
-  'had',
-  'has',
-  'have',
-  'if',
-  'in',
-  'into',
-  'is',
-  'it',
-  'its',
-  'may',
-  'might',
-  'of',
-  'on',
-  'only',
-  'or',
-  'that',
-  'the',
-  'their',
-  'them',
-  'these',
-  'they',
-  'this',
-  'those',
-  'to',
-  'was',
-  'were',
-  'which',
-  'while',
-  'who',
-  'will',
-  'with',
-  'without',
-  'would',
-]);
-
-const irregularClaimTokens = new Map([
-  ['lost', 'lose'],
-  ['losing', 'lose'],
-  ['losses', 'loss'],
-  ['people', 'person'],
-]);
-
 export function containsUnsupportedProposalClaim(
   generated: string,
   trustedPassages: string[],
   authorizedInstruction = '',
   allowedCitationChunkIds: readonly string[] = [],
 ): boolean {
-  const allowedIds = new Set(allowedCitationChunkIds);
-  let invalidCitation = false;
-  let removedCitation = false;
-  const claimText = generated.replace(
-    /\[([^\r\n[\]]*)(\]|(?=\r?\n|$))/g,
-    (marker, id: string, closing: string, offset: number) => {
-      // Production chunk IDs are UUIDs. Ordinary Markdown brackets remain claim text.
-      const citationShaped = /[0-9a-f]{8}-[0-9a-f-]{27,}/i.test(id);
-      const mentionsAllowedId = allowedIds.has(id.trim());
-      if (!citationShaped && !mentionsAllowedId) return marker;
-      if (
-        !allowedIds.has(id) ||
-        closing !== ']' ||
-        generated[offset - 1] === '[' ||
-        generated[offset + marker.length] === ']'
-      ) {
-        invalidCitation = true;
-        return marker;
-      }
-      // Do not erase a Markdown link label or escaped literal as citation metadata.
-      if (generated[offset + marker.length] === '(' || generated[offset - 1] === '\\')
-        return marker;
-      removedCitation = true;
-      return ' ';
-    },
-  );
+  const { claimText, invalid } = citationClaimText(generated, allowedCitationChunkIds);
+  if (invalid) return true;
   const generatedClauses = claimClauses(claimText);
-  if (invalidCitation || (removedCitation && generatedClauses.length === 0)) return true;
   const trustedClauses = trustedPassages.flatMap((passage) => claimClauses(passage));
   const instructionTokens = claimClauses(authorizedInstruction).flat();
   const excludedTokens = instructionExclusionTokens(authorizedInstruction);
@@ -772,45 +774,94 @@ export function containsUnsupportedProposalClaim(
   );
 }
 
-/** A new document may propose behaviour and label assumptions beyond the user's exact words. */
-function containsUnsafeProvisionalDraft(
-  generated: string,
-  prd: PrdDocument,
-  trustedPassages: string[],
-  authorizedInstruction: string,
+function groundingAssessment(needsReview: boolean): GroundingAssessment {
+  return {
+    policyVersion: PRD_QUALITY_SPEC_VERSION,
+    status: needsReview ? 'review_required' : 'checks_passed',
+    reasons: needsReview
+      ? [
+          'Some wording is not established by the automated grounding checks. Compare the supplied passages and current PRD for entities, quantities, time, attribution, conditions and causal meaning before accepting. Valid citations alone do not establish support.',
+        ]
+      : [],
+  };
+}
+
+/** These bounded checks catch explicit additions, not arbitrary semantic entailment. */
+function hasUnsupportedHighRiskClaim(generated: string, trustedPassages: string[]): boolean {
+  const trusted = trustedPassages.join('\n');
+  const riskPatterns = [
+    /\b(?:every|always|guarantee[sd]?)\b/i,
+    /\b(?:must|mandatory)\b/i,
+    /\b(?:significant|critical|severe|urgent|consistent)\b/i,
+    /\b(?:revenue|financial harm)\b/i,
+  ];
+  return riskPatterns.some((pattern) => pattern.test(generated) && !pattern.test(trusted));
+}
+
+function containsHostileSourceOutput(
+  text: string,
   hostilePassages: string[],
+  instruction: string,
 ): boolean {
-  const body = parseDocumentProposal(generated, prd.sections)
-    .map((section) => section.body)
-    .join('\n');
-  const excludedTokens = instructionExclusionTokens(authorizedInstruction);
-  if (
-    claimClauses(body)
-      .flat()
-      .some((token) => excludedTokens.has(token))
-  )
-    return true;
-  if (containsNewNumericValue(body, [authorizedInstruction, ...trustedPassages].join('\n')))
-    return true;
-  if (isInstructionLikeEvidence(body)) return true;
-  const hostileMarkers = hostilePassages.flatMap(
+  const markers = hostilePassages.flatMap(
     (passage) => passage.match(/\b[A-Z][A-Z0-9]{5,}\b/g) ?? [],
   );
-  if (
-    hostileMarkers.some(
-      (marker) => !authorizedInstruction.includes(marker) && body.includes(marker),
-    )
-  )
-    return true;
-  const factPattern =
-    /\b(?:research (?:shows|found)|(?:participants?|customers?|stakeholders?) (?:reported|confirmed|decided)|company policy|(?:critical|significant|severe|urgent|always|guaranteed|mandatory))\b/i;
-  return body
-    .split(/\n|(?<=[.!?;])\s+/)
-    .some(
-      (clause) =>
-        factPattern.test(clause) &&
-        containsUnsupportedProposalClaim(clause, trustedPassages, authorizedInstruction),
+  return (
+    isInstructionLikeEvidence(text) ||
+    markers.some((marker) => !instruction.includes(marker) && text.includes(marker))
+  );
+}
+
+export function assessProposalGrounding(
+  generated: string,
+  trustedPassages: string[],
+  authorizedInstruction: string,
+  allowedCitationChunkIds: readonly string[],
+  hostilePassages: string[] = [],
+  isFreshDocument = false,
+  citationPassages: Readonly<Record<string, string>> = {},
+): { failure: string | null; grounding: GroundingAssessment } {
+  const { claimText, invalid } = citationClaimText(generated, allowedCitationChunkIds);
+  const fail = (failure: string) => ({ failure, grounding: groundingAssessment(true) });
+  if (invalid)
+    return fail(
+      'The proposal contains an unknown or malformed source citation, or no substantive content.',
     );
+  const excluded = instructionExclusionTokens(authorizedInstruction);
+  if (
+    claimClauses(claimText)
+      .flat()
+      .some((token) => excluded.has(token))
+  )
+    return fail('The proposal includes content explicitly excluded by the instruction.');
+  if (containsNewNumericValue(claimText, [authorizedInstruction, ...trustedPassages].join('\n')))
+    return fail(
+      'The proposal introduces a numeric value or unit not supplied in the permitted evidence or instruction.',
+    );
+  if (containsHostileSourceOutput(claimText, hostilePassages, authorizedInstruction))
+    return fail('The proposal repeats instruction-like source content.');
+  if (
+    !isFreshDocument &&
+    hasUnsupportedHighRiskClaim(claimText, [authorizedInstruction, ...trustedPassages])
+  )
+    return fail('The proposal adds unsupported causal, obligation, impact or strength claims.');
+  // Matching bags of words cannot establish preserved roles, numeric relationships or negation.
+  // Only unchanged clauses clear these automatic checks; other wording remains reviewable.
+  const uncertain =
+    isFreshDocument ||
+    containsUnsupportedProposalClaim(
+      generated,
+      trustedPassages,
+      authorizedInstruction,
+      allowedCitationChunkIds,
+    ) ||
+    !hasLiteralClaimSupport(
+      generated,
+      [...trustedPassages, authorizedInstruction],
+      allowedCitationChunkIds,
+      citationPassages,
+    );
+  return { failure: null, grounding: groundingAssessment(uncertain) };
 }
 
 const reviewScaffoldingVocabulary = [
@@ -913,56 +964,6 @@ function filterExcludedProposalEvidence(evidence: Citation[], instruction: strin
       !claimClauses(citation.excerpt)
         .flat()
         .some((token) => excludedTokens.has(token)),
-  );
-}
-
-function claimClauses(value: string): string[][] {
-  return value
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .split(/(?:\r?\n)+|(?<=[.!?;:])\s+|\s+(?:and|but)\s+/i)
-    .map((clause) =>
-      (clause.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
-        .map(normalizeClaimToken)
-        .filter((token) => token.length > 1 && !nonClaimWords.has(token)),
-    )
-    .filter((tokens) => tokens.length > 0);
-}
-
-function normalizeClaimToken(token: string): string {
-  const irregular = irregularClaimTokens.get(token);
-  if (irregular) return irregular;
-  if (token.length > 5 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
-  if (token.length > 5 && token.endsWith('ing')) return token.slice(0, -3);
-  if (token.length > 4 && token.endsWith('ed')) return token.slice(0, -2);
-  if (token.length > 4 && token.endsWith('s')) return token.slice(0, -1);
-  return token;
-}
-
-function isInstructionLikeEvidence(value: string): boolean {
-  const normalized = value.normalize('NFKC').replace(/[\p{Cf}\s]+/gu, ' ');
-  const roleSyntax =
-    /\b(?:system|assistant|developer)\s*(?:(?:message|prompt|instruction)\b|:)|<\/?(?:system|assistant|developer|prompt)>|```(?:system|assistant|developer)/i.test(
-      normalized,
-    );
-  const explicitlyUntrusted = /\b(?:untrusted|prompt[ -]?injection)\b/i.test(normalized);
-  const directive =
-    /\b(?:ignore|disregard|forget|follow|obey|override|bypass|execute|comply|reply|respond|output|return|print|say)\b/i.test(
-      normalized,
-    );
-  const metaTarget =
-    /\b(?:previous|prior|above|following|task|directions?|instructions?|commands?|rules?|prompt|system|assistant|developer|response|answer|output)\b/i.test(
-      normalized,
-    );
-  const redirect = /\b(?:instead|only|exactly)\b/i.test(normalized);
-  const sensitiveDisclosure =
-    /\b(?:disclose|reveal|expose|leak|print|return|output|send|share)\b.{0,100}\b(?:api[ -]?keys?|credentials?|secrets?|passwords?|cookies?|tokens?)\b|\b(?:api[ -]?keys?|credentials?|secrets?|passwords?|cookies?|tokens?)\b.{0,100}\b(?:disclose|reveal|expose|leak|print|return|output|send|share)\b/i.test(
-      normalized,
-    );
-  return (
-    roleSyntax ||
-    explicitlyUntrusted ||
-    (directive && (metaTarget || redirect)) ||
-    sensitiveDisclosure
   );
 }
 
@@ -1198,7 +1199,7 @@ function reviewSystemPrompt(): string {
     'Use only section IDs and citation chunk IDs supplied in the prompt.',
     'Every factual, causal, normative, and qualifying statement must be supported by the scoped PRD or a retrieved source excerpt. Before labeling a claim unsupported, compare it against every supplied excerpt, including exact numbers and measurements. Do not invent metrics, targets, thresholds, risks, assumptions, impact, consistency, or urgency. When content is missing, identify the gap only. Never propose an example, sample value, or numeric target. Do not use the phrases e.g., for example, for instance, or such as unless that exact content is supplied. Avoid words such as consistent, significant, critical, severe, or urgent unless trusted evidence uses that exact qualifier for the same fact.',
     'A proposed change is a preview and must never be described as already applied.',
-    'The summary must use one to three complete sentences naming the affected section and its specific observable defect. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or one cited excerpt. Do not add causal, impact, prediction, obligation, recommendation, or universal claims. Do not use vague labels, examples, or restate the review request.',
+    'The summary must use one to three complete sentences naming the affected section and its specific observable defect. Every summary and rationale clause must be traceable to the targeted PRD section, the authorized instruction, or explicitly related cited excerpts. Preserve entities, quantities, time, attribution and strength when paraphrasing. Do not add unsupported causal, impact, prediction, obligation, recommendation, or universal claims. Do not use vague labels, examples, or restate the review request.',
     'For a finding about an empty section, state only that the exact section title is empty and use an empty citationChunkIds array. Do not explain consequences, solutions, audiences, needs, obstacles, outcomes, project hazards, or what the empty section prevents, leaves, or omits.',
     'Return each distinct, material finding supported by the disclosed content. Review depth should fit the document and the user request. Put higher-priority findings first; avoid duplicates.',
     'Keep the summary under 120 words and each rationale under 120 words.',

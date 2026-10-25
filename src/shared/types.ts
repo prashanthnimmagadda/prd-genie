@@ -69,6 +69,12 @@ export interface SectionPatch {
   afterMarkdown: string;
 }
 
+export interface GroundingAssessment {
+  policyVersion: string;
+  status: 'checks_passed' | 'review_required';
+  reasons: string[];
+}
+
 export interface AiRunProposal {
   id: string;
   projectId: string;
@@ -80,6 +86,7 @@ export interface AiRunProposal {
   targetSectionId: string | null;
   selectionText: string | null;
   outputText: string | null;
+  grounding?: GroundingAssessment | null;
   appliedRevision: number | null;
   status: 'running' | 'completed' | 'failed';
   errorCode: string | null;
@@ -356,7 +363,7 @@ export type WorkbenchMessage = UIMessage<
     citation: Citation;
     finding: ReviewFinding;
     patch: SectionPatch;
-    completion: { runId: string; revision: number };
+    completion: { runId: string; revision: number; grounding?: GroundingAssessment };
   }
 >;
 
@@ -449,6 +456,7 @@ export const aiActionSchema = z
 export const applyAiRunSchema = z.object({
   revision: z.number().int().nonnegative(),
   proposedMarkdown: z.string().max(500_000).optional(),
+  groundingReviewed: z.boolean().optional(),
 });
 
 export const acceptFindingSchema = z.object({

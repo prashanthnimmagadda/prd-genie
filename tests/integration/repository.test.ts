@@ -23,6 +23,47 @@ describe('Repository', () => {
 
   afterEach(() => database.close());
 
+  it('persists proposal grounding across restart without certifying legacy runs', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-grounding-'));
+    const filename = path.join(directory, 'grounding.sqlite');
+    let persisted = createDatabase(filename);
+    try {
+      let stored = new Repository(persisted);
+      const project = stored.createProject('Grounding', '');
+      const input = {
+        projectId: project.id,
+        action: 'rewrite' as const,
+        scope: 'section' as const,
+        provider: 'ollama' as const,
+        model: 'synthetic',
+        sourceRevision: 0,
+        targetSectionId: stored.getPrd(project.id).sections[0]!.id,
+      };
+      const historicalRun = stored.createAiRun(input);
+      stored.completeAiRun(historicalRun, undefined, 'Historical proposal.');
+      const reviewRun = stored.createAiRun(input);
+      const grounding = {
+        policyVersion: 'grounding-fixture',
+        status: 'review_required' as const,
+        reasons: ['Check the proposed synthesis against both supplied passages.'],
+      };
+      stored.completeAiRun(reviewRun, undefined, 'Proposed synthesis.', grounding);
+      persisted.close();
+      persisted = createDatabase(filename);
+      stored = new Repository(persisted);
+      expect(stored.getAiRun(project.id, historicalRun).grounding).toBeNull();
+      expect(stored.getAiRun(project.id, reviewRun)).toMatchObject({
+        grounding,
+        status: 'completed',
+        outputText: 'Proposed synthesis.',
+        appliedRevision: null,
+      });
+    } finally {
+      persisted.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('recovers workspace text across restarts without changing the PRD or overwriting newer recovery', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-workspace-'));
     const filename = path.join(directory, 'workspace.sqlite');

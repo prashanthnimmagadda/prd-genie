@@ -3,6 +3,7 @@ import type {
   AiRunProposal,
   ChatGptHandoffSummary,
   Citation,
+  GroundingAssessment,
   HealthResponse,
   PrdDocument,
   ProjectSummary,
@@ -239,12 +240,19 @@ export const api = {
         ...(proposedMarkdown === undefined ? {} : { proposedMarkdown }),
       }),
     }),
-  applyAiRun: (projectId: string, runId: string, revision: number, proposedMarkdown?: string) =>
+  applyAiRun: (
+    projectId: string,
+    runId: string,
+    revision: number,
+    proposedMarkdown?: string,
+    groundingReviewed?: boolean,
+  ) =>
     request<PrdDocument>(`/api/projects/${projectId}/ai-runs/${runId}/apply`, {
       method: 'POST',
       body: JSON.stringify({
         revision,
         ...(proposedMarkdown === undefined ? {} : { proposedMarkdown }),
+        ...(groundingReviewed === undefined ? {} : { groundingReviewed }),
       }),
     }),
   restoreRevision: (projectId: string, revision: number, expectedRevision: number) =>
@@ -259,7 +267,11 @@ export interface ActionStreamHandlers {
   onCitation: (citation: Citation) => void;
   onFinding: (finding: ReviewFinding) => void;
   onStatus: (status: { stage: string; detail: string }) => void;
-  onCompletion: (completion: { runId: string; revision: number }) => void;
+  onCompletion: (completion: {
+    runId: string;
+    revision: number;
+    grounding?: GroundingAssessment;
+  }) => void;
 }
 
 export async function runAction(
@@ -311,7 +323,9 @@ export async function runAction(
       }
       if (part.type === 'data-completion') {
         completed = true;
-        handlers.onCompletion(part.data as { runId: string; revision: number });
+        handlers.onCompletion(
+          part.data as { runId: string; revision: number; grounding?: GroundingAssessment },
+        );
       }
       if (part.type === 'error') {
         const payload = JSON.parse(part.errorText ?? '{}') as { code?: string; message?: string };
