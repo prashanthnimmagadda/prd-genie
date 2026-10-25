@@ -1788,6 +1788,46 @@ describe('structured review grounding guard', () => {
 });
 
 describe('review numeric grounding', () => {
+  it('matches exact cardinal representations without admitting different values or units', () => {
+    const source =
+      'Eight of the twelve participants lost work during the previous 30 days. Twelve working product managers were interviewed in June 2026. Reconstruction took 23 minutes.';
+    expect(
+      containsNewNumericValue('8 of the 12 participants, June 2026, 23 minutes.', source),
+    ).toBe(false);
+    expect(containsNewNumericValue('23 minutes.', 'Twenty-three minutes.')).toBe(false);
+    expect(containsNewNumericValue('9 of the 12 participants.', source)).toBe(true);
+    expect(containsNewNumericValue('8 of the 13 participants.', source)).toBe(true);
+    expect(containsNewNumericValue('8 days.', source)).toBe(true);
+    expect(containsNewNumericValue('12 users.', source)).toBe(true);
+    expect(containsNewNumericValue('June 2027.', source)).toBe(true);
+    for (const unsupported of [
+      'one hundred',
+      'one\nhundred',
+      'one point five',
+      'minus one',
+      'one-off',
+      'one third',
+      'one / twelve',
+      'one.two',
+      'one dozen',
+      'one another',
+      'one−hundred',
+    ]) {
+      expect(containsNewNumericValue('1', unsupported)).toBe(true);
+    }
+    expect(containsNewNumericValue('3', 'three quarters')).toBe(true);
+    expect(containsNewNumericValue('8', '+eight')).toBe(true);
+    expect(containsNewNumericValue('2', 'two dozen')).toBe(true);
+    expect(containsNewNumericValue('8 participants', '- eight participants')).toBe(true);
+    expect(containsNewNumericValue('8', 'eight and a half')).toBe(true);
+    expect(containsNewNumericValue('2', 'two elevenths')).toBe(true);
+    expect(containsNewNumericValue('20', 'June twenty first')).toBe(true);
+    expect(containsNewNumericValue('8', 'eight quadrillion')).toBe(true);
+    expect(containsNewNumericValue('8', 'eight hundreds')).toBe(true);
+    expect(containsNewNumericValue('1 participant.', 'one participant.')).toBe(false);
+    expect(containsNewNumericValue('20 participants.', 'twenty 1 participants.')).toBe(true);
+  });
+
   it('allows values already present in trusted context', () => {
     expect(
       containsNewNumericValue('Keep the 23 minute baseline.', 'The baseline is 23 minutes.'),

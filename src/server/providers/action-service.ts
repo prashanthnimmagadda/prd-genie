@@ -720,7 +720,9 @@ function resolveReviewFindings(
 }
 
 export function containsNewNumericValue(generated: string, trustedContent: string): boolean {
-  const trustedValues = new Set(extractNumericValues(trustedContent));
+  // Recognize equivalent source representations without adding a new hard
+  // rejection rule for generated prose. Its grounding review is unchanged.
+  const trustedValues = new Set(extractNumericValues(trustedContent, true));
   return extractNumericValues(generated).some((value) => !trustedValues.has(value));
 }
 
@@ -967,10 +969,74 @@ function filterExcludedProposalEvidence(evidence: Citation[], instruction: strin
   );
 }
 
-function extractNumericValues(value: string): string[] {
+const cardinalValues = new Map<string, number>([
+  ...'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'
+    .split(' ')
+    .map((word, index): [string, number] => [word, index]),
+  ...'twenty thirty forty fifty sixty seventy eighty ninety'
+    .split(' ')
+    .map((word, index): [string, number] => [word, (index + 2) * 10]),
+]);
+const numericWord = `(?:${[...cardinalValues.keys()].join('|')}|hundred|thousand|million|billion|trillion|dozens?|scores?|gross|point|half|halves|quarters?|thirds?|fourths?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?|hundredths?|thousandths?|minus|negative|plus|positive|\\d+)`;
+const cardinalPhrase = new RegExp(
+  `\\b${numericWord}(?:[\\s-]+(?:and[\\s-]+)?${numericWord})*\\b`,
+  'gi',
+);
+
+function normalizeCardinalRepresentation(value: string): string {
+  // Parse complete, unambiguous English cardinals below 100 only. Larger,
+  // fractional, signed or mixed forms stay untouched; never extract a small
+  // value from part of "one hundred", "one point five" or "one-off".
+  return value.replace(cardinalPhrase, (phrase: string, offset: number) => {
+    const before = value.slice(0, offset);
+    const after = value.slice(offset + phrase.length);
+    if (/[.+/\p{Pd}−]$/u.test(before) || /^[.+/\p{Pd}−]/u.test(after)) return phrase;
+    if (/[+/\p{Pd}−]\s*$/u.test(before) || /^\s*[+/\p{Pd}−]/u.test(after)) return phrase;
+    // Do not take the integer part of mixed fractions or ordinal dates.
+    if (/^\s+(?:and\s+(?:a|an)\b|first\b|second\b|third\b|[a-z]+ths?\b)/i.test(after))
+      return phrase;
+    if (
+      /^\s+(?:hundreds?|thousands?|[a-z]+illions?|lakhs?|crores?|googol(?:plex)?(?:es|s)?)\b/i.test(
+        after,
+      )
+    )
+      return phrase;
+    const words = phrase.toLowerCase().split(/[\s-]+/);
+    const first = cardinalValues.get(words[0] ?? '');
+    // "One" also occurs in nonnumeric prose ("one another"). For zero/one,
+    // require an explicit unit already understood by the numeric validator.
+    if (
+      words.length === 1 &&
+      first !== undefined &&
+      first <= 1 &&
+      !/^\s+(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|users?|participants?|incidents?)\b/i.test(
+        after,
+      )
+    )
+      return phrase;
+    if (words.length === 1 && first !== undefined) return String(first);
+    const second = cardinalValues.get(words[1] ?? '');
+    if (
+      words.length === 2 &&
+      first !== undefined &&
+      first >= 20 &&
+      first % 10 === 0 &&
+      second !== undefined &&
+      second >= 1 &&
+      second <= 9
+    )
+      return String(first + second);
+    return phrase;
+  });
+}
+
+function extractNumericValues(value: string, recognizeSourceCardinals = false): string[] {
   const withoutListMarkers = value.replace(/^\s*\d+[.)]\s+/gm, '');
+  const comparable = recognizeSourceCardinals
+    ? normalizeCardinalRepresentation(withoutListMarkers)
+    : withoutListMarkers;
   return (
-    withoutListMarkers.match(
+    comparable.match(
       /\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|users?|participants?|incidents?)?/gi,
     ) ?? []
   ).map((item) =>
