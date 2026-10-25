@@ -64,7 +64,22 @@ let bonsai: ReturnType<typeof createBonsaiEvaluationBridge> | undefined;
 let bonsaiReadiness: ReturnType<typeof parseBonsaiReadiness> | undefined;
 let bonsaiJournal: string | undefined;
 let groundingStop: Record<string, unknown> | undefined;
+let qualityStop: Record<string, unknown> | undefined;
+const scenarioReports: Array<Record<string, unknown>> = [];
 const bonsaiRunIds = new Map<string, string>();
+
+function requirePassingChecks(
+  caseId: string,
+  checks: Record<string, boolean>,
+  evidence: Record<string, unknown>,
+) {
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  if (failedChecks.length === 0) return;
+  qualityStop = { caseId, failedChecks, checks: { ...checks }, ...evidence };
+  throw new Error(`${caseId} failed ${failedChecks.join(', ')}; evaluation stopped without retry.`);
+}
 const lexicalEmbeddings = {
   getStatus: () => ({
     mode: 'lexical',
@@ -333,7 +348,6 @@ try {
     }
   }
 
-  const scenarioReports: Array<Record<string, unknown>> = [];
   let reviewProject:
     | {
         id: string;
@@ -409,6 +423,13 @@ try {
       emitsCitation: action.citations.length > 0,
       persistsCompletedRun: completedRun.status === 'completed',
     };
+    const caseEvidence = {
+      runId: action.runId,
+      generatedText: action.text.trim(),
+      citations: action.citations,
+      grounding: completedRun.grounding,
+    };
+    requirePassingChecks(scenario.id, checks, caseEvidence);
     const applied = await app.inject({
       method: 'POST',
       url: `/api/projects/${project.id}/ai-runs/${action.runId}/apply`,
@@ -429,6 +450,11 @@ try {
       appliesExactOutput:
         appliedDocument.sections.find((section) => section.id === target.id)?.body ===
         action.text.trim(),
+    });
+    requirePassingChecks(scenario.id, checks, {
+      ...caseEvidence,
+      appliedRevision: appliedDocument.revision,
+      appliedBody: appliedDocument.sections.find((section) => section.id === target.id)?.body,
     });
     scenarioReports.push({
       id: scenario.id,
@@ -618,6 +644,18 @@ try {
     ),
   };
 
+  requirePassingChecks(
+    'structured-review',
+    { ...reviewChecks, ...adversarialReviewChecks },
+    {
+      runId: review.runId,
+      generatedText: review.text,
+      citations: review.citations,
+      grounding: completedReview.grounding,
+      findings,
+    },
+  );
+
   await app.close();
   app = undefined;
   const restarted = await buildApp({ databasePath, embeddings: lexicalEmbeddings });
@@ -628,6 +666,7 @@ try {
       projectsAfterRestart.json<{ projects: unknown[] }>().projects.length === scenarios.length,
     reviewHistoryPersisted: restarted.services.repository.listAiRuns(reviewProject.id).length >= 2,
   };
+  requirePassingChecks('persistence', persistenceChecks, {});
 
   const modelDigest = bonsaiReadiness?.modelDigest ?? (await resolveOllamaDigest(model));
   const reviewModelDigest =
@@ -779,7 +818,7 @@ try {
     process.exitCode = 1;
   }
 } catch (error) {
-  if (bonsaiJournal || groundingStop) {
+  if (bonsaiJournal || groundingStop || qualityStop) {
     const failureDirectory = bonsaiJournal
       ? path.dirname(bonsaiJournal)
       : path.join(os.tmpdir(), 'prd-genie-evaluation-failures', randomUUID());
@@ -792,7 +831,9 @@ try {
       status: 'stopped',
       reason: error instanceof Error ? error.message : 'Evaluation failed.',
       records: bonsai?.records ?? [],
+      completedScenarios: scenarioReports,
       ...(groundingStop ? { groundingStop } : {}),
+      ...(qualityStop ? { qualityStop } : {}),
       automaticRetry: false,
     };
     fs.writeFileSync(
