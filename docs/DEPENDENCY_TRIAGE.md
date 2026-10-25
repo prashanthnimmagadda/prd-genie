@@ -38,3 +38,29 @@ handing a DOCX to Mammoth or parsing slides and sheets.
 
 These dependency results support local validation. Signing, notarization,
 private real-document validation, and public distribution remain separate steps.
+
+## Follow-up - 25 October 2026
+
+A current audit at `a8f4d16` found one high and one moderate production finding;
+the full tree had one high and three moderate findings. These supersede the
+earlier zero-finding snapshot. The affected packages were Undici 8.10.2, its
+7.29.1 copy inside the AI SDK, and fast-uri 4.1.5 inside Fastify dependencies.
+
+The compatible updates are Undici 8.12.2, a major-specific override retaining
+Undici 7.30.1 for its existing SDK consumer, and fast-uri 4.2.3. The already
+patched fast-uri 3.1.9 branch remains unchanged. No provider, model, prompt or
+grounding rule changes are included.
+
+The application's guarded custom-provider fetch reaches Undici's response
+decoder, making the upstream excessive-content-encoding crash relevant. The
+patched application guarded fetch and the SDK's Undici copy rejected a disposable malformed
+loopback response and still decoded an ordinary compressed response. Encoded
+scheme alternatives were rejected by fast-uri while a normal URL was preserved.
+The existing 47 provider/API checks and TypeScript checks passed, and the full
+online audit reported zero findings after the update.
+
+No application use of Undici EventSource or integrity options was found. The
+SDK asset-download path and user-controlled Fastify schema resolution were not
+established as reachable in current product workflows. Updating those copies
+removes the reported dependency exposure without claiming an exploit occurred.
+Final release reports must still identify the exact clean candidate commit.
