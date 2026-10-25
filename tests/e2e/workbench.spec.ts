@@ -474,6 +474,11 @@ test('exports current AI evidence immediately and clears handoff selection bound
   await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
   await page.getByLabel('Your instruction').fill('Rewrite the problem using the current evidence.');
   await page.getByLabel('Submit').click();
+  await page
+    .getByRole('checkbox', {
+      name: "I reviewed the supporting material and this proposal's claims.",
+    })
+    .check();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
 
   await openHistory(page);
@@ -672,7 +677,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     name: 'research.md',
     mimeType: 'text/markdown',
     buffer: Buffer.from(
-      '# Research\nEight of twelve product managers lost an unsaved PRD draft. Reconstruction took 23 minutes on average.',
+      '# Research\nEight of twelve product managers lost an unsaved PRD draft.\n\nReconstruction took 23 minutes on average.',
     ),
   });
   await expect(
