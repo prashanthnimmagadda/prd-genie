@@ -14,6 +14,7 @@ interface Session {
 }
 
 const environmentKeys: Record<ProviderKind, string | undefined> = {
+  chatgpt: undefined,
   openai: process.env.OPENAI_API_KEY,
   anthropic: process.env.ANTHROPIC_API_KEY,
   google: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
@@ -100,6 +101,8 @@ export class SessionStore {
 
 function defaultHostname(provider: ProviderKind): string | null {
   switch (provider) {
+    case 'chatgpt':
+      return 'api.openai.com';
     case 'openai':
       return 'api.openai.com';
     case 'anthropic':

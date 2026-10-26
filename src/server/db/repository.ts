@@ -7,13 +7,21 @@ import type {
   ChatGptHandoffResponse,
   ChatGptHandoffSummary,
   Citation,
+  GroundingAssessment,
   PrdDocument,
   PrdSection,
   ProjectSummary,
   ReviewFinding,
   SourceSummary,
+  StructureSection,
+  StructureTemplate,
+  WorkspaceState,
 } from '../../shared/types.js';
-import { DEFAULT_SECTIONS } from '../../shared/types.js';
+import {
+  DEFAULT_STRUCTURE_SECTIONS,
+  WORKSPACE_MAX_BYTES,
+  workspaceUpdateSchema,
+} from '../../shared/types.js';
 import { ApiError } from '../../shared/api.js';
 import type { AppDatabase } from './client.js';
 import {
@@ -27,6 +35,8 @@ import {
   revisions,
   sourceLocations,
   sources,
+  structureTemplates,
+  workspaceStates,
 } from './schema.js';
 import { deleteSourceData } from './source-deletion.js';
 import { drainPendingFileDeletions, enqueueFileDeletion } from './file-deletion.js';
@@ -93,19 +103,35 @@ export class Repository {
       description,
       selectedProvider: null,
       selectedModel: null,
+      selectedStructureId: crypto.randomUUID(),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const sections: PrdSection[] = DEFAULT_SECTIONS.map((title, position) => ({
-      id: crypto.randomUUID(),
-      projectId: project.id,
-      title,
-      body: '',
-      position,
-      updatedAt: timestamp,
-    }));
+    const sections: PrdSection[] = DEFAULT_STRUCTURE_SECTIONS.map(
+      ({ title, purpose, required }, position) => ({
+        id: crypto.randomUUID(),
+        projectId: project.id,
+        title,
+        body: '',
+        position,
+        purpose,
+        required,
+        updatedAt: timestamp,
+      }),
+    );
     this.database.sqlite.transaction(() => {
       this.database.db.insert(projects).values(project).run();
+      this.database.db
+        .insert(structureTemplates)
+        .values({
+          id: project.selectedStructureId!,
+          projectId: project.id,
+          name: 'Standard PRD',
+          sectionsJson: JSON.stringify(DEFAULT_STRUCTURE_SECTIONS),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .run();
       this.database.db
         .insert(prdDocuments)
         .values({ projectId: project.id, revision: 0, updatedAt: timestamp })
@@ -144,6 +170,187 @@ export class Repository {
     return this.getProject(id);
   }
 
+  private ensureStructure(projectId: string): void {
+    const project = this.getProject(projectId);
+    if (project.selectedStructureId) return;
+    const timestamp = now();
+    const current = this.getPrd(projectId);
+    const sections: StructureSection[] = current.sections.map((section) => {
+      const standard = DEFAULT_STRUCTURE_SECTIONS.find((item) => item.title === section.title);
+      return {
+        title: section.title,
+        purpose:
+          section.purpose ||
+          standard?.purpose ||
+          `Describe ${section.title.toLowerCase()} for this PRD.`,
+        required: section.purpose ? (section.required ?? false) : (standard?.required ?? false),
+      };
+    });
+    const id = crypto.randomUUID();
+    this.database.sqlite.transaction(() => {
+      this.database.db
+        .insert(structureTemplates)
+        .values({
+          id,
+          projectId,
+          name: 'Current structure',
+          sectionsJson: JSON.stringify(sections),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .run();
+      this.database.db
+        .update(projects)
+        .set({ selectedStructureId: id })
+        .where(eq(projects.id, projectId))
+        .run();
+    })();
+  }
+
+  listStructures(projectId: string): StructureTemplate[] {
+    this.ensureStructure(projectId);
+    return this.database.db
+      .select()
+      .from(structureTemplates)
+      .where(eq(structureTemplates.projectId, projectId))
+      .orderBy(structureTemplates.createdAt)
+      .all()
+      .map((row) => ({
+        id: row.id,
+        projectId: row.projectId,
+        name: row.name,
+        sections: JSON.parse(row.sectionsJson) as StructureSection[],
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }));
+  }
+
+  private getStructure(projectId: string, structureId: string): StructureTemplate {
+    const structure = this.listStructures(projectId).find((item) => item.id === structureId);
+    if (!structure)
+      throw new ApiError(404, 'structure_not_found', 'Structure not found in this project.');
+    return structure;
+  }
+
+  createStructure(
+    projectId: string,
+    name: string,
+    sections: StructureSection[],
+    selectCurrent = false,
+  ): StructureTemplate {
+    this.ensureStructure(projectId);
+    const timestamp = now();
+    const structure: StructureTemplate = {
+      id: crypto.randomUUID(),
+      projectId,
+      name,
+      sections,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.database.sqlite.transaction(() => {
+      this.database.db
+        .insert(structureTemplates)
+        .values({
+          id: structure.id,
+          projectId,
+          name,
+          sectionsJson: JSON.stringify(sections),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .run();
+      if (selectCurrent)
+        this.database.db
+          .update(projects)
+          .set({ selectedStructureId: structure.id, updatedAt: timestamp })
+          .where(eq(projects.id, projectId))
+          .run();
+    })();
+    return structure;
+  }
+
+  updateStructure(
+    projectId: string,
+    structureId: string,
+    updates: { name?: string; sections?: StructureSection[] },
+  ): StructureTemplate {
+    const current = this.getStructure(projectId, structureId);
+    const timestamp = now();
+    this.database.db
+      .update(structureTemplates)
+      .set({
+        name: updates.name ?? current.name,
+        sectionsJson: JSON.stringify(updates.sections ?? current.sections),
+        updatedAt: timestamp,
+      })
+      .where(eq(structureTemplates.id, structureId))
+      .run();
+    return this.getStructure(projectId, structureId);
+  }
+
+  deleteStructure(projectId: string, structureId: string): void {
+    this.getStructure(projectId, structureId);
+    if (this.getProject(projectId).selectedStructureId === structureId) {
+      throw new ApiError(
+        409,
+        'selected_structure',
+        'Choose another structure before deleting this one.',
+      );
+    }
+    this.database.db.delete(structureTemplates).where(eq(structureTemplates.id, structureId)).run();
+  }
+
+  selectStructure(
+    projectId: string,
+    structureId: string,
+    expectedRevision: number,
+  ): { project: ProjectSummary; prd: PrdDocument } {
+    const structure = this.getStructure(projectId, structureId);
+    const current = this.getPrd(projectId);
+    if (current.revision !== expectedRevision) {
+      throw new ApiError(
+        409,
+        'stale_revision',
+        'The PRD changed since this structure was selected.',
+      );
+    }
+    const available = [...current.sections];
+    const sections = structure.sections.map((part, position) => {
+      const matchIndex = available.findIndex(
+        (section) => section.title.trim().toLowerCase() === part.title.trim().toLowerCase(),
+      );
+      const match = matchIndex >= 0 ? available.splice(matchIndex, 1)[0] : undefined;
+      return {
+        id: match?.id ?? crypto.randomUUID(),
+        title: part.title,
+        body: match?.body ?? '',
+        position,
+        purpose: part.purpose,
+        required: part.required,
+      };
+    });
+    if (available.some((section) => section.body.trim())) {
+      throw new ApiError(
+        409,
+        'structure_content_conflict',
+        'This structure would remove populated sections. Move their content into the new headings before switching.',
+      );
+    }
+    const prd = this.savePrd(
+      projectId,
+      expectedRevision,
+      sections,
+      `Selected structure: ${structure.name}`,
+    );
+    this.database.db
+      .update(projects)
+      .set({ selectedStructureId: structureId, updatedAt: now() })
+      .where(eq(projects.id, projectId))
+      .run();
+    return { project: this.getProject(projectId), prd };
+  }
+
   deleteProject(id: string): void {
     this.getProject(id);
     const vectorIds = this.database.sqlite
@@ -178,6 +385,116 @@ export class Repository {
     drainPendingFileDeletions(this.database);
   }
 
+  getWorkspace(projectId: string): WorkspaceState {
+    this.getProject(projectId);
+    const row = this.database.db
+      .select()
+      .from(workspaceStates)
+      .where(eq(workspaceStates.projectId, projectId))
+      .get();
+    if (!row) return { revision: 0, prompt: '', turns: [], draft: null };
+    let stored: unknown;
+    try {
+      stored = JSON.parse(row.stateJson);
+    } catch {
+      throw new ApiError(
+        500,
+        'workspace_unreadable',
+        'Saved workspace recovery could not be read. Your PRD is unchanged.',
+      );
+    }
+    const parsed = workspaceUpdateSchema.safeParse(
+      typeof stored === 'object' && stored !== null ? { ...stored, revision: row.revision } : null,
+    );
+    if (!parsed.success) {
+      throw new ApiError(
+        500,
+        'workspace_unreadable',
+        'Saved workspace recovery could not be read. Your PRD is unchanged.',
+      );
+    }
+    return parsed.data;
+  }
+
+  saveWorkspace(projectId: string, input: WorkspaceState): WorkspaceState {
+    const parsed = workspaceUpdateSchema.safeParse(input);
+    if (!parsed.success)
+      throw new ApiError(
+        400,
+        'invalid_workspace',
+        'Workspace recovery data is invalid or too large.',
+      );
+    const { revision, ...state } = parsed.data;
+    const stateJson = JSON.stringify(state);
+    if (Buffer.byteLength(stateJson, 'utf8') > WORKSPACE_MAX_BYTES) {
+      throw new ApiError(
+        413,
+        'workspace_too_large',
+        'Workspace recovery exceeds the local storage limit. No saved work was replaced.',
+      );
+    }
+    if (new Set(state.turns.map((turn) => turn.id)).size !== state.turns.length) {
+      throw new ApiError(
+        400,
+        'invalid_workspace',
+        'Conversation entries must have unique identifiers.',
+      );
+    }
+    return this.database.sqlite.transaction(() => {
+      this.getProject(projectId);
+      if (state.draft) {
+        const current = this.database.db
+          .select()
+          .from(prdDocuments)
+          .where(eq(prdDocuments.projectId, projectId))
+          .get();
+        const sections = state.draft.sections;
+        if (state.draft.baseRevision > (current?.revision ?? 0)) {
+          throw new ApiError(
+            409,
+            'invalid_recovery_revision',
+            'The recovery draft refers to a document revision that does not exist.',
+          );
+        }
+        if (
+          sections.some((section) => section.projectId !== projectId) ||
+          new Set(sections.map((section) => section.id)).size !== sections.length ||
+          [...sections]
+            .sort((a, b) => a.position - b.position)
+            .some((section, index) => section.position !== index)
+        ) {
+          throw new ApiError(
+            400,
+            'invalid_workspace',
+            'Recovery sections must belong to this project and have unique identifiers and continuous positions.',
+          );
+        }
+      }
+      const values = { projectId, revision: revision + 1, stateJson, updatedAt: now() };
+      const result =
+        revision === 0
+          ? this.database.db.insert(workspaceStates).values(values).onConflictDoNothing().run()
+          : this.database.db
+              .update(workspaceStates)
+              .set(values)
+              .where(
+                and(
+                  eq(workspaceStates.projectId, projectId),
+                  eq(workspaceStates.revision, revision),
+                ),
+              )
+              .run();
+      if (result.changes !== 1) {
+        throw new ApiError(
+          409,
+          'workspace_conflict',
+          'Workspace recovery changed in another window. Reload it before saving again.',
+        );
+      }
+      return { revision: values.revision, ...state };
+    })();
+  }
+
   getPrd(projectId: string): PrdDocument {
     this.getProject(projectId);
     const document = this.database.db
@@ -190,14 +507,24 @@ export class Repository {
       .from(prdSections)
       .where(eq(prdSections.projectId, projectId))
       .orderBy(prdSections.position)
-      .all();
+      .all()
+      .map((section) => {
+        if (section.purpose) return section;
+        const standard = DEFAULT_STRUCTURE_SECTIONS.find((item) => item.title === section.title);
+        return standard
+          ? { ...section, purpose: standard.purpose, required: standard.required }
+          : section;
+      });
     return { projectId, revision: document?.revision ?? 0, sections };
   }
 
   savePrd(
     projectId: string,
     expectedRevision: number,
-    updatedSections: Array<Pick<PrdSection, 'id' | 'title' | 'body' | 'position'>>,
+    updatedSections: Array<
+      Pick<PrdSection, 'id' | 'title' | 'body' | 'position'> &
+        Pick<PrdSection, 'purpose' | 'required'>
+    >,
     reason: string,
   ): PrdDocument {
     const current = this.getPrd(projectId);
@@ -231,20 +558,29 @@ export class Repository {
     }
     const timestamp = now();
     const nextRevision = expectedRevision + 1;
+    const previousById = new Map(current.sections.map((section) => [section.id, section]));
     const snapshot = [...updatedSections]
       .sort((left, right) => left.position - right.position)
-      .map((section) => ({ ...section, projectId, updatedAt: timestamp }));
+      .map((section) => ({
+        ...section,
+        purpose: section.purpose ?? previousById.get(section.id)?.purpose ?? '',
+        required: section.required ?? previousById.get(section.id)?.required ?? false,
+        projectId,
+        updatedAt: timestamp,
+      }));
     this.database.sqlite.transaction(() => {
       this.database.sqlite
         .prepare('UPDATE prd_sections SET position = -position - 1 WHERE project_id = ?')
         .run(projectId);
       const upsertSection = this.database.sqlite.prepare(`
-        INSERT INTO prd_sections (id, project_id, title, body, position, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO prd_sections (id, project_id, title, body, position, purpose, required, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           title = excluded.title,
           body = excluded.body,
           position = excluded.position,
+          purpose = excluded.purpose,
+          required = excluded.required,
           updated_at = excluded.updated_at
       `);
       for (const section of snapshot) {
@@ -254,6 +590,8 @@ export class Repository {
           section.title,
           section.body,
           section.position,
+          section.purpose,
+          section.required ? 1 : 0,
           section.updatedAt,
         );
       }
@@ -401,13 +739,19 @@ export class Repository {
     })();
   }
 
-  completeAiRun(id: string, errorCode?: string, outputText?: string): void {
+  completeAiRun(
+    id: string,
+    errorCode?: string,
+    outputText?: string,
+    grounding?: GroundingAssessment,
+  ): void {
     this.database.db
       .update(aiRuns)
       .set({
         status: errorCode ? 'failed' : 'completed',
         errorCode: errorCode ?? null,
         outputText: outputText ?? null,
+        grounding: errorCode ? null : (grounding ?? null),
         completedAt: now(),
       })
       .where(eq(aiRuns.id, id))
@@ -430,6 +774,7 @@ export class Repository {
       targetSectionId: row.targetSectionId,
       selectionText: row.selectionText,
       outputText: row.outputText,
+      grounding: row.grounding,
       appliedRevision: row.appliedRevision,
       status: row.status as AiRunProposal['status'],
       errorCode: row.errorCode,

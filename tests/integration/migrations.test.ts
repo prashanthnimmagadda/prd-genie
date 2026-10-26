@@ -4,6 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../../src/server/db/client.js';
+import { Repository } from '../../src/server/db/repository.js';
 
 describe('database migrations', () => {
   const directories: string[] = [];
@@ -134,6 +135,18 @@ describe('database migrations', () => {
 
     const upgraded = createDatabase(databasePath);
     try {
+      const repository = new Repository(upgraded);
+      expect(repository.getAiRun(projectId, runId).grounding).toBeNull();
+      expect(
+        upgraded.sqlite
+          .prepare("SELECT name FROM app_migrations WHERE name = '0009_proposal_grounding'")
+          .get(),
+      ).toBeTruthy();
+      expect(repository.listStructures(projectId)[0]).toMatchObject({
+        name: 'Current structure',
+        sections: [{ title: 'Problem', required: true }],
+      });
+      expect(repository.getProject(projectId).selectedStructureId).toBeTruthy();
       expect(fs.existsSync(backupPath)).toBe(true);
       expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
       const backup = new Database(backupPath, { readonly: true });

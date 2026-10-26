@@ -1,0 +1,599 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "admission": {
+      "enum": ["NOT_ATTESTED", "PASSED"]
+    },
+    "api_request_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "body_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "coverage": {
+      "const": "participating KAIROS/PRD slot; registered local custody only"
+    },
+    "custody": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "automatic_release": {
+              "const": false
+            },
+            "intent_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pid": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "provider_settlement": {
+              "const": "NOT_ATTESTED"
+            },
+            "role": {
+              "enum": ["controller", "passive-custodian", "passive-public-custodian"]
+            },
+            "slot_device": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "slot_inode": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "role",
+            "pid",
+            "start",
+            "slot_device",
+            "slot_inode",
+            "intent_sha256",
+            "provider_settlement",
+            "automatic_release"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "generation": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "guard": {
+      "enum": ["NOT_ATTESTED", "PASSED"]
+    },
+    "hold": {
+      "type": "boolean"
+    },
+    "intent_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "local_settlement": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "generation": {
+                  "type": "string"
+                },
+                "nonce": {
+                  "type": "string"
+                },
+                "provider_outcome": {
+                  "const": "NOT_ATTESTED"
+                },
+                "records_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "registration_count": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "sealed_at": {
+                  "type": "number"
+                },
+                "status": {
+                  "const": "LOCAL_REGISTERED_SCOPE_SETTLED"
+                },
+                "task_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "task_id",
+                "generation",
+                "nonce",
+                "status",
+                "sealed_at",
+                "registration_count",
+                "records_sha256",
+                "provider_outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "const": "UNKNOWN_HOLD"
+                },
+                "unresolved": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": ["status", "unresolved"],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "messages_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "no_tools": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempted_tool_calls": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "contract": {
+              "const": "hermes-task-no-tools-v1"
+            },
+            "enforced": {
+              "type": "boolean"
+            },
+            "executed_tool_calls": {
+              "anyOf": [
+                {
+                  "const": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "contract",
+            "requested",
+            "enforced",
+            "attempted_tool_calls",
+            "executed_tool_calls"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "policy": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_seconds": {
+          "const": 1800
+        },
+        "interrupt_seconds": {
+          "const": 30
+        },
+        "kill_settlement_seconds": {
+          "const": 15
+        },
+        "term_seconds": {
+          "const": 15
+        }
+      },
+      "required": [
+        "execution_seconds",
+        "interrupt_seconds",
+        "term_seconds",
+        "kill_settlement_seconds"
+      ],
+      "type": "object"
+    },
+    "policy_failure": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "admission_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "api_request_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cleanup_failed": {
+              "type": "boolean"
+            },
+            "guard_forwarded": {
+              "type": "boolean"
+            },
+            "guard_http_status": {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "guard_phase": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "guard_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["reason", "phase", "outcome", "api_request_id", "session_id", "turn_id"],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provider_outcome": {
+      "enum": ["UNKNOWN", "NOT_SENT", "TERMINAL_RESPONSE"]
+    },
+    "raw_provider_response_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "redispatch_allowed": {
+      "const": false
+    },
+    "registration_closure_confirmed": {
+      "type": "boolean"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "response": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "minLength": 1,
+              "type": "string",
+              "x-max-utf8-bytes": 524288
+            },
+            "finish_reason": {
+              "enum": ["stop", "length"]
+            },
+            "usage": {
+              "additionalProperties": false,
+              "properties": {
+                "completion_tokens": {
+                  "maximum": 1000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "prompt_tokens": {
+                  "maximum": 1000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "total_tokens": {
+                  "maximum": 1000000,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+              "type": "object"
+            }
+          },
+          "required": ["content", "finish_reason", "usage"],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "response_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "const": "bonsai-evaluation-result-v1"
+    },
+    "source_identity": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commit": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            "consumer_record_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "module_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "public_wrapper_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "tree": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "commit",
+            "tree",
+            "module_sha256",
+            "consumer_record_sha256",
+            "public_wrapper_sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": ["COMPLETED", "INCOMPLETE", "NOT_SENT", "UNKNOWN"]
+    },
+    "task_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "task_json_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "status",
+    "ok",
+    "task_id",
+    "request_id",
+    "task_json_sha256",
+    "body_sha256",
+    "messages_sha256",
+    "response",
+    "response_sha256",
+    "raw_provider_response_sha256",
+    "generation",
+    "api_request_id",
+    "guard",
+    "admission",
+    "no_tools",
+    "source_identity",
+    "reason",
+    "policy_failure",
+    "provider_outcome",
+    "hold",
+    "redispatch_allowed",
+    "local_settlement",
+    "registration_closure_confirmed",
+    "custody",
+    "policy",
+    "intent_sha256",
+    "coverage"
+  ],
+  "type": "object",
+  "x-max-utf8-bytes": 1048576
+}

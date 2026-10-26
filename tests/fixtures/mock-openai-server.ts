@@ -18,7 +18,17 @@ const server = createServer(async (request, response) => {
         prompt.match(
           /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): Problem/i,
         )?.[1] ?? 'Problem';
-      const chunkId = prompt.match(/chunkId\\?":\\?"([^"\\]+)/i)?.[1];
+      const userMessage = (
+        body.messages as Array<{ role: string; content: string }> | undefined
+      )?.find((message) => message.role === 'user')?.content;
+      const task = userMessage
+        ? (JSON.parse(userMessage.slice(userMessage.indexOf('\n') + 1)) as {
+            evidence?: Array<{ chunkId: string; excerpt: string }>;
+          })
+        : undefined;
+      const chunkId = task?.evidence?.find((item) =>
+        item.excerpt.includes('Reconstruction took 23 minutes on average.'),
+      )?.chunkId;
       completion(response, {
         summary: 'Eight of twelve product managers lost an unsaved PRD draft.',
         findings: [

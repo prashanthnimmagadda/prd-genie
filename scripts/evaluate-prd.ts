@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/server/app.js';
@@ -8,10 +9,28 @@ import { config } from '../src/server/config.js';
 import {
   containsNumericTargetProposal,
   containsUnsupportedReviewClaim,
+  outputTokenLimit,
+  reviewTokenLimit,
+  actionSystemPrompt,
+  ollamaReviewSystemPrompt,
 } from '../src/server/providers/action-service.js';
+import { DEFAULT_STRUCTURE_SECTIONS } from '../src/shared/types.js';
+import { PRD_QUALITY_SPEC_VERSION } from '../src/server/providers/quality-spec.js';
+import {
+  bonsaiContract,
+  bonsaiEvaluationPolicy,
+  canonicalJson,
+  inspectBonsaiBudgets,
+} from './bonsai-evaluation.mjs';
+import {
+  createBonsaiEvaluationBridge,
+  parseBonsaiReadiness,
+  verifyBonsaiReadiness,
+} from './bonsai-dispatch.js';
 import type { EmbeddingService } from '../src/server/retrieval/embedding-service.js';
 import { RetrievalService } from '../src/server/retrieval/retrieval-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
+import { validAutomaticGrounding, validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
 
 interface Scenario {
   id: string;
@@ -22,13 +41,45 @@ interface Scenario {
   evaluate: (text: string) => Record<string, boolean>;
 }
 
-const model = process.env.PRD_GENIE_EVAL_MODEL ?? 'prd-genie-qwen3-4b-instruct:latest';
-const reviewModel = process.env.PRD_GENIE_EVAL_REVIEW_MODEL ?? model;
-const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-model-eval-'));
-const databasePath = path.join(directory, 'evaluation.sqlite');
-const originalSourceDir = config.sourceDir;
-Object.assign(config, { sourceDir: path.join(directory, 'sources') });
+const evaluationProvider = process.env.PRD_GENIE_EVAL_PROVIDER ?? 'ollama';
+const model =
+  evaluationProvider === 'bonsai'
+    ? 'Ternary-Bonsai-2-27B-PQ2_0'
+    : (process.env.PRD_GENIE_EVAL_MODEL ?? 'prd-genie-qwen3-4b-instruct:latest');
+const reviewModel =
+  evaluationProvider === 'bonsai' ? model : (process.env.PRD_GENIE_EVAL_REVIEW_MODEL ?? model);
+if (
+  evaluationProvider === 'bonsai' &&
+  [process.env.PRD_GENIE_EVAL_MODEL, process.env.PRD_GENIE_EVAL_REVIEW_MODEL].some(
+    (value) => value && value !== model,
+  )
+) {
+  throw new Error('The Bonsai corpus configuration requires its exact model; no replacement.');
+}
+const evaluationGitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+const evaluationDirty = Boolean(
+  execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(),
+);
+let bonsai: ReturnType<typeof createBonsaiEvaluationBridge> | undefined;
+let bonsaiReadiness: ReturnType<typeof parseBonsaiReadiness> | undefined;
+let bonsaiJournal: string | undefined;
+let groundingStop: Record<string, unknown> | undefined;
+let qualityStop: Record<string, unknown> | undefined;
+const scenarioReports: Array<Record<string, unknown>> = [];
+const bonsaiRunIds = new Map<string, string>();
 
+function requirePassingChecks(
+  caseId: string,
+  checks: Record<string, boolean>,
+  evidence: Record<string, unknown>,
+) {
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  if (failedChecks.length === 0) return;
+  qualityStop = { caseId, failedChecks, checks: { ...checks }, ...evidence };
+  throw new Error(`${caseId} failed ${failedChecks.join(', ')}; evaluation stopped without retry.`);
+}
 const lexicalEmbeddings = {
   getStatus: () => ({
     mode: 'lexical',
@@ -148,34 +199,155 @@ const scenarios: Scenario[] = [
   },
 ];
 
+if (evaluationProvider === 'bonsai') {
+  const corpus = JSON.parse(
+    fs.readFileSync(new URL('../evaluations/prd-corpus-v3.json', import.meta.url), 'utf8'),
+  ) as {
+    cases: unknown;
+    defaultSections: unknown;
+    systemPrompts: { rewrite: string; review: string };
+  };
+  if (
+    canonicalJson(
+      scenarios.map(({ id, targetSection, initialBody, sourceText, instruction }) => ({
+        id,
+        targetSection,
+        initialBody,
+        sourceText,
+        instruction,
+      })),
+    ) !== canonicalJson(corpus.cases) ||
+    canonicalJson(DEFAULT_STRUCTURE_SECTIONS) !== canonicalJson(corpus.defaultSections) ||
+    actionSystemPrompt('rewrite', 'section') !== corpus.systemPrompts.rewrite ||
+    ollamaReviewSystemPrompt() !== corpus.systemPrompts.review
+  ) {
+    throw new Error(
+      'The application corpus or prompts differ from the approved evidence contract.',
+    );
+  }
+  // Readiness is read-only; explicit live opt-in plus reviewed installation pins
+  // are required before constructing a dispatcher. No implicit provider fallback.
+  const requirements = inspectBonsaiBudgets([
+    ...scenarios.map((scenario) => ({
+      id: scenario.id,
+      maxOutputTokens: outputTokenLimit('rewrite', 'section'),
+    })),
+    {
+      id: 'structured-review',
+      maxOutputTokens: reviewTokenLimit('document', DEFAULT_STRUCTURE_SECTIONS.length),
+    },
+    {
+      id: 'adversarial-structured-review',
+      maxOutputTokens: reviewTokenLimit('document', DEFAULT_STRUCTURE_SECTIONS.length),
+    },
+  ]);
+  const readinessPath = process.env.PRD_GENIE_BONSAI_READINESS;
+  let readinessError: string | undefined;
+  if (readinessPath) {
+    try {
+      bonsaiReadiness = parseBonsaiReadiness(JSON.parse(fs.readFileSync(readinessPath, 'utf8')));
+      verifyBonsaiReadiness(bonsaiReadiness);
+    } catch (error) {
+      readinessError = error instanceof Error ? error.message : 'Readiness metadata is invalid.';
+      bonsaiReadiness = undefined;
+    }
+  }
+  if (
+    process.env.PRD_GENIE_BONSAI_LIVE !== '1' ||
+    !bonsaiReadiness ||
+    evaluationDirty ||
+    requirements.some((row) => row.status !== 'configured')
+  ) {
+    console.log(
+      JSON.stringify(
+        {
+          schema: 'prd-bonsai-evaluation-readiness-v1',
+          status: 'pending',
+          gitSha: evaluationGitSha,
+          dirtyWorkingTree: evaluationDirty,
+          provider: 'custom:bonsai-v2',
+          contract: bonsaiContract,
+          policy: bonsaiEvaluationPolicy,
+          requirements,
+          readiness: bonsaiReadiness
+            ? 'pins-checked; live adoption/admission not established'
+            : 'missing-or-invalid',
+          ...(readinessError ? { readinessError } : {}),
+          persistence: 'Pending completed generation and explicit acceptance; not skipped.',
+          inferenceRequests: 0,
+          releaseEvidence: false,
+          limitations: [
+            'Requires separate installation and live-execution authority, explicit live opt-in, and a clean checkout.',
+            'This preflight does not establish native installation, fresh admission or model quality.',
+            'The evaluation settings differ from application settings; the 9000-token ceiling is unverified.',
+            'This does not prove generic application-provider or Qwen compatibility.',
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(75);
+  }
+  const journalDirectory = path.join(os.tmpdir(), 'prd-genie-bonsai-evidence', randomUUID());
+  fs.mkdirSync(journalDirectory, { recursive: true });
+  bonsaiJournal = path.join(journalDirectory, 'dispatch.jsonl');
+  console.log(`Bonsai custody journal: ${bonsaiJournal}`);
+  bonsai = createBonsaiEvaluationBridge({
+    readiness: bonsaiReadiness,
+    onRecord: (record) => {
+      // Keep custody evidence outside the disposable corpus database. Flush each
+      // record before proceeding; never replace an earlier run or completion.
+      const fd = fs.openSync(bonsaiJournal!, 'a', 0o600);
+      try {
+        fs.writeFileSync(fd, `${JSON.stringify(record)}\n`);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+  });
+}
+if (!['ollama', 'bonsai'].includes(evaluationProvider))
+  throw new Error('Unsupported evaluation provider; no fallback.');
+
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prd-genie-model-eval-'));
+const databasePath = path.join(directory, 'evaluation.sqlite');
+const originalSourceDir = config.sourceDir;
+Object.assign(config, { sourceDir: path.join(directory, 'sources') });
 let app: FastifyInstance | undefined;
 try {
-  const built = await buildApp({ databasePath, embeddings: lexicalEmbeddings });
+  const built = await buildApp({
+    databasePath,
+    embeddings: lexicalEmbeddings,
+    ...(bonsai ? { evaluation: { model: bonsai.model, disableRetries: true } } : {}),
+  });
   app = built.app;
   const session = await app.inject({ method: 'GET', url: '/api/session/providers' });
   const cookie = session.cookies.map((item) => `${item.name}=${item.value}`).join('; ');
-  const configured = await app.inject({
-    method: 'PUT',
-    url: '/api/session/providers/ollama',
-    headers: { cookie },
-    payload: { baseUrl: 'http://127.0.0.1:11434/v1' },
-  });
-  assertStatus(configured.statusCode, configured.body, 200, 'configure Ollama');
-  const discovered = await app.inject({
-    method: 'GET',
-    url: '/api/providers/ollama/models',
-    headers: { cookie },
-  });
-  assertStatus(discovered.statusCode, discovered.body, 200, 'discover models');
-  const models = discovered.json<{ models: Array<{ id: string }> }>().models;
-  if (!models.some((item) => item.id === model)) {
-    throw new Error(`Evaluation model ${model} is not available.`);
-  }
-  if (!models.some((item) => item.id === reviewModel)) {
-    throw new Error(`Review evaluation model ${reviewModel} is not available.`);
+  if (!bonsai) {
+    const configured = await app.inject({
+      method: 'PUT',
+      url: '/api/session/providers/ollama',
+      headers: { cookie },
+      payload: { baseUrl: 'http://127.0.0.1:11434/v1' },
+    });
+    assertStatus(configured.statusCode, configured.body, 200, 'configure Ollama');
+    const discovered = await app.inject({
+      method: 'GET',
+      url: '/api/providers/ollama/models',
+      headers: { cookie },
+    });
+    assertStatus(discovered.statusCode, discovered.body, 200, 'discover models');
+    const models = discovered.json<{ models: Array<{ id: string }> }>().models;
+    if (!models.some((item) => item.id === model)) {
+      throw new Error(`Evaluation model ${model} is not available.`);
+    }
+    if (!models.some((item) => item.id === reviewModel)) {
+      throw new Error(`Review evaluation model ${reviewModel} is not available.`);
+    }
   }
 
-  const scenarioReports: Array<Record<string, unknown>> = [];
   let reviewProject:
     | {
         id: string;
@@ -217,6 +389,7 @@ try {
     });
     assertStatus(uploaded.statusCode, uploaded.body, 201, `upload ${scenario.id}`);
 
+    bonsai?.beginCase(scenario.id, outputTokenLimit('rewrite', 'section'));
     const action = await runAction(app, cookie, {
       projectId: project.id,
       revision: 1,
@@ -227,15 +400,36 @@ try {
       targetSectionId: target.id,
       instruction: scenario.instruction,
     });
+    bonsai?.assertBatchHealthy();
+    if (bonsai && action.runId) bonsaiRunIds.set(scenario.id, action.runId);
     if (!action.runId) throw new Error(`${scenario.id} did not emit a completion run ID.`);
+    const completedRun = built.services.repository.getAiRun(project.id, action.runId);
+    if (!validAutomaticGrounding(completedRun.grounding)) {
+      groundingStop = {
+        caseId: scenario.id,
+        runId: action.runId,
+        grounding: completedRun.grounding ?? null,
+        generatedText: action.text,
+        citations: action.citations,
+      };
+      throw new Error(
+        `${scenario.id} has unresolved or missing grounding assessment; generation is not a passing case. No automatic acceptance or further request is allowed.`,
+      );
+    }
     const checks = {
       ...scenario.evaluate(action.text),
       returnsPrdOnly: !/```|section id|source excerpt|the request asks/i.test(action.text),
       meaningfulLength: action.text.trim().length >= 50 && action.text.trim().length <= 2_000,
       emitsCitation: action.citations.length > 0,
-      persistsCompletedRun:
-        built.services.repository.getAiRun(project.id, action.runId).status === 'completed',
+      persistsCompletedRun: completedRun.status === 'completed',
     };
+    const caseEvidence = {
+      runId: action.runId,
+      generatedText: action.text.trim(),
+      citations: action.citations,
+      grounding: completedRun.grounding,
+    };
+    requirePassingChecks(scenario.id, checks, caseEvidence);
     const applied = await app.inject({
       method: 'POST',
       url: `/api/projects/${project.id}/ai-runs/${action.runId}/apply`,
@@ -257,6 +451,11 @@ try {
         appliedDocument.sections.find((section) => section.id === target.id)?.body ===
         action.text.trim(),
     });
+    requirePassingChecks(scenario.id, checks, {
+      ...caseEvidence,
+      appliedRevision: appliedDocument.revision,
+      appliedBody: appliedDocument.sections.find((section) => section.id === target.id)?.body,
+    });
     scenarioReports.push({
       id: scenario.id,
       checks,
@@ -264,6 +463,7 @@ try {
       generatedText: action.text.trim(),
       citations: action.citations,
       runId: action.runId,
+      grounding: completedRun.grounding,
     });
     if (scenario.id === 'grounded-problem') {
       reviewProject = {
@@ -310,6 +510,10 @@ try {
     reviewProject.id,
     [reviewInstruction, reviewScopedContent].join('\n'),
   );
+  bonsai?.beginCase(
+    'structured-review',
+    reviewTokenLimit('document', DEFAULT_STRUCTURE_SECTIONS.length),
+  );
   const review = await runAction(app, cookie, {
     projectId: reviewProject.id,
     revision: reviewProject.revision,
@@ -319,6 +523,22 @@ try {
     model: reviewModel,
     instruction: reviewInstruction,
   });
+  bonsai?.assertBatchHealthy();
+  if (bonsai && review.runId) bonsaiRunIds.set('structured-review', review.runId);
+  if (!review.runId) throw new Error('Structured review did not emit a completion run ID.');
+  const completedReview = built.services.repository.getAiRun(reviewProject.id, review.runId);
+  if (!validAutomaticGrounding(completedReview.grounding)) {
+    groundingStop = {
+      caseId: 'structured-review',
+      runId: review.runId,
+      grounding: completedReview.grounding ?? null,
+      generatedText: review.text,
+      citations: review.citations,
+    };
+    throw new Error(
+      'Structured review has unresolved or missing grounding assessment; generation is not a passing case. No automatic acceptance or further request is allowed.',
+    );
+  }
   const findings = (
     await app.inject({ method: 'GET', url: `/api/projects/${reviewProject.id}/review-findings` })
   ).json<{
@@ -424,6 +644,18 @@ try {
     ),
   };
 
+  requirePassingChecks(
+    'structured-review',
+    { ...reviewChecks, ...adversarialReviewChecks },
+    {
+      runId: review.runId,
+      generatedText: review.text,
+      citations: review.citations,
+      grounding: completedReview.grounding,
+      findings,
+    },
+  );
+
   await app.close();
   app = undefined;
   const restarted = await buildApp({ databasePath, embeddings: lexicalEmbeddings });
@@ -434,13 +666,20 @@ try {
       projectsAfterRestart.json<{ projects: unknown[] }>().projects.length === scenarios.length,
     reviewHistoryPersisted: restarted.services.repository.listAiRuns(reviewProject.id).length >= 2,
   };
+  requirePassingChecks('persistence', persistenceChecks, {});
 
-  const modelDigest = await resolveOllamaDigest(model);
-  const reviewModelDigest = await resolveOllamaDigest(reviewModel);
+  const modelDigest = bonsaiReadiness?.modelDigest ?? (await resolveOllamaDigest(model));
+  const reviewModelDigest =
+    bonsaiReadiness?.modelDigest ?? (await resolveOllamaDigest(reviewModel));
   const gitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const dirty = Boolean(
     execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(),
   );
+  if (bonsai && (gitSha !== evaluationGitSha || dirty)) {
+    throw new Error(
+      'Repository provenance changed during evaluation; completed receipts are retained, but no release report is accepted.',
+    );
+  }
   const allChecks = [
     ...scenarioReports.flatMap((scenario) =>
       Object.values(scenario.checks as Record<string, boolean>),
@@ -458,9 +697,23 @@ try {
     modelDigest,
     reviewModel,
     reviewModelDigest,
-    provider: 'ollama',
+    provider: bonsai ? 'custom:bonsai-v2' : 'ollama',
+    ...(bonsai && bonsaiReadiness
+      ? {
+          bonsai: {
+            policy: bonsaiEvaluationPolicy,
+            sourceIdentity: bonsaiReadiness.sourceIdentity,
+            modelDigest: bonsaiReadiness.modelDigest,
+            records: bonsai.records.map((record) => ({
+              ...record,
+              runId: bonsaiRunIds.get(record.caseId),
+            })),
+          },
+        }
+      : {}),
     retrievalMode: 'lexical',
     corpusVersion: 3,
+    qualitySpecVersion: PRD_QUALITY_SPEC_VERSION,
     scenarios: scenarioReports,
     adversarialStructuredReview: {
       marker: hostileReviewMarker,
@@ -492,6 +745,14 @@ try {
       score: score(adversarialReviewChecks),
     },
     structuredReview: {
+      runId: review.runId,
+      grounding: completedReview.grounding,
+      sections: [...reviewProject.sectionIds].map((id) => ({
+        id,
+        title: reviewProject.sectionTitles.get(id) ?? '',
+        body: reviewProject.sectionBodies.get(id) ?? '',
+      })),
+      citations: review.citations,
       checks: reviewChecks,
       score: score(reviewChecks),
       summary: review.text.trim(),
@@ -499,6 +760,9 @@ try {
       findings: findings.map((finding) => ({
         targetSectionId: finding.targetSectionId,
         rationale: finding.rationale,
+        citationChunkIds: finding.citations.flatMap((citation) =>
+          citation.chunkId ? [citation.chunkId] : [],
+        ),
         proposedMarkdown: finding.proposedPatch?.afterMarkdown ?? null,
       })),
     },
@@ -512,9 +776,22 @@ try {
       'This is a deterministic rubric over a synthetic English corpus.',
       'It validates the recorded local model and prompts, not every provider or future model.',
       'The corpus uses lexical retrieval so model quality is measured separately from embeddings.',
+      'Grounding metadata records deterministic checks, not semantic proof; unresolved grounding review stops the evaluation.',
       'Human review remains required before a PRD is used for product decisions.',
+      ...(bonsai
+        ? [
+            'Bonsai uses a separately approved 8192 total/4096 reasoning policy, not equivalent application generation settings.',
+            'The corpus does not verify the 9000-token application review ceiling or direct generic-provider compatibility.',
+            'Native responses are buffered; this run does not verify streaming or universal model-user exclusion.',
+          ]
+        : []),
     ],
   };
+  if (bonsai && !validBonsaiEvidence(report)) {
+    throw new Error(
+      'Bonsai receipts do not bind the completed corpus report; retained journals are not release evidence.',
+    );
+  }
   fs.mkdirSync(path.resolve('reports'), { recursive: true });
   fs.writeFileSync(
     path.resolve('reports/model-evaluation.json'),
@@ -540,6 +817,33 @@ try {
     }
     process.exitCode = 1;
   }
+} catch (error) {
+  if (bonsaiJournal || groundingStop || qualityStop) {
+    const failureDirectory = bonsaiJournal
+      ? path.dirname(bonsaiJournal)
+      : path.join(os.tmpdir(), 'prd-genie-evaluation-failures', randomUUID());
+    fs.mkdirSync(failureDirectory, { recursive: true, mode: 0o700 });
+    const failed = {
+      schema: bonsaiJournal ? 'prd-bonsai-evaluation-failure-v1' : 'prd-evaluation-failure-v1',
+      gitSha: evaluationGitSha,
+      qualitySpecVersion: PRD_QUALITY_SPEC_VERSION,
+      releaseEvidence: false,
+      status: 'stopped',
+      reason: error instanceof Error ? error.message : 'Evaluation failed.',
+      records: bonsai?.records ?? [],
+      completedScenarios: scenarioReports,
+      ...(groundingStop ? { groundingStop } : {}),
+      ...(qualityStop ? { qualityStop } : {}),
+      automaticRetry: false,
+    };
+    fs.writeFileSync(
+      path.join(failureDirectory, 'failure.json'),
+      `${JSON.stringify(failed, null, 2)}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    console.error(`Evaluation stopped; failure evidence retained at ${failureDirectory}.`);
+  }
+  throw error;
 } finally {
   if (app) await app.close();
   Object.assign(config, { sourceDir: originalSourceDir });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderService } from '../../src/server/providers/provider-service.js';
 import { SessionStore } from '../../src/server/providers/session-store.js';
 import { createGuardedProviderFetch } from '../../src/server/providers/endpoints.js';
+import type { ChatGptService } from '../../src/server/providers/chatgpt-service.js';
 
 describe('ProviderService', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -159,5 +160,30 @@ describe('ProviderService', () => {
     await expect(
       new ProviderService(sessions, testGuardedFetch()).listModels(session.id, 'openai-compatible'),
     ).resolves.toEqual([{ id: 'local', name: 'local' }]);
+  });
+
+  it('routes ChatGPT only through its account adapter', async () => {
+    const responseMock = vi.fn().mockResolvedValue('Completed output');
+    const adapter = {
+      listModels: vi.fn().mockResolvedValue([{ id: 'eligible-model', name: 'Eligible model' }]),
+      response: responseMock,
+    } as unknown as ChatGptService;
+    const service = new ProviderService(new SessionStore(), testGuardedFetch(), adapter);
+    const signal = new AbortController().signal;
+    expect(() => service.model(undefined, 'chatgpt', 'eligible-model')).toThrow(
+      'Responses adapter',
+    );
+    await expect(service.listModels(undefined, 'chatgpt', signal)).resolves.toEqual([
+      { id: 'eligible-model', name: 'Eligible model' },
+    ]);
+    await expect(
+      service.chatGptResponse(undefined, 'eligible-model', 'instructions', 'input', signal),
+    ).resolves.toBe('Completed output');
+    expect(responseMock).toHaveBeenCalledWith('eligible-model', 'instructions', 'input', signal);
+    await expect(
+      new ProviderService(new SessionStore(), testGuardedFetch()).listModels(undefined, 'chatgpt'),
+    ).rejects.toMatchObject({
+      code: 'chatgpt_unavailable',
+    });
   });
 });

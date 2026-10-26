@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import type { GroundingAssessment } from '../../shared/types.js';
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -6,7 +7,17 @@ export const projects = sqliteTable('projects', {
   description: text('description').notNull().default(''),
   selectedProvider: text('selected_provider'),
   selectedModel: text('selected_model'),
+  selectedStructureId: text('selected_structure_id'),
   createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const workspaceStates = sqliteTable('workspace_states', {
+  projectId: text('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  stateJson: text('state_json').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
 
@@ -97,12 +108,29 @@ export const prdSections = sqliteTable(
     title: text('title').notNull(),
     body: text('body').notNull().default(''),
     position: integer('position').notNull(),
+    purpose: text('purpose').notNull().default(''),
+    required: integer('required', { mode: 'boolean' }).notNull().default(false),
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [
     index('sections_project_idx').on(table.projectId, table.position),
     uniqueIndex('sections_project_position_idx').on(table.projectId, table.position),
   ],
+);
+
+export const structureTemplates = sqliteTable(
+  'structure_templates',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    sectionsJson: text('sections_json').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('structure_templates_project_idx').on(table.projectId)],
 );
 
 export const revisions = sqliteTable(
@@ -136,6 +164,7 @@ export const aiRuns = sqliteTable('ai_runs', {
   targetSectionId: text('target_section_id'),
   selectionText: text('selection_text'),
   outputText: text('output_text'),
+  grounding: text('grounding_json', { mode: 'json' }).$type<GroundingAssessment>(),
   appliedRevision: integer('applied_revision'),
   status: text('status').notNull(),
   errorCode: text('error_code'),

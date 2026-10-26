@@ -11,8 +11,9 @@ import { createDatabase } from './db/client.js';
 import { Repository } from './db/repository.js';
 import { SourceService } from './documents/source-service.js';
 import { ExportService } from './export/export-service.js';
-import { ActionService } from './providers/action-service.js';
+import { ActionService, type ActionEvaluationOptions } from './providers/action-service.js';
 import { ProviderService } from './providers/provider-service.js';
+import { ChatGptService } from './providers/chatgpt-service.js';
 import { ProposalService } from './providers/proposal-service.js';
 import { SessionStore } from './providers/session-store.js';
 import { EmbeddingService } from './retrieval/embedding-service.js';
@@ -20,7 +21,12 @@ import { RetrievalService } from './retrieval/retrieval-service.js';
 import { registerApi } from './routes/api.js';
 
 export async function buildApp(
-  options: { databasePath?: string; embeddings?: EmbeddingService; clientRoot?: string } = {},
+  options: {
+    databasePath?: string;
+    embeddings?: EmbeddingService;
+    clientRoot?: string;
+    evaluation?: ActionEvaluationOptions;
+  } = {},
 ) {
   const app = Fastify({
     logger: {
@@ -69,7 +75,17 @@ export async function buildApp(
       return;
     }
     if (!isAllowedBrowserOrigin(request.headers.origin, request.headers.host)) {
-      done(new ApiError(403, 'invalid_origin', 'Browser requests must originate from loopback.'));
+      done(new ApiError(403, 'invalid_origin', 'Browser requests must use this local app origin.'));
+      return;
+    }
+    const fetchSite = request.headers['sec-fetch-site'];
+    if (
+      !request.headers.origin &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
+      fetchSite &&
+      fetchSite !== 'same-origin'
+    ) {
+      done(new ApiError(403, 'invalid_origin', 'Browser requests must use this local app origin.'));
       return;
     }
     done();
@@ -91,15 +107,23 @@ export async function buildApp(
   const embeddings = options.embeddings ?? new EmbeddingService();
   const retrieval = new RetrievalService(database, embeddings);
   const sessions = new SessionStore();
-  const providers = new ProviderService(sessions);
+  const chatgpt = new ChatGptService(
+    options.databasePath === ':memory:'
+      ? null
+      : options.databasePath
+        ? path.join(path.dirname(options.databasePath), 'chatgpt-auth.json')
+        : undefined,
+  );
+  const providers = new ProviderService(sessions, undefined, chatgpt);
   const services = {
     repository,
     embeddings,
     sources: new SourceService(database, embeddings),
     exports: new ExportService(repository, database),
     sessions,
+    chatgpt,
     providers,
-    actions: new ActionService(repository, retrieval, providers),
+    actions: new ActionService(repository, retrieval, providers, options.evaluation),
     proposals: new ProposalService(repository),
   };
   registerApi(app, services);
@@ -135,6 +159,7 @@ export async function buildApp(
   }
 
   app.addHook('onClose', async () => {
+    chatgpt.cancel();
     await services.sources.close();
     await embeddings.close();
     database.close();

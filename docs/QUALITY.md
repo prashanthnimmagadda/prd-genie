@@ -24,7 +24,14 @@ The dependency-integrated runtime is identified by commit [`092b4cf`](https://gi
 | Native macOS ARM64, Node 24.15.0         | Full 12-step gate; 234 unit/integration tests; 30 production-browser tests across Chromium, Firefox, and WebKit; production restart and export smoke test                                               |
 | Native macOS ARM64, Node 22.23.2         | Clean install in a separate checkout; all 11 Node-gate steps, including the same 234 tests and production build                                                                                         |
 | Linux ARM64 image, Apple Container 1.0.0 | Dockerfile build with Node 22.23.2; health; loopback Host rejection; UID 1000 and Node PID 1; persistent data after restart; graceful SIGTERM; removal of exact temporary resources and engine shutdown |
-| Current dependency advisory data         | Zero findings in both production and full npm audits; generated license inventory and CycloneDX SBOM                                                                                                    |
+| Dependency advisory data on 8 September  | Zero findings in both production and full npm audits at the recorded commit; generated license inventory and CycloneDX SBOM                                                                             |
+
+An interim audit on 22 October 2026 at `40e3906` found three moderate
+production findings and 23 findings in the full development tree. After the
+dependency fixes, an online audit at `87c1538` recorded zero findings in both
+scopes. The full offline release gate passed at `3b16e8c` on macOS. See the
+[focused production triage](DEPENDENCY_TRIAGE.md). These recorded results do
+not establish signed distribution or model quality.
 
 Apple Container consumes the repository's Dockerfile and runs its Linux image. That execution does not exercise Docker Engine or Compose orchestration, native Windows, or a Linux desktop installation. Those are separate execution targets, not interchangeable names for the measured environment. The [README](../README.md#containers) includes the Apple Container commands as well as the Compose recipe.
 
@@ -36,13 +43,13 @@ Automated regression tests use explicitly labelled synthetic fixtures so expecte
 
 A private source-backed product case was exercised on 8 September 2026 at `4554cae`, before the URI lockfile correction. It used the compiled app, an isolated database, actual hybrid indexing, and the installed 4B Ollama drafting model. Twenty workflow assertions passed across import, source readiness, proposal staging, explicit acceptance, duplicate-apply rejection, Markdown/DOCX/PDF/archive export, archive restoration with handoff provenance, and restart persistence. The original source files and generated provider responses remain outside this public repository.
 
-The 4B proposal preserved the original problem wording unchanged. Whole-document reviews from the 4B and 9B local models failed validation; diagnostic output included incorrect citation identifiers and statements contradicted by the document. Those responses were rejected and not applied. A separate source-grounded file handoff was prepared in the authenticated assistant task, imported as a staged proposal, explicitly accepted, and supplemented through an explicit editor save after source review. This did not test ChatGPT browser login or plugin installation and did not use ChatGPT credentials as an API key.
+The 4B proposal preserved the original problem wording unchanged. Whole-document reviews from the 4B and 9B local models failed validation; diagnostic output included incorrect citation identifiers and statements contradicted by the document. Those responses were rejected and not applied. A separate source-grounded file handoff was imported as a staged proposal, explicitly accepted, and supplemented through an explicit editor save after source review. This did not test ChatGPT browser login or plugin installation and did not use ChatGPT credentials as an API key.
 
 This case proves the recorded real-source workflow and rejection behavior, not reliable autonomous whole-document review by the tested local models. A valid handoff also remains subject to factual review before acceptance.
 
 ## Real-model evaluation
 
-`npm run eval:model` exercises the real Ollama-compatible provider path with synthetic sources and PRDs. It is an optional release gate that requires explicitly installed local models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
+`npm run eval:model` defaults to the real Ollama-compatible provider path with synthetic sources and PRDs. The release gate accepts that configuration or the explicitly approved Bonsai corpus configuration below, with every existing quality assertion retained. Both require the exact clean release commit and explicitly available local models. Missing runtime or model access blocks release evidence; it does not waive the gate or authorize starting services or installing models. A report is valid only when it records the exact drafting model, review model, both model digests, Git SHA, retrieval mode, scenario corpus, rubric results, citations, and generated samples.
 
 Prepare the bounded evaluation model before the first run:
 
@@ -72,6 +79,62 @@ The upstream models advertise much larger context windows that can require impra
 Coverage has a 90% per-module gate for retrieval, credential handling, provider normalization, source deletion, and proposal application. Proposal application includes both direct provider output in `proposal-service.ts` and review or ChatGPT patch acceptance in `patch-application.ts`.
 
 The generated report is written to `reports/model-evaluation.json`. No current real-model pass is claimed until that command succeeds for the exact release candidate.
+
+### Shared Bonsai evaluation preparation
+
+The Bonsai evaluation uses the same five rewrite cases and the same structured
+review containing adversarial evidence. The latter is one request with two sets
+of assertions: six model requests in total. All prompts, cases, acceptance and
+persistence assertions remain unchanged. The explicit corpus policy is 8,192
+completion tokens, including up to 4,096 reasoning tokens. It is a different
+generation configuration, not an equivalent mapping of application limits.
+
+The application still requests 1,800 tokens for section rewrites and 6,000 for
+a default 13-section review. Reviews of larger structures have a 9,000 ceiling.
+This corpus does not verify that ceiling, selection rewrites, section-only
+reviews, or direct Bonsai connection through the application's generic provider.
+It does not establish Qwen results. No provider or billing fallback is permitted.
+
+`PRD_GENIE_EVAL_PROVIDER=bonsai node --import tsx scripts/evaluate-prd.ts`
+performs a read-only readiness check and exits 75 with a pending report. It
+makes no provider request and does not overwrite the model-evaluation report.
+The revision02 task/result schemas in `evaluations/bonsai-revision02/` and their
+codec are pinned to the independently reviewed native contract. The retained
+`evaluations/prd-corpus-v3.json` records the existing inputs and system prompts;
+preflight refuses drift, and the evidence verifier binds receipts to these inputs
+and their reported, normalized outputs.
+
+Live execution additionally requires separate installation/execution authority,
+a clean checkout, `PRD_GENIE_BONSAI_LIVE=1`, and
+`PRD_GENIE_BONSAI_READINESS=/absolute/path/to/reviewed-readiness.json`. The readiness
+file contains schema `prd-bonsai-readiness-v1`, the exact `contractSha256`, the
+five native `sourceIdentity` pins (commit, tree, module, consumer record, public
+wrapper), and the actual model artifact `modelDigest`. Staged source is not
+installation evidence. Never invent these identities or supply credentials.
+The fixed existing native launcher and shared participating slot perform fresh
+admission; this repository does not install them or change their safeguards.
+
+The evaluator retains the application's existing local prompt profile while
+injecting an evaluation-only language model. Reports label the actual provider
+`custom:bonsai-v2`, preserve the original requested allowance, and record the
+complete dispatched generation settings, exact task bytes, receipt, native
+identity and case/run association. Both application repair attempts and SDK
+retries are disabled for this evaluation. Normal product behaviour is unchanged.
+The release verifier requires every existing assertion plus six validated
+terminal receipts at the exact clean repository commit. A readiness report or
+receipt alone cannot pass that gate.
+
+Dispatch preparation and results are flushed to a unique directory under
+the system temporary directory at `prd-genie-bonsai-evidence/` before proceeding. The command prints the exact journal path; retain it with
+the final evidence before clearing temporary storage. A stopped batch preserves its journal
+and failure report without replacing the last completed model report. Native
+responses are buffered, not streamed. INCOMPLETE, NOT_SENT, UNKNOWN, malformed
+receipts and missing terminal evidence stop the batch without automatic retry.
+UNKNOWN may arrive as JSON and EOF while its descriptor holder remains alive:
+process exit is not required, the holder must not be killed for cleanup, and
+local settlement does not prove provider cancellation. The existing shared slot
+serializes participating workers; it is not universal exclusion against every
+native model caller. No new concurrency framework is introduced.
 
 ## What this does not prove
 

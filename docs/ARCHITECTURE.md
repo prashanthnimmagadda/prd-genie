@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-PRD Genie is a single-user local browser application served from a local Node.js process. The default host is `127.0.0.1`. It is not currently a signed native desktop package. Remote deployment, account authentication, collaboration, and cloud sync are outside the v1 boundary.
+PRD Genie is a single-user macOS workbench. Its AppKit window, toolbar, menus and save panels host a React/Tiptap workspace in WKWebView, served by a bundled local Node.js process. The browser development interface uses the same workspace. The server binds to `127.0.0.1`. The local package is not yet signed or notarised. PRD Genie has no account gate; optional provider authentication is separate. Remote deployment, collaboration and cloud sync are outside this release.
 
 ## Package layout
 
@@ -26,6 +26,16 @@ Portable archive format version 3 contains project metadata, the current PRD, re
 
 Before applying pending SQLite migrations to an existing database, the server creates a mode-0600 snapshot beside the database with a `.pre-<migration>.backup` suffix. Keep that snapshot until the upgraded application and archives are verified. Rolling back application code after RC.3 data has been written requires restoring both the matching database backup and source directory backup; an older binary must not be treated as a schema downgrade tool.
 
+## Workspace and recovery
+
+Conversation is the starting workspace. Document editing opens in the same window and retains the conversation, selected sources and project context. Sources, structure, exports and AI settings open as focused sheets. AI proposals require explicit acceptance before changing the PRD.
+
+A separate, revision-checked workspace record retains unsent instructions, conversation turns, local document edits and proposal/handoff drafts. Its revision is independent of the saved PRD revision. Writes use compare-and-swap; a conflict preserves the local work and requires recovery instead of overwriting a newer record. Recovery from an older document revision requires an explicit choice. Workspace recovery records are local working state, not part of portable project archives.
+
+Project navigation saves document edits and flushes recovery state before leaving. Native close and quit warn when unsaved work, pending recovery writes or generation are active. An interrupted generation is marked incomplete. Retrying is explicit and does not silently switch providers. Export saves the current edits before producing PDF, Word, Markdown or a project archive.
+
+The native shell accepts a fixed command set and bounded window state only from the local main frame. It uses system toolbar controls and SF Symbols; document content remains opaque. Reduced motion, reduced transparency and increased contrast preferences are passed into the workspace. The package targets macOS 13 or newer; compiling against a newer SDK does not establish runtime compatibility on every supported version.
+
 ## Retrieval
 
 1. Parse source locations with page, heading, and character-offset metadata.
@@ -41,11 +51,11 @@ FTS5 remains available when semantic indexing is unavailable. Each source expose
 
 ## Provider boundary
 
-Provider credentials live only in a server memory map keyed by an opaque browser-session cookie. Environment variables are fallback inputs. The selected provider and model are safe project preferences and may be persisted.
+API provider credentials live only in a server memory map keyed by an opaque browser-session cookie. Environment variables are fallback inputs. Optional ChatGPT plan credentials are stored separately in an owner-only local file after explicit OpenAI consent. The selected provider and model are safe project preferences and may be persisted.
 
 Every AI run records provider, model, action, scope, project, source revision, and immutable section or selection target. Citations preserve source name, locator, and excerpt snapshots even if the local source is later deleted. Finding creation and acceptance revalidate citation ownership and availability inside the same SQLite transaction as the review state change. Direct AI application revalidates any cited evidence inside the same transaction that commits the new PRD revision and application marker. Citation-free proposals remain applicable. ChatGPT handoff application commits the new PRD revision and application marker in one SQLite transaction. Generated text is a proposal until a user explicitly accepts it.
 
-The ChatGPT path is a separate manual handoff, not provider API access. A handoff contains only user-selected sections and evidence. Imported responses are validated against the request digest, revision, section preimage hashes, evidence allowlist, and replay state, then staged for inspection. Deleting selected source evidence marks exported and staged handoffs stale while retaining their audit snapshots. Handoff findings remain in their separate handoff record rather than entering the direct-provider review queue.
+The manual ChatGPT handoff remains separate from optional ChatGPT plan provider access. A handoff contains only user-selected sections and evidence. Imported responses are validated against the request digest, revision, section preimage hashes, evidence allowlist, and replay state, then staged for inspection. Deleting selected source evidence marks exported and staged handoffs stale while retaining their audit snapshots. Handoff findings remain in their separate handoff record rather than entering the direct-provider review queue.
 
 ## Security controls
 

@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 64
+            },
+            "reasoning_budget_tokens": {
+              "const": 16
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 256
+            },
+            "reasoning_budget_tokens": {
+              "const": 32
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 512
+            },
+            "reasoning_budget_tokens": {
+              "const": 128
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 1024
+            },
+            "reasoning_budget_tokens": {
+              "const": 512
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 1536
+            },
+            "reasoning_budget_tokens": {
+              "const": 768
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 2048
+            },
+            "reasoning_budget_tokens": {
+              "const": 1024
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 4095
+            },
+            "reasoning_budget_tokens": {
+              "const": 3072
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 4096
+            },
+            "reasoning_budget_tokens": {
+              "const": 3072
+            }
+          }
+        },
+        {
+          "properties": {
+            "max_tokens": {
+              "const": 8192
+            },
+            "reasoning_budget_tokens": {
+              "const": 4096
+            }
+          }
+        }
+      ],
+      "properties": {
+        "chat_template_kwargs": {
+          "additionalProperties": false,
+          "properties": {
+            "enable_thinking": {
+              "const": true
+            },
+            "preserve_thinking": {
+              "const": true
+            }
+          },
+          "required": ["enable_thinking", "preserve_thinking"],
+          "type": "object"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "role": {
+                "enum": ["system", "user", "assistant"]
+              }
+            },
+            "required": ["role", "content"],
+            "type": "object"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "x-total-content-utf8-bytes": 196608
+        },
+        "min_p": {
+          "const": 0.05
+        },
+        "model": {
+          "const": "Ternary-Bonsai-2-27B-PQ2_0"
+        },
+        "presence_penalty": {
+          "const": 0.0
+        },
+        "reasoning_budget_tokens": {
+          "type": "integer"
+        },
+        "reasoning_effort": {
+          "const": "medium"
+        },
+        "repeat_penalty": {
+          "const": 1.0
+        },
+        "seed": {
+          "const": 42
+        },
+        "stream": {
+          "const": false
+        },
+        "temperature": {
+          "const": 1.0
+        },
+        "top_k": {
+          "const": 20
+        },
+        "top_p": {
+          "const": 0.95
+        }
+      },
+      "required": [
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "repeat_penalty",
+        "model",
+        "stream",
+        "seed",
+        "reasoning_effort",
+        "max_tokens",
+        "reasoning_budget_tokens",
+        "chat_template_kwargs",
+        "messages"
+      ],
+      "type": "object",
+      "x-last-message-role": "user"
+    },
+    "expected_body_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bonsai-evaluation-task-v1"
+    },
+    "task_id": {
+      "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+      "type": "string"
+    }
+  },
+  "required": ["schema", "task_id", "request_id", "expected_body_sha256", "body"],
+  "type": "object",
+  "x-digest-convention": "SHA256(json.dumps(sort_keys=True,separators=(comma,colon),ensure_ascii=True,allow_nan=False).encode(utf-8))",
+  "x-max-depth-edges": 8,
+  "x-max-raw-and-canonical-utf8-bytes": 262144,
+  "x-reject-duplicate-keys": true
+}

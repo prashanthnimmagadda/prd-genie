@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "NodeNext",
+    "allowJs": true,
     "moduleResolution": "NodeNext",
     "outDir": "dist/server",
     "rootDir": "src",
@@ -9,5 +10,6 @@
     "declaration": false,
     "types": ["node"]
   },
+  "files": ["src/shared/grounding-policy.mjs"],
   "include": ["src/server", "src/shared"]
 }

@@ -3,12 +3,15 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import JSZip from 'jszip';
+import { Document, Packer, Paragraph } from 'docx';
 import { buildApp } from '../../src/server/app.js';
 import { config } from '../../src/server/config.js';
 import type { EmbeddingService } from '../../src/server/retrieval/embedding-service.js';
 import type { AppDatabase } from '../../src/server/db/client.js';
 import { enqueueFileDeletion } from '../../src/server/db/file-deletion.js';
 import type { Repository } from '../../src/server/db/repository.js';
+import type { WorkspaceState } from '../../src/shared/types.js';
 
 describe('API', () => {
   let app: FastifyInstance;
@@ -62,6 +65,89 @@ describe('API', () => {
     expect(prd.json<{ sections: unknown[] }>().sections).toHaveLength(13);
   });
 
+  it('persists bounded workspace recovery and reports conflicts without changing the document', async () => {
+    const project = repository.createProject('Workspace recovery', '');
+    const url = `/api/projects/${project.id}/workspace`;
+    const empty = await app.inject({ method: 'GET', url });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual({ revision: 0, prompt: '', turns: [], draft: null });
+    const findingId = crypto.randomUUID();
+    const handoffId = crypto.randomUUID();
+    const sectionId = repository.getPrd(project.id).sections[0]!.id;
+    const payload: WorkspaceState = {
+      ...empty.json<WorkspaceState>(),
+      prompt: 'Review my requirements',
+      proposal: { runId: null, text: '  My edited proposal\n' },
+      findingDrafts: { [findingId]: 'My revised acceptance criterion' },
+      handoffInstruction: '  Review the failure paths\n',
+      handoffDrafts: {
+        [handoffId]: {
+          [sectionId]: null,
+          [repository.getPrd(project.id).sections[1]!.id]: 'My edited handoff response',
+        },
+      },
+    };
+    const saved = await app.inject({ method: 'PUT', url, payload });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ ...payload, revision: 1 });
+    expect((await app.inject({ method: 'GET', url })).json()).toEqual(saved.json());
+    const conflict = await app.inject({ method: 'PUT', url, payload });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json<{ error: { code: string } }>().error.code).toBe('workspace_conflict');
+    for (const invalid of [
+      { ...saved.json<WorkspaceState>(), credential: 'not-a-credential' },
+      { ...saved.json<WorkspaceState>(), prompt: 'x'.repeat(20_001) },
+      { ...saved.json<WorkspaceState>(), proposal: { runId: null, text: 'x'.repeat(250_001) } },
+      { ...saved.json<WorkspaceState>(), handoffDrafts: { [handoffId]: { [sectionId]: 42 } } },
+      {
+        ...saved.json<WorkspaceState>(),
+        turns: [{ id: 'one', request: '', response: '', runId: null, status: 'running' }],
+      },
+    ]) {
+      expect((await app.inject({ method: 'PUT', url, payload: invalid })).statusCode).toBe(400);
+    }
+    expect(repository.getWorkspace(project.id)).toEqual(saved.json());
+    expect(repository.getPrd(project.id).revision).toBe(0);
+  });
+
+  it('creates and applies a reusable structure through the API', async () => {
+    const project = repository.createProject('Custom brief', '');
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/structures`,
+      payload: {
+        name: 'Decision memo',
+        sections: [
+          { title: 'Recommendation', purpose: 'State the decision and rationale.', required: true },
+          { title: 'Risks', purpose: 'Describe material risks.', required: false },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const structure = created.json<{ id: string }>();
+    const applied = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}/selected-structure`,
+      payload: { structureId: structure.id, revision: 0 },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json()).toMatchObject({
+      project: { selectedStructureId: structure.id },
+      prd: {
+        revision: 1,
+        sections: [
+          { title: 'Recommendation', required: true },
+          { title: 'Risks', required: false },
+        ],
+      },
+    });
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${project.id}/structures`,
+    });
+    expect(listed.json<{ structures: unknown[] }>().structures).toHaveLength(2);
+  });
+
   it('authorizes dynamic modal styles with fresh nonces without arbitrary inline CSS', async () => {
     const response = await app.inject({ method: 'GET', url: '/' });
     const policy = response.headers['content-security-policy'];
@@ -102,6 +188,20 @@ describe('API', () => {
     });
     expect(crossOrigin.statusCode).toBe(403);
     expect(crossOrigin.json()).toMatchObject({ error: { code: 'invalid_origin' } });
+    const otherLocalPort = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { host: '127.0.0.1:3210', origin: 'http://127.0.0.1:9999' },
+      payload: { name: 'Blocked', description: '' },
+    });
+    expect(otherLocalPort.statusCode).toBe(403);
+    const browserWithoutOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { host: '127.0.0.1:3210', 'sec-fetch-site': 'same-site' },
+      payload: { name: 'Blocked', description: '' },
+    });
+    expect(browserWithoutOrigin.statusCode).toBe(403);
     expect(repository.listProjects()).toEqual([]);
   });
 
@@ -390,6 +490,24 @@ describe('API', () => {
       url: `/api/projects/${project.project.id}/sources/${sourceId}`,
     });
     expect(deleted.statusCode).toBe(204);
+  });
+
+  it('surfaces unread embedded images when importing a DOCX PRD', async () => {
+    const document = new Document({
+      sections: [{ children: [new Paragraph('A requirement with an embedded diagram.')] }],
+    });
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(document));
+    zip.file('word/media/diagram.png', Buffer.from('synthetic image'));
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/projects/import',
+      headers: { 'content-type': 'multipart/form-data; boundary=binary-boundary' },
+      payload: multipartBuffer('brief.docx', await zip.generateAsync({ type: 'nodebuffer' })),
+    });
+    expect(imported.statusCode, imported.body).toBe(201);
+    expect(imported.json<{ warnings: string[] }>().warnings.join(' ')).toContain(
+      'Embedded images in the DOCX were not read.',
+    );
   });
 
   it('preserves repeated Markdown headings as separate ordered sections', async () => {

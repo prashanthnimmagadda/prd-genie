@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { UIMessage } from 'ai';
 
 export const providerKinds = [
+  'chatgpt',
   'openai',
   'anthropic',
   'google',
@@ -68,6 +69,12 @@ export interface SectionPatch {
   afterMarkdown: string;
 }
 
+export interface GroundingAssessment {
+  policyVersion: string;
+  status: 'checks_passed' | 'review_required';
+  reasons: string[];
+}
+
 export interface AiRunProposal {
   id: string;
   projectId: string;
@@ -79,6 +86,7 @@ export interface AiRunProposal {
   targetSectionId: string | null;
   selectionText: string | null;
   outputText: string | null;
+  grounding?: GroundingAssessment | null;
   appliedRevision: number | null;
   status: 'running' | 'completed' | 'failed';
   errorCode: string | null;
@@ -186,6 +194,7 @@ export interface ProjectSummary {
   updatedAt: string;
   selectedProvider: ProviderKind | null;
   selectedModel: string | null;
+  selectedStructureId?: string | null;
 }
 
 export interface PrdSection {
@@ -194,6 +203,23 @@ export interface PrdSection {
   title: string;
   body: string;
   position: number;
+  purpose?: string;
+  required?: boolean;
+  updatedAt: string;
+}
+
+export interface StructureSection {
+  title: string;
+  purpose: string;
+  required: boolean;
+}
+
+export interface StructureTemplate {
+  id: string;
+  projectId: string;
+  name: string;
+  sections: StructureSection[];
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -202,6 +228,93 @@ export interface PrdDocument {
   revision: number;
   sections: PrdSection[];
 }
+
+export interface WorkspaceTurn {
+  id: string;
+  request: string;
+  response: string;
+  runId: string | null;
+  status: 'complete' | 'interrupted';
+}
+
+/** Local recovery data; saving this state never applies edits to the PRD. */
+export interface WorkspaceState {
+  revision: number;
+  prompt: string;
+  turns: WorkspaceTurn[];
+  draft: { baseRevision: number; sections: PrdSection[] } | null;
+  proposal?: { runId: string | null; text: string };
+  findingDrafts?: Record<string, string>;
+  handoffInstruction?: string;
+  handoffDrafts?: Record<string, Record<string, string | null>>;
+}
+
+export const WORKSPACE_MAX_BYTES = 4 * 1024 * 1024;
+
+export const workspaceUpdateSchema = z
+  .object({
+    revision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER - 1),
+    prompt: z.string().max(20_000),
+    proposal: z
+      .object({ runId: z.string().uuid().nullable(), text: z.string().max(250_000) })
+      .strict()
+      .optional(),
+    findingDrafts: z
+      .record(z.string().uuid(), z.string().max(100_000))
+      .refine((drafts) => Object.keys(drafts).length <= 1000, 'Too many review drafts.')
+      .optional(),
+    handoffInstruction: z.string().max(20_000).optional(),
+    handoffDrafts: z
+      .record(
+        z.string().uuid(),
+        z
+          .record(z.string().uuid(), z.string().max(100_000).nullable())
+          .refine((drafts) => Object.keys(drafts).length <= 100, 'Too many section drafts.'),
+      )
+      .refine((drafts) => Object.keys(drafts).length <= 1000, 'Too many handoff drafts.')
+      .optional(),
+    turns: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            request: z.string().max(20_000),
+            response: z.string().max(250_000),
+            runId: z.string().uuid().nullable(),
+            status: z.enum(['complete', 'interrupted']),
+          })
+          .strict(),
+      )
+      .max(1000),
+    draft: z
+      .object({
+        baseRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        sections: z
+          .array(
+            z
+              .object({
+                id: z.string().uuid(),
+                projectId: z.string().uuid(),
+                title: z.string().min(1).max(160),
+                body: z.string().max(100_000),
+                position: z.number().int().nonnegative(),
+                purpose: z.string().max(1000).optional(),
+                required: z.boolean().optional(),
+                updatedAt: z.string().max(64),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
 
 export interface SourceSummary {
   id: string;
@@ -220,6 +333,12 @@ export interface ProviderState {
   credentialSource: CredentialSource;
   configured: boolean;
   baseUrl: string | null;
+  account?: string | null;
+  connected?: boolean;
+  activeClientId?: string | null;
+  pending?: boolean;
+  error?: string | null;
+  accounts?: Array<{ clientId: string; email: string | null; connected: boolean }>;
 }
 
 export interface HealthResponse {
@@ -244,7 +363,7 @@ export type WorkbenchMessage = UIMessage<
     citation: Citation;
     finding: ReviewFinding;
     patch: SectionPatch;
-    completion: { runId: string; revision: number };
+    completion: { runId: string; revision: number; grounding?: GroundingAssessment };
   }
 >;
 
@@ -271,10 +390,32 @@ export const sectionUpdateSchema = z.object({
         title: z.string().trim().min(1).max(160),
         body: z.string().max(100_000),
         position: z.number().int().nonnegative(),
+        purpose: z.string().trim().max(1000).optional(),
+        required: z.boolean().optional(),
       }),
     )
     .min(1),
   reason: z.string().trim().min(1).max(200).default('Manual edit'),
+});
+
+export const structureSectionSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  purpose: z.string().trim().min(1).max(1000),
+  required: z.boolean(),
+});
+
+export const structureCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  sections: z.array(structureSectionSchema).min(1).max(50),
+});
+
+export const structureUpdateSchema = structureCreateSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0);
+
+export const structureSelectSchema = z.object({
+  structureId: z.string().uuid(),
+  revision: z.number().int().nonnegative(),
 });
 
 export const sessionProviderSchema = z.object({
@@ -315,6 +456,7 @@ export const aiActionSchema = z
 export const applyAiRunSchema = z.object({
   revision: z.number().int().nonnegative(),
   proposedMarkdown: z.string().max(500_000).optional(),
+  groundingReviewed: z.boolean().optional(),
 });
 
 export const acceptFindingSchema = z.object({
@@ -416,7 +558,7 @@ const reviewGenerationFindingSchema = z
 export const reviewGenerationSchema = z
   .object({
     summary: z.string(),
-    findings: z.array(reviewGenerationFindingSchema).max(3),
+    findings: z.array(reviewGenerationFindingSchema).max(20),
   })
   .strict();
 
@@ -435,3 +577,68 @@ export const DEFAULT_SECTIONS = [
   'Open questions',
   'Rollout',
 ] as const;
+
+export const DEFAULT_STRUCTURE_SECTIONS: readonly StructureSection[] = [
+  {
+    title: 'Problem',
+    purpose: 'Describe the specific user or business problem and why it matters now.',
+    required: true,
+  },
+  {
+    title: 'Context',
+    purpose:
+      'Record confirmed background, source evidence, constraints and relevant prior decisions.',
+    required: true,
+  },
+  {
+    title: 'Target users',
+    purpose: 'Identify intended users and their distinct needs without inventing research.',
+    required: true,
+  },
+  { title: 'Goals', purpose: 'State the outcomes this work aims to achieve.', required: true },
+  {
+    title: 'Non-goals',
+    purpose: 'Make relevant exclusions and boundaries explicit.',
+    required: false,
+  },
+  {
+    title: 'Scope',
+    purpose: 'Define what is included in this version and what remains outside it.',
+    required: true,
+  },
+  {
+    title: 'User journeys',
+    purpose: 'Describe primary flows and relevant edge or failure paths.',
+    required: true,
+  },
+  {
+    title: 'Requirements and acceptance criteria',
+    purpose: 'Specify actionable behavior and testable conditions for acceptance.',
+    required: true,
+  },
+  {
+    title: 'Success measures',
+    purpose: 'Name measurable signals and measurement approach without fabricating targets.',
+    required: false,
+  },
+  {
+    title: 'Dependencies',
+    purpose: 'Record external systems, decisions or teams needed to deliver the scope.',
+    required: false,
+  },
+  {
+    title: 'Risks',
+    purpose: 'Describe material risks, their impact and proportionate mitigations.',
+    required: false,
+  },
+  {
+    title: 'Open questions',
+    purpose: 'List unresolved decisions and label assumptions separately from confirmed facts.',
+    required: false,
+  },
+  {
+    title: 'Rollout',
+    purpose: 'Explain release, migration or communication steps when relevant.',
+    required: false,
+  },
+];

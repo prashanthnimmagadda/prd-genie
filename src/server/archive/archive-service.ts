@@ -28,6 +28,25 @@ const sectionSchema = z.object({
   title: z.string().min(1).max(160),
   body: z.string().max(100_000),
   position: z.number().int().nonnegative(),
+  purpose: z.string().max(1000).optional(),
+  required: z.boolean().optional(),
+  updatedAt: timestamp,
+});
+const structureSchema = z.object({
+  id,
+  projectId: id,
+  name: z.string().min(1).max(120),
+  sections: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(160),
+        purpose: z.string().min(1).max(1000),
+        required: z.boolean(),
+      }),
+    )
+    .min(1)
+    .max(50),
+  createdAt: timestamp,
   updatedAt: timestamp,
 });
 const sourceSchema = z.object({
@@ -234,6 +253,7 @@ const manifestV2Schema = z.object({
     description: z.string().max(1000),
     selectedProvider: z.enum(providerKinds).nullable(),
     selectedModel: z.string().max(300).nullable(),
+    selectedStructureId: id.nullable().optional(),
     createdAt: timestamp,
     updatedAt: timestamp,
   }),
@@ -266,6 +286,7 @@ const manifestV3Schema = manifestV2Schema.omit({ formatVersion: true }).extend({
   formatVersion: z.literal(3),
   chunks: z.array(portableChunkSchema).max(200_000),
   appliedChatGptHandoffs: z.array(appliedChatGptHandoffSchema).max(10_000),
+  structures: z.array(structureSchema).max(50).default([]),
 });
 const manifestSchema = z.discriminatedUnion('formatVersion', [manifestV2Schema, manifestV3Schema]);
 const internalManifestSchema = manifestV3Schema.extend({
@@ -282,6 +303,7 @@ export class ArchiveService {
   ) {}
 
   async create(projectId: string): Promise<Buffer> {
+    const structures = this.repository.listStructures(projectId);
     const project = this.repository.getProject(projectId);
     const prd = this.repository.getPrd(projectId);
     const sources = this.database.sqlite
@@ -370,6 +392,7 @@ export class ArchiveService {
         'Embeddings are omitted and must be regenerated locally.',
       ],
       project,
+      structures,
       prd,
       revisions,
       sources: archivedSources,
@@ -509,7 +532,13 @@ export class ArchiveService {
     }
     const normalized =
       parsed.data.formatVersion === 2
-        ? { ...parsed.data, formatVersion: 3 as const, appliedChatGptHandoffs: [] }
+        ? {
+            ...parsed.data,
+            formatVersion: 3 as const,
+            project: { ...parsed.data.project, selectedStructureId: null },
+            appliedChatGptHandoffs: [],
+            structures: [],
+          }
         : {
             ...parsed.data,
             chunks: restorePortableChunkContent(parsed.data.locations, parsed.data.chunks),
@@ -576,6 +605,7 @@ export class ArchiveService {
     const citationIds = idMap(manifest.citations.map((row) => row.id));
     const findingIds = idMap(manifest.findings.map((row) => row.id));
     const handoffIds = idMap(manifest.appliedChatGptHandoffs.map((row) => row.id));
+    const structureIds = idMap(manifest.structures.map((row) => row.id));
     const timestampNow = new Date().toISOString();
     const createdPaths: string[] = [];
     const sourcePaths = new Map<string, string>();
@@ -593,8 +623,8 @@ export class ArchiveService {
         this.database.sqlite
           .prepare(
             `INSERT INTO projects
-             (id, name, description, selected_provider, selected_model, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             (id, name, description, selected_provider, selected_model, selected_structure_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             projectId,
@@ -602,9 +632,27 @@ export class ArchiveService {
             manifest.project.description,
             manifest.project.selectedProvider,
             manifest.project.selectedModel,
+            manifest.project.selectedStructureId
+              ? structureIds.get(manifest.project.selectedStructureId)
+              : null,
             timestampNow,
             timestampNow,
           );
+        const insertStructure = this.database.sqlite.prepare(
+          `INSERT INTO structure_templates
+           (id, project_id, name, sections_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const structure of manifest.structures) {
+          insertStructure.run(
+            structureIds.get(structure.id),
+            projectId,
+            structure.name,
+            JSON.stringify(structure.sections),
+            structure.createdAt,
+            structure.updatedAt,
+          );
+        }
         const insertSource = this.database.sqlite.prepare(
           `INSERT INTO sources
            (id, project_id, name, media_type, size, hash, binary_path, status, error, created_at)
@@ -669,8 +717,8 @@ export class ArchiveService {
           .prepare('INSERT INTO prd_documents (project_id, revision, updated_at) VALUES (?, ?, ?)')
           .run(projectId, manifest.prd.revision, timestampNow);
         const insertSection = this.database.sqlite.prepare(
-          `INSERT INTO prd_sections (id, project_id, title, body, position, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO prd_sections (id, project_id, title, body, position, purpose, required, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const section of manifest.prd.sections) {
           insertSection.run(
@@ -679,6 +727,8 @@ export class ArchiveService {
             section.title,
             section.body,
             section.position,
+            section.purpose ?? '',
+            section.required ? 1 : 0,
             section.updatedAt,
           );
         }
@@ -831,6 +881,17 @@ export class ArchiveService {
 }
 
 function validateManifestReferences(manifest: ArchiveManifest): void {
+  unique(
+    manifest.structures.map((row) => row.id),
+    'structure',
+  );
+  if (
+    manifest.structures.some((row) => row.projectId !== manifest.project.id) ||
+    (manifest.project.selectedStructureId &&
+      !manifest.structures.some((row) => row.id === manifest.project.selectedStructureId))
+  ) {
+    invalidReferences();
+  }
   unique(
     manifest.prd.sections.map((row) => row.id),
     'section',

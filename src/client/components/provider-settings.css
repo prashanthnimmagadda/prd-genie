@@ -1,0 +1,282 @@
+.provider-dialog.provider-settings-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(560px, calc(100vw - 40px));
+  max-width: min(560px, calc(100vw - 40px));
+  max-height: min(760px, calc(100dvh - 40px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  background: var(--background);
+}
+
+.provider-settings-sheet [data-slot='dialog-header'] {
+  padding: 24px 28px 18px;
+  gap: 8px;
+  text-align: left;
+}
+
+.provider-settings-sheet [data-slot='dialog-title'] {
+  font-size: 18px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.provider-settings-sheet [data-slot='dialog-description'] {
+  padding-right: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.provider-settings-sheet .settings-body {
+  min-height: 0;
+  padding: 0 28px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.provider-settings-sheet .settings-current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0 0 20px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.provider-settings-sheet .settings-current strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.provider-settings-sheet .settings-current-model {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+
+.provider-settings-sheet .settings-group {
+  margin: 0 0 22px;
+}
+
+.provider-settings-sheet .settings-group h2,
+.provider-settings-sheet .settings-connection h3 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.provider-settings-sheet .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.provider-settings-sheet .field input,
+.provider-settings-sheet .field select,
+.provider-settings-sheet .field textarea {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.provider-settings-sheet .field input {
+  height: 32px;
+}
+
+.provider-settings-sheet .key-field input {
+  padding-left: 31px;
+}
+
+.provider-settings-sheet .field textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.provider-settings-sheet .settings-readiness,
+.provider-settings-sheet .settings-help,
+.provider-settings-sheet .provider-host,
+.provider-settings-sheet .settings-notice {
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-settings-sheet .settings-notice {
+  color: var(--foreground);
+}
+
+.provider-settings-sheet .provider-host code {
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.provider-settings-sheet .settings-connection {
+  margin-top: 16px;
+}
+
+.provider-settings-sheet .settings-connection p,
+.provider-settings-sheet .settings-privacy p {
+  margin: 8px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-settings-sheet .settings-connection .settings-account {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.provider-settings-sheet .settings-connection a {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--primary);
+  font-size: 12px;
+  text-underline-offset: 3px;
+}
+
+.provider-settings-sheet .settings-connection a:hover {
+  text-decoration: underline;
+}
+
+.provider-settings-sheet .provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.provider-settings-sheet .settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-settings-sheet [data-slot='button'] {
+  min-height: 28px;
+  height: auto;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.provider-settings-sheet .model-row {
+  gap: 0;
+  margin-top: 10px;
+}
+
+.provider-settings-sheet .model-trigger {
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.provider-settings-sheet .settings-advanced,
+.provider-settings-sheet .settings-privacy {
+  margin-top: 14px;
+  font-size: 12px;
+}
+
+.provider-settings-sheet summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.provider-settings-sheet .settings-error,
+.provider-settings-sheet .settings-connection .form-error {
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-settings-sheet .settings-error p {
+  margin: 8px 0;
+}
+
+.provider-settings-sheet [data-slot='dialog-footer'] {
+  flex-direction: row;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+
+.provider-model-picker {
+  width: min(520px, calc(100vw - 40px));
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.provider-model-picker [data-slot='command-item'] {
+  min-height: 36px;
+  font-size: 13px;
+}
+
+.provider-model-picker code {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+@media (prefers-contrast: more) {
+  .provider-settings-sheet .settings-help,
+  .provider-settings-sheet .settings-readiness,
+  .provider-settings-sheet .settings-connection p,
+  .provider-settings-sheet .settings-privacy p {
+    color: var(--foreground);
+  }
+}
+
+.provider-settings-sheet .key-field {
+  position: relative;
+}
+.provider-settings-sheet .key-field > svg {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  width: 15px;
+  height: 15px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.provider-settings-sheet .model-row {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.provider-settings-sheet .model-trigger {
+  width: 100%;
+  justify-content: space-between;
+}
+.provider-settings-sheet .model-row .field {
+  margin-top: 0;
+}

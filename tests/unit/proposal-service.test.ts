@@ -20,6 +20,42 @@ describe('ProposalService', () => {
 
   afterEach(() => database.close());
 
+  it('requires explicit grounding review while preserving acknowledgement, history, and undo', () => {
+    const project = repository.createProject('Grounding review', '');
+    const section = repository.getPrd(project.id).sections[0]!;
+    const runId = repository.createAiRun({
+      projectId: project.id,
+      action: 'rewrite',
+      scope: 'section',
+      provider: 'ollama',
+      model: 'synthetic',
+      sourceRevision: 0,
+      targetSectionId: section.id,
+    });
+    const grounding = {
+      policyVersion: 'grounding-fixture',
+      status: 'review_required' as const,
+      reasons: ['Review the wording against the supplied evidence.'],
+    };
+    repository.completeAiRun(runId, undefined, 'A proposed synthesis.', grounding);
+    expect(() => proposals.apply(project.id, runId, 0)).toThrow('acknowledge the grounding review');
+    expect(() => proposals.apply(project.id, runId, 0, undefined, false)).toThrow(
+      'acknowledge the grounding review',
+    );
+    expect(repository.getPrd(project.id).revision).toBe(0);
+    expect(() => proposals.apply(project.id, runId, 1, undefined, true)).toThrow(
+      'older PRD revision',
+    );
+    const applied = proposals.apply(project.id, runId, 0, undefined, true);
+    expect(applied.sections[0]?.body).toBe('A proposed synthesis.');
+    expect(
+      repository.listRevisions(project.id).find((revision) => revision.revision === 1)?.reason,
+    ).toContain('user acknowledged grounding review');
+    expect(repository.getAiRun(project.id, runId).grounding).toEqual(grounding);
+    expect(() => proposals.apply(project.id, runId, 1, undefined, true)).toThrow('already applied');
+    expect(repository.restoreRevision(project.id, 0, 1).sections[0]?.body).toBe('');
+  });
+
   it('applies a section proposal once and restores the source revision', () => {
     const project = repository.createProject('Recovery', '');
     const prd = repository.getPrd(project.id);
@@ -143,6 +179,32 @@ describe('ProposalService', () => {
     expect(() => parseDocumentProposal(`${output}\n\n${output}`, sections)).toThrow(
       'invalid sections',
     );
+  });
+
+  it('rejects reordered headings, unrelated prefaces, and empty required sections', () => {
+    const project = repository.createProject('Structured', '');
+    const [first, second] = repository.getPrd(project.id).sections;
+    const sections = [
+      { ...first!, required: true },
+      { ...second!, required: false },
+    ];
+    const valid = sections
+      .map(
+        (section) =>
+          `<!-- section:${section.id} -->\n## ${section.title}\nContent for ${section.title}`,
+      )
+      .join('\n\n');
+    expect(() => parseDocumentProposal(valid, sections)).not.toThrow();
+    expect(() => parseDocumentProposal(`Preface\n${valid}`, sections)).toThrow('invalid sections');
+    expect(() =>
+      parseDocumentProposal(valid.replace(`## ${first!.title}`, '## Other'), sections),
+    ).toThrow('selected section headings and order');
+    expect(() =>
+      parseDocumentProposal(valid.split('\n\n').reverse().join('\n\n'), sections),
+    ).toThrow('selected section headings and order');
+    expect(() =>
+      parseDocumentProposal(valid.replace(`Content for ${first!.title}`, 'TBD'), sections),
+    ).toThrow('required');
   });
 
   it('rejects incomplete, non-applicable, stale, empty, and missing-target proposals', () => {
