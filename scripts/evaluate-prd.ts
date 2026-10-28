@@ -31,6 +31,7 @@ import type { EmbeddingService } from '../src/server/retrieval/embedding-service
 import { RetrievalService } from '../src/server/retrieval/retrieval-service.js';
 import { containsInventedExample, containsUnsupportedQualifier } from './provenance-policy.mjs';
 import { validAutomaticGrounding, validBonsaiEvidence } from './bonsai-evidence-policy.mjs';
+import { readApprovedContinuation } from './bonsai-continuation.js';
 
 interface Scenario {
   id: string;
@@ -67,6 +68,15 @@ let groundingStop: Record<string, unknown> | undefined;
 let qualityStop: Record<string, unknown> | undefined;
 const scenarioReports: Array<Record<string, unknown>> = [];
 const bonsaiRunIds = new Map<string, string>();
+const continuationPath = process.env.PRD_GENIE_BONSAI_CONTINUATION;
+if (continuationPath && evaluationProvider !== 'bonsai')
+  throw new Error('The approved continuation is Bonsai-only.');
+const continuation = continuationPath
+  ? readApprovedContinuation(
+      fs.readFileSync(path.join(continuationPath, 'failure.json')),
+      fs.readFileSync(path.join(continuationPath, 'native-receipt.json')),
+    )
+  : undefined;
 
 function requirePassingChecks(
   caseId: string,
@@ -293,6 +303,13 @@ if (evaluationProvider === 'bonsai') {
   fs.mkdirSync(journalDirectory, { recursive: true });
   bonsaiJournal = path.join(journalDirectory, 'dispatch.jsonl');
   console.log(`Bonsai custody journal: ${bonsaiJournal}`);
+  if (continuation) {
+    fs.writeFileSync(
+      path.join(journalDirectory, 'continuation-input.json'),
+      `${JSON.stringify({ gitSha: evaluationGitSha, ...continuation }, null, 2)}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+  }
   bonsai = createBonsaiEvaluationBridge({
     readiness: bonsaiReadiness,
     onRecord: (record) => {
@@ -389,6 +406,28 @@ try {
     });
     assertStatus(uploaded.statusCode, uploaded.body, 201, `upload ${scenario.id}`);
 
+    if (continuation && scenario.id === 'grounded-problem') {
+      // Fixture input only: never call generate/apply or fabricate an accepted AI run.
+      target.body = continuation.generatedText;
+      const fixture = await app.inject({
+        method: 'PUT',
+        url: `/api/projects/${project.id}/prd`,
+        payload: {
+          revision: 1,
+          sections: initial.sections,
+          reason: 'UNACCEPTED saved response fixture for approved five-case continuation',
+        },
+      });
+      assertStatus(fixture.statusCode, fixture.body, 200, 'seed unaccepted review fixture');
+      reviewProject = {
+        id: project.id,
+        revision: fixture.json<{ revision: number }>().revision,
+        sectionIds: new Set(initial.sections.map((section) => section.id)),
+        sectionTitles: new Map(initial.sections.map((section) => [section.id, section.title])),
+        sectionBodies: new Map(initial.sections.map((section) => [section.id, section.body])),
+      };
+      continue;
+    }
     bonsai?.beginCase(scenario.id, outputTokenLimit('rewrite', 'section'));
     const action = await runAction(app, cookie, {
       projectId: project.id,
@@ -666,7 +705,9 @@ try {
       projectsAfterRestart.json<{ projects: unknown[] }>().projects.length === scenarios.length,
     reviewHistoryPersisted: restarted.services.repository.listAiRuns(reviewProject.id).length >= 2,
   };
-  requirePassingChecks('persistence', persistenceChecks, {});
+  // Keep the full-corpus assertions visible. The continuation cannot claim the
+  // original rewrite acceptance/history assertion: that run remains unaccepted.
+  if (!continuation) requirePassingChecks('persistence', persistenceChecks, {});
 
   const modelDigest = bonsaiReadiness?.modelDigest ?? (await resolveOllamaDigest(model));
   const reviewModelDigest =
@@ -690,6 +731,18 @@ try {
   ];
   const passed = allChecks.filter(Boolean).length;
   const report = {
+    ...(continuation
+      ? {
+          schema: 'prd-bonsai-continuation-v1',
+          releaseEvidence: false,
+          status: 'review_required',
+          firstCase: continuation,
+          fullQualityGatePassed: false,
+          automaticRetry: false,
+          persistenceLimitation:
+            'Original two-run accepted rewrite/review history remains unverified; assertions below are not waived.',
+        }
+      : {}),
     generatedAt: new Date().toISOString(),
     gitSha,
     dirtyWorkingTree: dirty,
@@ -787,16 +840,25 @@ try {
         : []),
     ],
   };
-  if (bonsai && !validBonsaiEvidence(report)) {
+  if (bonsai && !continuation && !validBonsaiEvidence(report)) {
     throw new Error(
       'Bonsai receipts do not bind the completed corpus report; retained journals are not release evidence.',
     );
   }
-  fs.mkdirSync(path.resolve('reports'), { recursive: true });
+  if (!continuation) fs.mkdirSync(path.resolve('reports'), { recursive: true });
   fs.writeFileSync(
-    path.resolve('reports/model-evaluation.json'),
+    continuation
+      ? path.join(path.dirname(bonsaiJournal!), 'continuation-report.json')
+      : path.resolve('reports/model-evaluation.json'),
     `${JSON.stringify(report, null, 2)}\n`,
+    ...(continuation ? [{ flag: 'wx', mode: 0o600 }] : []),
   );
+  if (continuation) {
+    console.log(
+      'Five-request continuation completed; first case and full release gate remain pending.',
+    );
+    process.exitCode = 2;
+  }
   console.log(`Model evaluation passed ${passed}/${allChecks.length} checks.`);
   if (passed !== allChecks.length) {
     for (const scenario of scenarioReports) {
@@ -828,6 +890,7 @@ try {
       gitSha: evaluationGitSha,
       qualitySpecVersion: PRD_QUALITY_SPEC_VERSION,
       releaseEvidence: false,
+      ...(continuation ? { firstCase: continuation, fullQualityGatePassed: false } : {}),
       status: 'stopped',
       reason: error instanceof Error ? error.message : 'Evaluation failed.',
       records: bonsai?.records ?? [],
