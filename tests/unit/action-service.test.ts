@@ -1659,6 +1659,32 @@ describe('proposal grounding assessment', () => {
 describe('proposal grounding guard', () => {
   const chunkId = 'dbaad835-75b3-4e53-8211-6356ce0f4dc7';
 
+  it('validates every grouped reference and retains each cited passage check', () => {
+    const secondId = '00000000-0000-4000-8000-000000000001';
+    const text = 'People lose drafts.';
+    for (const separator of ['; ', ', ']) {
+      const grouped = `People lose drafts [${chunkId}${separator}${secondId}].`;
+      expect(
+        assessProposalGrounding(grouped, [text], '', [chunkId, secondId], [], false, {
+          [chunkId]: text,
+          [secondId]: text,
+        }),
+      ).toMatchObject({ failure: null, grounding: { status: 'checks_passed' } });
+      expect(assessProposalGrounding(grouped, [text], '', [chunkId]).failure).not.toBeNull();
+      expect(
+        assessProposalGrounding(grouped, [text], '', [chunkId, secondId], [], false, {
+          [chunkId]: text,
+          [secondId]: 'Different evidence.',
+        }).grounding.status,
+      ).toBe('review_required');
+    }
+    for (const marker of [`[${chunkId};]`, `[${chunkId}; prose]`, `[[${chunkId}; ${secondId}]]`]) {
+      expect(
+        assessProposalGrounding(`${text} ${marker}`, [text], '', [chunkId, secondId]).failure,
+      ).not.toBeNull();
+    }
+  });
+
   it('excludes only validated citation markers from claim tokens', () => {
     const text = 'Twelve product managers were interviewed in June 2026';
     expect(containsUnsupportedProposalClaim(`${text} [${chunkId}].`, [text], '', [chunkId])).toBe(
@@ -1828,6 +1854,17 @@ describe('review numeric grounding', () => {
     expect(containsNewNumericValue('8 days.', source)).toBe(true);
     expect(containsNewNumericValue('12 users.', source)).toBe(true);
     expect(containsNewNumericValue('June 2027.', source)).toBe(true);
+    expect(containsNewNumericValue('8 participants.', source)).toBe(false);
+    expect(containsNewNumericValue('9 participants.', source)).toBe(true);
+    expect(
+      containsNewNumericValue('8 participants.', 'Eight incidents. Twelve participants.'),
+    ).toBe(true);
+    expect(containsNewNumericValue('8 participants.', 'Eight of twelve users.')).toBe(true);
+    expect(containsNewNumericValue('8 participants.', '- 8 of 12 participants.')).toBe(true);
+    expect(containsNewNumericValue('8 participants.', '8 of 3 participants.')).toBe(true);
+    expect(
+      assessProposalGrounding('8 participants lost work.', [source], '', []).grounding.status,
+    ).toBe('review_required');
     for (const unsupported of [
       'one hundred',
       'one\nhundred',

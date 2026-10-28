@@ -82,6 +82,12 @@ function normalizeClaimToken(token) {
   return token;
 }
 
+function citationMarkerIds(value) {
+  // A single marker stays exact; grouped references may separate exact IDs
+  // with commas or semicolons. Empty entries remain invalid allowlist members.
+  return /[,;]/.test(value) ? value.split(/[,;]/).map((id) => id.trim()) : [value];
+}
+
 export function citationClaimText(generated, allowedCitationChunkIds) {
   const allowedIds = new Set(allowedCitationChunkIds);
   let invalidCitation = false;
@@ -91,10 +97,11 @@ export function citationClaimText(generated, allowedCitationChunkIds) {
     (marker, id, closing, offset) => {
       // Production chunk IDs are UUIDs. Ordinary Markdown brackets remain claim text.
       const citationShaped = /[0-9a-f]{8}-[0-9a-f-]{27,}/i.test(id);
-      const mentionsAllowedId = allowedIds.has(id.trim());
+      const ids = citationMarkerIds(id);
+      const mentionsAllowedId = ids.some((item) => allowedIds.has(item.trim()));
       if (!citationShaped && !mentionsAllowedId) return marker;
       if (
-        !allowedIds.has(id) ||
+        !ids.every((item) => allowedIds.has(item)) ||
         closing !== ']' ||
         generated[offset - 1] === '[' ||
         generated[offset + marker.length] === ']'
@@ -147,7 +154,7 @@ export function hasLiteralClaimSupport(
     return false;
   return generated.split(/(?:\r?\n)+|(?<=[.!?])\s+/).every((part) => {
     const ids = [...part.matchAll(/\[([^\]]+)\]/g)]
-      .map((match) => match[1])
+      .flatMap((match) => citationMarkerIds(match[1]))
       .filter((id) => allowedCitationChunkIds.includes(id));
     const claim = literalPassage(citationClaimText(part, allowedCitationChunkIds).claimText);
     return ids.every(

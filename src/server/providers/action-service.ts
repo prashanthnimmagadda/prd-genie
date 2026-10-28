@@ -1035,7 +1035,7 @@ function extractNumericValues(value: string, recognizeSourceCardinals = false): 
   const comparable = recognizeSourceCardinals
     ? normalizeCardinalRepresentation(withoutListMarkers)
     : withoutListMarkers;
-  return (
+  const values = (
     comparable.match(
       /\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|users?|participants?|incidents?)?/gi,
     ) ?? []
@@ -1050,6 +1050,28 @@ function extractNumericValues(value: string, recognizeSourceCardinals = false): 
         (unit) => unit.replace(/s$/, ''),
       ),
   );
+  if (recognizeSourceCardinals) {
+    // In an explicit partitive count, the subset has the same stated unit:
+    // "eight of the twelve participants" supplies "8 participants" too.
+    // Keep the denominator and all normal grounding/attribution checks; do
+    // not infer units across clauses or from unrelated numbers.
+    for (const match of comparable.matchAll(
+      /(?<![\w.,+/−-])(\d+)[ \t]+of[ \t]+(?:the[ \t]+)?(\d+)[ \t]+(users?|participants?|incidents?)\b/gi,
+    )) {
+      if (/[+/\p{Pd}−]\s*$/u.test(comparable.slice(0, match.index))) continue;
+      const numerator = Number(match[1]);
+      const denominator = Number(match[2]);
+      if (
+        Number.isSafeInteger(numerator) &&
+        Number.isSafeInteger(denominator) &&
+        denominator > 0 &&
+        numerator <= denominator
+      ) {
+        values.push(`${numerator} ${match[3]!.toLowerCase().replace(/s$/, '')}`);
+      }
+    }
+  }
+  return values;
 }
 
 function normalizeGeneratedProposal(
