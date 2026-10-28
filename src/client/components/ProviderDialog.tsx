@@ -25,14 +25,7 @@ import {
   ModelSelectorTrigger,
 } from '@/components/ai-elements/model-selector';
 
-const providerLabels: Record<ProviderKind, string> = {
-  chatgpt: 'ChatGPT plan',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  google: 'Google Gemini',
-  'openai-compatible': 'OpenAI-compatible',
-  ollama: 'Local Ollama',
-};
+import { providerLabels, isLocalProvider } from '@/lib/provider-display';
 
 interface ProviderDialogProps {
   open: boolean;
@@ -334,9 +327,7 @@ function ProviderSettings({ open, project, onOpenChange, onProjectChange }: Prov
   }
 
   const configuredHost = currentState?.baseUrl ?? null;
-  const localEndpoint =
-    configuredHost !== null &&
-    ['localhost', '127.0.0.1', '::1', '[::1]'].includes(configuredHost.toLowerCase());
+  const localEndpoint = isLocalProvider(currentState);
   const selectedForProject =
     project.selectedProvider === provider && project.selectedModel === model;
   const configurationLabel = statesLoading
@@ -367,8 +358,8 @@ function ProviderSettings({ open, project, onOpenChange, onProjectChange }: Prov
         <DialogHeader>
           <DialogTitle>AI settings</DialogTitle>
           <DialogDescription>
-            Choose how this project uses AI. Editing, saving and exporting work without a
-            connection.
+            Connect a local model or an online provider. Keep credentials here; switch connected
+            models from the conversation. Editing, saving and exporting work offline.
           </DialogDescription>
         </DialogHeader>
 
@@ -401,6 +392,10 @@ function ProviderSettings({ open, project, onOpenChange, onProjectChange }: Prov
                 ))}
               </select>
             </label>
+            <p className="sheet-note">
+              For Bonsai, choose Local / OpenAI-compatible. Local connections use an existing
+              running server.
+            </p>
             <p className="settings-readiness" role="status">
               {configurationLabel}
               {!statesLoading && !stateError && configuredHost
@@ -545,13 +540,20 @@ function ProviderSettings({ open, project, onOpenChange, onProjectChange }: Prov
                   placeholder={
                     provider === 'ollama'
                       ? 'http://127.0.0.1:11434/v1'
-                      : 'https://models.example.com/v1'
+                      : 'http://127.0.0.1:18080/v1'
                   }
                   onChange={(event) => setBaseUrl(event.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
               </label>
+            )}
+            {provider === 'openai-compatible' && (
+              <p className="settings-help">
+                Bonsai, llama.cpp and other compatible local servers use this connection. Enter the
+                endpoint and any credentials provided by your local runtime, then discover its
+                models. Local model connections keep your document on this Mac.
+              </p>
             )}
             {provider === 'ollama' && (
               <p className="settings-help">

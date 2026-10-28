@@ -9,7 +9,6 @@ import {
   FilePlus2,
   FolderOpen,
   History,
-  KeyRound,
   PanelLeft,
   MessageSquare,
   Paperclip,
@@ -67,6 +66,8 @@ import {
 import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources';
 import { SectionEditor } from '@/components/SectionEditor';
 import { ProviderDialog } from '@/components/ProviderDialog';
+import { ConnectedModelPicker } from '@/components/ConnectedModelPicker';
+import { isLocalProvider } from '@/lib/provider-display';
 import { StructurePanel } from '@/components/StructurePanel';
 import { exampleSource, exampleSourceName, fillExample } from '@/example-project';
 
@@ -491,13 +492,14 @@ function Workbench({
   const [uploading, setUploading] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
   const [submittedPrompt, setSubmittedPrompt] = useState('');
-  const [autoAction, setAutoAction] = useState(true);
   const [activitySequence, setActivitySequence] = useState(0);
   const [stalled, setStalled] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [providerOpen, setProviderOpen] = useState(false);
-  const [activeProviderState, setActiveProviderState] = useState<ProviderState | null>(null);
-  const [action, setAction] = useState<AiAction>('ask');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [providerState, setActiveProviderState] = useState<ProviderState | null>(null);
+  const activeProviderState =
+    providerState?.provider === project.selectedProvider ? providerState : null;
   const [scope, setScope] = useState<ActionScope>('document');
   const [output, setOutput] = useState('');
   const [prompt, setPrompt] = useState(() => readLocalPrompt(project.id));
@@ -535,14 +537,21 @@ function Workbench({
 
   useEffect(() => {
     if (providerOpen || !project.selectedProvider) return;
+    let current = true;
     void api
       .providerStates()
       .then(({ providers }) => {
-        setActiveProviderState(
-          providers.find((item) => item.provider === project.selectedProvider) ?? null,
-        );
+        if (current)
+          setActiveProviderState(
+            providers.find((item) => item.provider === project.selectedProvider) ?? null,
+          );
       })
-      .catch(() => setActiveProviderState(null));
+      .catch(() => {
+        if (current) setActiveProviderState(null);
+      });
+    return () => {
+      current = false;
+    };
   }, [providerOpen, project.selectedProvider]);
 
   useEffect(() => {
@@ -793,8 +802,7 @@ function Workbench({
       );
       return false;
     }
-    const requestedAction =
-      override?.action ?? (autoAction ? actionForInstruction(instruction, prd) : action);
+    const requestedAction = override?.action ?? actionForInstruction(instruction, prd);
     const requestedScope = override?.scope ?? scope;
     const requestedTargetSectionId =
       requestedScope === 'document' ? null : selectedSectionId || null;
@@ -807,8 +815,10 @@ function Workbench({
       setError('Select document text before running a selection action.');
       return;
     }
-    if (offline && project.selectedProvider !== 'ollama') {
-      setError('This provider requires a network connection. Local Ollama remains available.');
+    if (offline && !isLocalProvider(activeProviderState)) {
+      setError(
+        'This provider requires a network connection. A configured local model can work offline.',
+      );
       return;
     }
     const savedBeforeAction = dirty ? await save('Saved before AI action') : prd;
@@ -1117,7 +1127,8 @@ function Workbench({
       documentMutationRef.current
     )
       return;
-    const handoffAction = action === 'ask' ? 'rewrite' : action;
+    const inferred = actionForInstruction(handoffInstruction, prd);
+    const handoffAction = inferred === 'ask' ? 'rewrite' : inferred;
     const handoffScope = scope === 'document' ? 'document' : 'section';
     const sectionIds =
       handoffScope === 'document' ? prd.sections.map((section) => section.id) : [selectedSectionId];
@@ -1240,7 +1251,13 @@ function Workbench({
       busy: busy || navigationBusy,
       recoveryPending,
       modalOpen:
-        providerOpen || sourcesOpen || structureOpen || exportOpen || createOpen || recoveryOpen,
+        providerOpen ||
+        modelPickerOpen ||
+        sourcesOpen ||
+        structureOpen ||
+        exportOpen ||
+        createOpen ||
+        recoveryOpen,
       hasProject: true,
     });
   }, [
@@ -1252,6 +1269,7 @@ function Workbench({
     recoveryPending,
     prd?.revision,
     providerOpen,
+    modelPickerOpen,
     sourcesOpen,
     structureOpen,
     exportOpen,
@@ -1463,25 +1481,6 @@ function Workbench({
           </small>
         </div>
         <div className="topbar-actions">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Sources"
-            onClick={() => setSourcesOpen(true)}
-          >
-            <Paperclip aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="History"
-            onClick={() => {
-              setDocumentOpen(false);
-              setTab('history');
-            }}
-          >
-            <History aria-hidden="true" />
-          </Button>
           <Button variant="outline" onClick={() => setExportOpen(true)}>
             Export
           </Button>
@@ -1667,7 +1666,12 @@ function Workbench({
             <FileText aria-hidden="true" />
             <span>Document</span>
           </button>
-          <button className="rail-item" onClick={() => setSourcesOpen(true)}>
+          <button
+            className="rail-item"
+            aria-label="Sources"
+            aria-description={`${sources.length} sources`}
+            onClick={() => setSourcesOpen(true)}
+          >
             <Paperclip aria-hidden="true" />
             <span>Sources</span>
             <small>{sources.length}</small>
@@ -1681,6 +1685,10 @@ function Workbench({
           >
             <History aria-hidden="true" />
             <span>History</span>
+          </button>
+          <button className="rail-item" onClick={() => setProviderOpen(true)}>
+            <Settings2 aria-hidden="true" />
+            <span>AI settings</span>
           </button>
         </nav>
         <nav className="document-outline" aria-label="Document outline" hidden={!documentOpen}>
@@ -1707,10 +1715,6 @@ function Workbench({
         </nav>
 
         <section className="project-lifecycle" aria-label="Project data">
-          <Button variant="ghost" size="sm" onClick={() => setProviderOpen(true)}>
-            <Settings2 aria-hidden="true" />
-            AI settings
-          </Button>
           <button
             type="button"
             disabled={documentMutationBusy || saveBusy}
@@ -1746,16 +1750,6 @@ function Workbench({
 
       <main id="prd-editor" className="document-surface" hidden={!documentOpen} tabIndex={-1}>
         <div className="workspace-viewbar">
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setDocumentOpen(false);
-              setTab('assist');
-            }}
-          >
-            <MessageSquare aria-hidden="true" />
-            Conversation
-          </Button>
           <span>Document</span>
           <Button variant="ghost" onClick={() => setStructureOpen(true)}>
             Structure
@@ -1911,19 +1905,16 @@ function Workbench({
       >
         <h1 className="visually-hidden">{project.name}</h1>
         <div className="workspace-viewbar">
-          <button
-            className={tab === 'assist' ? 'view-selected' : ''}
-            onClick={() => setTab('assist')}
-          >
-            Conversation
-          </button>
-          <button onClick={() => setDocumentOpen(true)}>Document</button>
+          <span className="workspace-title">
+            {tab === 'assist'
+              ? 'Conversation'
+              : tab === 'review'
+                ? 'Review findings'
+                : tab === 'history'
+                  ? 'History'
+                  : 'Evidence'}
+          </span>
           <span className="viewbar-spacer" />
-          {tab !== 'assist' && (
-            <span>
-              {tab === 'review' ? 'Review findings' : tab === 'history' ? 'History' : 'Evidence'}
-            </span>
-          )}
           {findings.filter((finding) => finding.status === 'open').length > 0 &&
             tab !== 'review' && (
               <button onClick={() => setTab('review')}>
@@ -2181,27 +2172,6 @@ function Workbench({
 
             <div className="action-context">
               <label>
-                <span>Action</span>
-                <select
-                  value={autoAction ? 'auto' : action}
-                  disabled={documentMutationBusy}
-                  onChange={(event) => {
-                    if (!documentMutationRef.current) {
-                      setAutoAction(event.target.value === 'auto');
-                      if (event.target.value !== 'auto') setAction(event.target.value as AiAction);
-                    }
-                  }}
-                >
-                  <option value="auto">
-                    From instruction ({actionForInstruction(prompt, prd)})
-                  </option>
-                  <option value="ask">Ask</option>
-                  <option value="rewrite">Rewrite</option>
-                  <option value="draft">Draft</option>
-                  <option value="review">Review</option>
-                </select>
-              </label>
-              <label>
                 <span>Apply to</span>
                 <select
                   value={scope}
@@ -2253,44 +2223,20 @@ function Workbench({
               />
               <PromptInputFooter>
                 <PromptInputTools>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Attach source files"
-                    disabled={uploading}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Paperclip aria-hidden="true" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSourcesOpen(true)}
-                  >
-                    {uploading
-                      ? 'Adding files…'
-                      : `${sources.length} ${sources.length === 1 ? 'source' : 'sources'}`}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={documentMutationBusy}
-                    onClick={() => setProviderOpen(true)}
-                  >
-                    <KeyRound aria-hidden="true" />
-                    {project.selectedProvider
-                      ? `${project.selectedProvider === 'ollama' ? 'Local' : 'Online'} · ${project.selectedModel ?? project.selectedProvider}`
-                      : 'AI settings'}
-                  </Button>
+                  <ConnectedModelPicker
+                    project={project}
+                    activeState={activeProviderState}
+                    open={modelPickerOpen}
+                    onOpenChange={setModelPickerOpen}
+                    disabled={busy || documentMutationBusy}
+                    onProjectChange={onProjectChange}
+                  />
                 </PromptInputTools>
                 <PromptInputSubmit
                   status={busy ? 'streaming' : 'ready'}
                   disabled={
                     documentMutationBusy ||
-                    (!busy && offline && project.selectedProvider !== 'ollama')
+                    (!busy && offline && !isLocalProvider(activeProviderState))
                   }
                   onClick={(event) => {
                     if (busy) {
@@ -2304,8 +2250,8 @@ function Workbench({
             <p className="composer-caption">
               {project.selectedProvider
                 ? activeProviderState?.configured
-                  ? project.selectedProvider === 'ollama'
-                    ? 'Local model must be running.'
+                  ? isLocalProvider(activeProviderState)
+                    ? 'Local connection. The selected model must be running.'
                     : 'Relevant source excerpts and document context are sent to the selected online provider.'
                   : 'Selected provider needs setup. Your work remains available.'
                 : 'AI is optional. Edit the document or use manual handoff in History.'}{' '}
@@ -2348,10 +2294,9 @@ function Workbench({
               <Button
                 size="sm"
                 disabled={
-                  busy || documentMutationBusy || (offline && project.selectedProvider !== 'ollama')
+                  busy || documentMutationBusy || (offline && !isLocalProvider(activeProviderState))
                 }
                 onClick={() => {
-                  setAction('review');
                   setScope('document');
                   void submitAction('Run the full structured review.', {
                     action: 'review',
@@ -2792,7 +2737,6 @@ function Workbench({
                           if (documentMutationRef.current) return;
                           if (busy) return;
                           setInterrupted(run.status !== 'completed');
-                          setAction(run.action);
                           setScope(run.scope);
                           setOutput(
                             proposalDraft?.runId === run.id
@@ -2856,13 +2800,19 @@ function Workbench({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Add source"
+                disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <FilePlus2 aria-hidden="true" />
               </Button>
             </div>
+            {uploading && <p role="status">Importing sources…</p>}
             {sources.length === 0 ? (
-              <button className="empty-source" onClick={() => fileInputRef.current?.click()}>
+              <button
+                disabled={uploading}
+                className="empty-source"
+                onClick={() => fileInputRef.current?.click()}
+              >
                 Add evidence
                 <small>PDF, Word, slides, sheets, JPEG, or text</small>
               </button>
@@ -3087,14 +3037,11 @@ function messageFrom(error: unknown): string {
 
 function actionForInstruction(instruction: string, document: PrdDocument): AiAction {
   const text = instruction.trim().toLowerCase();
+  if (/^(what|why|how|which|where|when|can you explain|explain)\b/.test(text)) return 'ask';
   if (/^(draft|create|write|start|generate)\b/.test(text)) return 'draft';
   if (/\b(review|critique|audit|assess|find gaps|check for)\b/.test(text)) return 'review';
-  if (
-    /\b(rewrite|revise|update|change|improve|replace|add|remove)\b/.test(text) &&
-    document.sections.some((section) => section.body.trim())
-  )
+  if (/\b(rewrite|revise|update|change|improve|replace|add|remove|make)\b/.test(text))
     return 'rewrite';
-  if (/^(what|why|how|which|where|when|can you explain|explain)\b/.test(text)) return 'ask';
   return document.sections.some((section) => section.body.trim()) ? 'ask' : 'draft';
 }
 

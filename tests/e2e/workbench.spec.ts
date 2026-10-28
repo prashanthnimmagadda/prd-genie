@@ -16,35 +16,27 @@ async function selectProject(page: Page, name: string) {
   await expect(page.locator('.project-title strong')).toHaveText(name);
 }
 
+async function openNavigation(page: Page, destination: string) {
+  const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
+  if (await sidebar.isHidden())
+    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+  await sidebar.getByRole('button', { name: destination, exact: true }).click();
+}
+
 async function openDocument(page: Page) {
-  if (await page.locator('#prd-editor').isHidden()) {
-    await page
-      .locator('#conversation-workspace .workspace-viewbar')
-      .getByRole('button', { name: 'Document', exact: true })
-      .click();
-  }
+  if (await page.locator('#prd-editor').isHidden()) await openNavigation(page, 'Document');
 }
 
 async function openConversation(page: Page) {
-  await page
-    .locator('.workspace-viewbar:visible')
-    .getByRole('button', { name: 'Conversation', exact: true })
-    .click();
+  await openNavigation(page, 'Conversation');
 }
 
 async function openSettings(page: Page) {
-  const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
-  if (
-    (await page
-      .getByRole('button', { name: 'Toggle project navigation' })
-      .getAttribute('aria-expanded')) === 'false'
-  )
-    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
-  await sidebar.getByRole('button', { name: 'AI settings', exact: true }).click();
+  await openNavigation(page, 'AI settings');
 }
 
 async function openHistory(page: Page) {
-  await page.getByRole('button', { name: 'History', exact: true }).first().click();
+  await openNavigation(page, 'History');
 }
 
 async function closeSheet(page: Page, name: string) {
@@ -107,15 +99,20 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(sidebarSettings).toBeFocused();
-  const composerSettings = page
-    .locator('#conversation-workspace')
-    .getByRole('button', { name: 'AI settings', exact: true });
-  await composerSettings.focus();
+  const composerModel = page.getByRole('button', { name: 'Choose connected model' });
+  await composerModel.focus();
   await page.keyboard.press('Enter');
-  await expect(dialog).toBeVisible();
+  const connected = page.getByRole('dialog', { name: 'Connected models', exact: true });
+  await expect(connected).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(dialog).toBeHidden();
-  await expect(composerSettings).toBeFocused();
+  await expect(connected).toBeHidden();
+  await expect(composerModel).toBeFocused();
+  await expect(page.getByRole('combobox', { name: 'Action', exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .locator('#conversation-workspace')
+      .getByRole('button', { name: 'AI settings', exact: true }),
+  ).toHaveCount(0);
   await expect(page.locator('body')).not.toHaveAttribute('data-scroll-locked');
   expect(violations).toEqual([]);
 });
@@ -470,7 +467,6 @@ test('exports current AI evidence immediately and clears handoff selection bound
   await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
   await providerDialog.getByRole('button', { name: 'Use provider' }).click();
 
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
   await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
   await page.getByLabel('Your instruction').fill('Rewrite the problem using the current evidence.');
   await page.getByLabel('Submit').click();
@@ -503,7 +499,6 @@ test('exports current AI evidence immediately and clears handoff selection bound
   ]);
 
   await openConversation(page);
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('ask');
   await page.getByLabel('Your instruction').fill('Summarize the current evidence.');
   await page.getByLabel('Submit').click();
   await expect
@@ -612,7 +607,6 @@ test('keeps uncertain grounding visible and requires renewed source review befor
   await settings.getByRole('button', { name: 'Configure and discover' }).click();
   await expect(settings.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
   await settings.getByRole('button', { name: 'Use provider' }).click();
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
   await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
   await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
@@ -696,7 +690,26 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
   await providerDialog.getByRole('button', { name: 'Use provider' }).click();
 
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rewrite');
+  let chooserGenerationCalls = 0;
+  const countGeneration = (request: import('@playwright/test').Request) => {
+    if (request.url().endsWith('/api/ai/actions')) chooserGenerationCalls++;
+  };
+  page.on('request', countGeneration);
+  await page.getByRole('button', { name: 'Choose connected model' }).click();
+  const connectedModels = page.getByRole('dialog', { name: 'Connected models', exact: true });
+  await expect(
+    connectedModels
+      .getByRole('region', { name: 'Local / OpenAI-compatible', exact: true })
+      .getByText('On this Mac', { exact: true }),
+  ).toBeVisible();
+  await connectedModels.getByRole('button', { name: 'synthetic-prd-model', exact: true }).click();
+  await expect(connectedModels).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Choose connected model' })).toContainText(
+    'Local · synthetic-prd-model',
+  );
+  expect(chooserGenerationCalls).toBe(0);
+  page.off('request', countGeneration);
+
   await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
   await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
   await page.getByLabel('Submit').click();
@@ -717,15 +730,13 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   ).toBeVisible();
   await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
-  await page.locator('.action-context select').first().selectOption('ask');
-  await page.locator('.action-context select').nth(1).selectOption('document');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('document');
   await expect(
     page.getByText('Proposed change · Based on version 0', { exact: true }),
   ).toBeVisible();
   await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
-  await page.locator('.action-context select').first().selectOption('rewrite');
-  await page.locator('.action-context select').nth(1).selectOption('section');
+  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
   const beforeTargetSwitch = (await (
     await request.get(`/api/projects/${project.id}/prd`)
   ).json()) as { sections: Array<{ id: string; title: string; body: string }> };
@@ -771,7 +782,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   await expect(page.getByLabel('Your instruction')).toBeDisabled();
   await expect(page.getByLabel('Revised AI proposal')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Dismiss proposal' })).toBeDisabled();
-  await expect(page.getByRole('combobox', { name: 'Action', exact: true })).toBeDisabled();
+  await expect(page.getByRole('combobox', { name: 'Apply to', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Submit', { exact: true })).toBeDisabled();
   releaseApply();
   await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toContainText(
@@ -855,7 +866,6 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   );
 
   await openConversation(page);
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('review');
   await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('document');
   await page.getByLabel('Your instruction').fill('Run the full structured review.');
   await page.getByLabel('Submit', { exact: true }).click();
@@ -1100,7 +1110,6 @@ for (const width of [320, 375, 414, 768]) {
     await expect(page.getByLabel('Your instruction')).toBeVisible();
     await openDocument(page);
     await expect(page.getByLabel('Section content').first()).toBeVisible();
-    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     await expect(outline).toBeVisible();
     await page.getByRole('button', { name: 'Toggle project navigation' }).click();
     await expect(outline).toBeHidden();
