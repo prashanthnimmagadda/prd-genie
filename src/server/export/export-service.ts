@@ -268,6 +268,9 @@ async function toDocx(project: ProjectSummary, prd: PrdDocument): Promise<Buffer
             rows: block.rows.map(
               (row, rowIndex) =>
                 new TableRow({
+                  // Word repeats a header row on each page a table spans.
+                  tableHeader: rowIndex === 0,
+                  cantSplit: true,
                   children: row.map(
                     (cell) =>
                       new TableCell({
@@ -354,14 +357,34 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
     const columns = rows[0]?.length ?? 0;
     if (!columns) return;
     const cellWidth = contentWidth / columns;
-    rows.forEach((row, rowIndex) => {
+    const layouts = rows.map((row, rowIndex) => {
       const font = rowIndex === 0 ? bold : regular;
       const cells = row.map((cell) => {
         assertPdfFontSupportsText(font, cell);
         return wrapPdfText(cell, font, 9, cellWidth - 16);
       });
-      const height = Math.max(22, ...cells.map((lines) => lines.length * 13 + 10));
-      ensureSpace(height);
+      return { cells, height: Math.max(22, ...cells.map((lines) => lines.length * 13 + 10)) };
+    });
+    const header = layouts[0]!;
+    // Keep the header with the first body row, and repeat it at the top of every
+    // continuation page so a reader never sees body rows without their column names.
+    ensureSpace(header.height + 2 + (layouts[1]?.height ?? 0));
+    drawTableRow(header, 0);
+    layouts.slice(1).forEach((layout) => {
+      if (y - layout.height < margin) {
+        page = document.addPage([size.width, size.height]);
+        y = size.height - margin;
+        drawTableRow(header, 0);
+      }
+      drawTableRow(layout, 1);
+    });
+    y -= 9;
+
+    function drawTableRow(
+      { cells, height }: { cells: string[][]; height: number },
+      rowIndex: number,
+    ) {
+      const font = rowIndex === 0 ? bold : regular;
       page.drawRectangle({
         x: margin,
         y: y - height + 4,
@@ -388,8 +411,7 @@ async function toPdf(project: ProjectSummary, prd: PrdDocument): Promise<Buffer>
           });
       });
       y -= height + 2;
-    });
-    y -= 9;
+    }
   };
 
   write(project.name, 22, { heading: true, gap: 16 });

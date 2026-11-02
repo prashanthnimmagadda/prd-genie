@@ -89,6 +89,7 @@ describe('ExportService', () => {
     expect(xml).toContain('w:tbl');
     expect(xml).toContain('w:gridCol w:w="4513"');
     expect(xml).toContain('w:tcW w:type="dxa" w:w="4513"');
+    expect(xml).toMatch(/<w:tblHeader\/>/);
     expect(xml).toContain('Preserve the draft');
     expect(xml).toContain('Interview notes (https://example.test/notes)');
     expect(xml).not.toContain('| --- |');
@@ -172,6 +173,45 @@ describe('ExportService', () => {
     const names = Object.keys((await JSZip.loadAsync(archive.body)).files);
     expect(names).toEqual(expect.arrayContaining(['sources/brief.txt', 'sources/brief-2.txt']));
     fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('repeats PDF table headers on each page and never strands a header row', async () => {
+    const project = repository.createProject('Long table', '');
+    const prd = repository.getPrd(project.id);
+    const rows = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `| Journey ${index + 1} | ${'Preserve the draft and restore it after a crash. '.repeat(3)}| E${index + 1} |`,
+    );
+    repository.savePrd(
+      project.id,
+      0,
+      prd.sections.map((section, index) => ({
+        ...section,
+        body:
+          index === 0
+            ? `${'Lead paragraph that fills the first page. '.repeat(60)}\n\n| Area | Behaviour | Evidence |\n| --- | --- | --- |\n${rows.join('\n')}`
+            : '',
+      })),
+      'Long table fixture',
+    );
+    const result = await exporter.create(project.id, 'pdf');
+    const parsed = await parseDocument('export.pdf', result.body);
+    const pagesWithRows = parsed.locations.filter((location) =>
+      /Journey \d+/.test(location.content),
+    );
+    expect(pagesWithRows.length).toBeGreaterThan(1);
+    pagesWithRows.forEach((location, page) => {
+      const header = location.content.indexOf('Area Behaviour Evidence');
+      expect(header, `header missing on table page ${page + 1}`).toBeGreaterThanOrEqual(0);
+      expect(location.content.indexOf('Journey', header)).toBeGreaterThan(header);
+    });
+    parsed.locations.forEach((location, page) => {
+      expect(
+        location.content.trimEnd().endsWith('Area Behaviour Evidence'),
+        `stranded header on page ${page + 1}`,
+      ).toBe(false);
+    });
   });
 
   it('paginates long PDF content and preserves supported Unicode characters', async () => {
