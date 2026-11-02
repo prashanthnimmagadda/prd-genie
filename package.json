@@ -1,6 +1,6 @@
 {
   "name": "prd-genie",
-  "version": "0.1.0-rc.3",
+  "version": "0.1.0-rc.4",
   "private": true,
   "description": "A local-first, bring-your-own-key workbench for drafting and reviewing product requirements.",
   "license": "MIT",

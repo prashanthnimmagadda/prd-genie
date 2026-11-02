@@ -197,8 +197,13 @@ export function validateEvidenceReports(root, gitSha) {
   const node24 = readJson(root, 'reports/node-24.json');
   const productionSmoke = readJson(root, 'reports/production-smoke.json');
   const testCoverage = readJson(root, 'reports/test-coverage.json');
-  const model = readJson(root, 'reports/model-evaluation.json');
-  const container = readJson(root, 'reports/container-smoke.json');
+  const { openGates } = readPrereleaseGateException(root);
+  const model = openGates.includes('model-evaluation')
+    ? null
+    : readJson(root, 'reports/model-evaluation.json');
+  const container = openGates.includes('container-smoke')
+    ? null
+    : readJson(root, 'reports/container-smoke.json');
   if (
     offline.schemaVersion !== 1 ||
     offline.mode !== 'full' ||
@@ -275,13 +280,50 @@ export function validateEvidenceReports(root, gitSha) {
   ) {
     throw new Error('Production runtime evidence does not validate the clean current SHA.');
   }
-  if (!validModelEvidence(model, gitSha)) {
+  if (model && !validModelEvidence(model, gitSha)) {
     throw new Error('Model evaluation evidence does not validate the clean current SHA.');
   }
-  if (!validateContainerSmokeReport(container, gitSha)) {
+  if (container && !validateContainerSmokeReport(container, gitSha)) {
     throw new Error('Container smoke evidence does not validate the clean current SHA.');
   }
   validateMacosReleaseEvidence(root, gitSha);
+  return { openGates };
+}
+
+export const prereleaseGateExceptionPath = 'release/prerelease-gate-exception.json';
+const exceptionEligibleGates = ['model-evaluation', 'container-smoke'];
+
+// An owner-recorded exception lets a labelled pre-release ship while the model
+// evaluation or container smoke gate is still open. It never applies to a final
+// version, never covers any other gate, and is bound to one exact package version
+// so it cannot silently carry forward to a later release.
+function readPrereleaseGateException(root) {
+  const file = path.join(root, prereleaseGateExceptionPath);
+  if (!fs.existsSync(file)) return { openGates: [] };
+  const exception = readJson(root, prereleaseGateExceptionPath);
+  const version = readJson(root, 'package.json')?.version;
+  const gates = exception?.openGates;
+  if (
+    exception?.schemaVersion !== 1 ||
+    typeof version !== 'string' ||
+    !/^\d+\.\d+\.\d+-(?:rc|beta|alpha)\.\d+$/.test(version) ||
+    exception.version !== version ||
+    !Array.isArray(gates) ||
+    gates.length === 0 ||
+    new Set(gates).size !== gates.length ||
+    !gates.every((gate) => exceptionEligibleGates.includes(gate)) ||
+    exception.decision?.by !== 'owner' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(exception.decision?.date ?? '') ||
+    typeof exception.decision?.summary !== 'string' ||
+    !exception.decision.summary.trim() ||
+    typeof exception.disclosure !== 'string' ||
+    !exception.disclosure.trim()
+  ) {
+    throw new Error(
+      'Pre-release gate exception is invalid for this package version or names an ineligible gate.',
+    );
+  }
+  return { openGates: [...gates] };
 }
 
 function validCoverageSummary(coverage) {

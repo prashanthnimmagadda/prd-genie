@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0-rc.4",
+  "openGates": ["model-evaluation", "container-smoke"],
+  "decision": {
+    "by": "owner",
+    "date": "2026-11-02",
+    "summary": "Publish a signed, notarised, clearly labelled pre-release while the live AI quality evaluation and container smoke evidence remain open. All other release gates apply to the exact commit."
+  },
+  "disclosure": "Pre-release. AI output quality has not passed the full evaluation corpus for this version, and the container image was not smoke-tested. Review every AI proposal before accepting it. Editing, history, offline saving and export are covered by the release checks."
+}

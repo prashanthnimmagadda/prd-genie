@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   collectArtifactPaths,
+  prereleaseGateExceptionPath,
   publicProductName,
   publicReleaseTarget,
   validateEvidenceReports,
@@ -26,7 +27,11 @@ const artifacts = collectArtifactPaths(root).map((relative) => ({
   path: relative,
   sha256: hashFile(path.join(root, relative)),
 }));
-validateEvidenceReports(root, gitSha);
+const { openGates } = validateEvidenceReports(root, gitSha);
+const exceptionFile = path.join(root, prereleaseGateExceptionPath);
+const prereleaseGateException = openGates.length
+  ? { path: prereleaseGateExceptionPath, sha256: hashFile(exceptionFile), openGates }
+  : null;
 
 let releaseTag = null;
 let releasePreparationAuthorized = false;
@@ -84,6 +89,8 @@ const report = {
     validationStatus: publicAuthorization?.validationStatus ?? null,
     knownLimitations: publicAuthorization?.knownLimitations ?? [],
     unresolvedIssues: publicAuthorization?.unresolvedIssues ?? [],
+    openReleaseGates: openGates,
+    prereleaseGateException,
   },
 };
 

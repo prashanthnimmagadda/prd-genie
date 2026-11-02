@@ -48,7 +48,11 @@ export const requiredProductionSmokeChecks: string[];
 export const requiredArtifactFiles: string[];
 export const requiredArtifactDirectories: string[];
 export function collectArtifactPaths(root: string): string[];
-export function validateEvidenceReports(root: string, gitSha: string): void;
+export const prereleaseGateExceptionPath: string;
+export function validateEvidenceReports(
+  root: string,
+  gitSha: string,
+): { openGates: Array<'model-evaluation' | 'container-smoke'> };
 export function validatePublicProvenanceAuthorization(input: {
   authorization: unknown;
   artifacts: ArtifactRecord[];

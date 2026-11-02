@@ -28,6 +28,18 @@ package version, numeric application version, Git-derived build number and bundl
 identifier. Every native binary must be thin ARM64. The packager omits unused
 foreign dependency prebuild binaries while retaining sources and licence files.
 
+### Labelled pre-release exception
+
+A pre-release (a version ending in `-rc.N`, `-beta.N` or `-alpha.N`) may ship while
+the model evaluation or container smoke gate is still open, only when the owner
+records that decision in `release/prerelease-gate-exception.json`. The file names the
+exact package version, the open gates (only `model-evaluation` and
+`container-smoke` are eligible), the owner decision and the public disclosure text.
+Provenance records the open gates and the file's SHA-256, and the release notes
+must carry the disclosure. Every other gate still applies to the exact clean commit.
+A final (non pre-release) version can never use this exception, and a version bump
+invalidates it.
+
 ## Prepare the final bytes
 
 Use an independently authorised Developer ID Application identity and existing

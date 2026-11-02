@@ -39,7 +39,7 @@ export function isAllowedBrowserOrigin(
 }
 
 export const config = {
-  version: process.env.npm_package_version ?? '0.1.0-rc.3',
+  version: process.env.npm_package_version ?? '0.1.0-rc.4',
   host: resolveServerHost(
     process.env.PRD_GENIE_HOST ?? '127.0.0.1',
     process.env.PRD_GENIE_CONTAINER === '1',

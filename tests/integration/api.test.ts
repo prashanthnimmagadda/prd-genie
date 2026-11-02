@@ -210,7 +210,7 @@ describe('API', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       status: 'degraded',
-      version: '0.1.0-rc.3',
+      version: '0.1.0-rc.4',
       retrieval: { mode: 'lexical' },
       fileCleanup: { status: 'complete', pending: 0 },
     });

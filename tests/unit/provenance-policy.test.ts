@@ -478,6 +478,49 @@ describe('release provenance policy', () => {
     }
   });
 
+  it('honours a recorded pre-release exception only for the model and container gates', () => {
+    const root = artifactFixture();
+    writeEvidence(root);
+    const exception = {
+      schemaVersion: 1,
+      version: '0.1.0-rc.4',
+      openGates: ['model-evaluation', 'container-smoke'],
+      decision: { by: 'owner', date: '2026-11-02', summary: 'Publish a labelled pre-release.' },
+      disclosure: 'AI quality evaluation and container smoke evidence are still open.',
+    };
+    writeJson(root, 'package.json', { version: '0.1.0-rc.4' });
+    fs.rmSync(path.join(root, 'reports/model-evaluation.json'));
+    fs.rmSync(path.join(root, 'reports/container-smoke.json'));
+    expect(() => validateEvidenceReports(root, gitSha)).toThrow();
+
+    fs.mkdirSync(path.join(root, 'release'), { recursive: true });
+    writeJson(root, 'release/prerelease-gate-exception.json', exception);
+    expect(validateEvidenceReports(root, gitSha)).toEqual({
+      openGates: ['model-evaluation', 'container-smoke'],
+    });
+
+    writeJson(root, 'release/prerelease-gate-exception.json', {
+      ...exception,
+      openGates: ['model-evaluation', 'browser-e2e'],
+    });
+    expect(() => validateEvidenceReports(root, gitSha)).toThrow('Pre-release gate exception');
+
+    writeJson(root, 'release/prerelease-gate-exception.json', { ...exception, disclosure: '' });
+    expect(() => validateEvidenceReports(root, gitSha)).toThrow('Pre-release gate exception');
+
+    writeJson(root, 'release/prerelease-gate-exception.json', exception);
+    writeJson(root, 'package.json', { version: '0.1.0' });
+    expect(() => validateEvidenceReports(root, gitSha)).toThrow('Pre-release gate exception');
+
+    writeJson(root, 'package.json', { version: '0.1.0-rc.5' });
+    expect(() => validateEvidenceReports(root, gitSha)).toThrow('Pre-release gate exception');
+
+    fs.rmSync(path.join(root, 'release'), { recursive: true });
+    writeJson(root, 'package.json', { version: '0.1.0-rc.4' });
+    writeEvidence(root);
+    expect(validateEvidenceReports(root, gitSha)).toEqual({ openGates: [] });
+  });
+
   it('requires separate browser, accessibility, online audit, and Node gate evidence', () => {
     const root = artifactFixture();
     writeEvidence(root);
