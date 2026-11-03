@@ -68,6 +68,9 @@ cpSync(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PA
 cpSync(path.join(root, 'src/client/SHADCN-LICENSE.md'), path.join(resources, 'SHADCN-LICENSE.md'));
 cpSync(nodeLicense, path.join(resources, 'node-LICENSE.txt'));
 cpSync(nodeBinary, path.join(resources, 'node'));
+const iconSource = path.join(root, 'scripts/mac/AppIcon.icns');
+if (!existsSync(iconSource)) throw new Error('The app icon scripts/mac/AppIcon.icns is missing.');
+cpSync(iconSource, path.join(resources, 'AppIcon.icns'));
 
 const installed = execFileSync('npm', ['ls', '--omit=dev', '--all', '--parseable'], {
   cwd: root,
@@ -161,6 +164,7 @@ writeFileSync(
 <key>PRDGenieGitCommit</key><string>${gitCommit}</string>
 <key>CFBundleExecutable</key><string>PRD Genie</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
