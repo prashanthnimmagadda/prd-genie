@@ -1,33 +1,35 @@
 import { useEffect, useLayoutEffect } from 'react';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
-import { Bold, Code, List, ListOrdered, Redo2, Undo2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 interface SectionEditorProps {
   sectionId: string;
   value: string;
+  placeholder: string;
   disabled?: boolean;
   onChange: (value: string) => void;
   onFocus: () => void;
   onSelectionChange: (value: string) => void;
+  onReady: (sectionId: string, editor: Editor | null) => void;
 }
 
 export function SectionEditor({
   sectionId,
   value,
+  placeholder,
   disabled = false,
   onChange,
   onFocus,
   onSelectionChange,
+  onReady,
 }: SectionEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: false }),
       Markdown,
-      Placeholder.configure({ placeholder: 'Add decisions, constraints, and measurable detail.' }),
+      Placeholder.configure({ placeholder }),
     ],
     content: value,
     contentType: 'markdown',
@@ -47,6 +49,10 @@ export function SectionEditor({
       const { from, to } = current.state.selection;
       onSelectionChange(from === to ? '' : current.state.doc.textBetween(from, to, ' '));
     },
+    onBlur: ({ editor: current }) => {
+      const { from, to } = current.state.selection;
+      if (from === to) onSelectionChange('');
+    },
   });
 
   useEffect(() => {
@@ -59,83 +65,11 @@ export function SectionEditor({
     editor?.setEditable(!disabled, false);
   }, [disabled, editor]);
 
+  useEffect(() => {
+    onReady(sectionId, editor);
+    return () => onReady(sectionId, null);
+  }, [editor, sectionId, onReady]);
+
   if (!editor) return <div className="editor-loading" aria-label="Loading editor" />;
-
-  const controls = [
-    {
-      label: 'Bold',
-      icon: Bold,
-      active: editor.isActive('bold'),
-      action: () => editor.chain().focus().toggleBold().run(),
-    },
-    {
-      label: 'Inline code',
-      icon: Code,
-      active: editor.isActive('code'),
-      action: () => editor.chain().focus().toggleCode().run(),
-    },
-    {
-      label: 'Bulleted list',
-      icon: List,
-      active: editor.isActive('bulletList'),
-      action: () => editor.chain().focus().toggleBulletList().run(),
-    },
-    {
-      label: 'Numbered list',
-      icon: ListOrdered,
-      active: editor.isActive('orderedList'),
-      action: () => editor.chain().focus().toggleOrderedList().run(),
-    },
-  ] as const;
-
-  return (
-    <div className="section-editor" onFocus={onFocus}>
-      <div
-        className="editor-toolbar"
-        aria-label="Text formatting"
-        onMouseDown={(event) => {
-          // Keep the selection and contextual toolbar in place until the command runs.
-          // WebKit does not focus buttons on mouse-down, so blur would collapse it.
-          if (event.button === 0) event.preventDefault();
-        }}
-      >
-        {controls.map(({ label, icon: Icon, active, action }) => (
-          <Button
-            key={label}
-            type="button"
-            variant={active ? 'secondary' : 'ghost'}
-            size="icon-sm"
-            aria-label={label}
-            aria-pressed={active}
-            disabled={disabled}
-            onClick={action}
-          >
-            <Icon aria-hidden="true" />
-          </Button>
-        ))}
-        <span className="toolbar-spacer" />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Undo editor change"
-          disabled={disabled || !editor.can().undo()}
-          onClick={() => editor.chain().focus().undo().run()}
-        >
-          <Undo2 aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Redo editor change"
-          disabled={disabled || !editor.can().redo()}
-          onClick={() => editor.chain().focus().redo().run()}
-        >
-          <Redo2 aria-hidden="true" />
-        </Button>
-      </div>
-      <EditorContent editor={editor} />
-    </div>
-  );
+  return <EditorContent editor={editor} />;
 }

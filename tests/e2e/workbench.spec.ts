@@ -2,53 +2,124 @@ import { expect, test, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import fs from 'node:fs';
 
+const sidebar = (page: Page) => page.getByRole('navigation', { name: 'Sidebar' });
+
+async function showSidebar(page: Page): Promise<boolean> {
+  await page.locator('.workbench').first().waitFor();
+  const hidden = await sidebar(page).isHidden();
+  if (hidden) await page.getByRole('button', { name: 'Show sidebar' }).click();
+  await expect(sidebar(page)).toBeVisible();
+  return hidden;
+}
+
+async function hideSidebar(page: Page) {
+  if (await sidebar(page).isVisible())
+    await page.getByRole('button', { name: 'Hide sidebar' }).click();
+  await expect(sidebar(page)).toBeHidden();
+}
+
+async function expectProject(page: Page, name: string) {
+  const wasHidden = await showSidebar(page);
+  await expect(
+    sidebar(page).getByRole('button', { name: `Project: ${name}. Show project menu` }),
+  ).toBeVisible();
+  if (wasHidden) await hideSidebar(page);
+}
+
 async function selectProject(page: Page, name: string) {
-  await expect(page.locator('.project-title strong')).toBeVisible();
-  if ((await page.locator('.project-title strong').textContent()) !== name) {
-    if (
-      (await page
-        .getByRole('button', { name: 'Toggle project navigation' })
-        .getAttribute('aria-expanded')) === 'false'
-    )
-      await page.getByRole('button', { name: 'Toggle project navigation' }).click();
-    await page.getByRole('button', { name, exact: true }).click();
+  const wasHidden = await showSidebar(page);
+  const trigger = sidebar(page).getByRole('button', { name: /Show project menu$/ });
+  await expect(trigger).toBeVisible();
+  if ((await trigger.getAttribute('aria-label')) !== `Project: ${name}. Show project menu`) {
+    await trigger.click();
+    await page.getByRole('menuitem', { name, exact: true }).click();
   }
-  await expect(page.locator('.project-title strong')).toHaveText(name);
+  await expect(
+    sidebar(page).getByRole('button', { name: `Project: ${name}. Show project menu` }),
+  ).toBeVisible();
+  if (wasHidden) await hideSidebar(page);
 }
 
 async function openNavigation(page: Page, destination: string) {
-  const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
-  if (await sidebar.isHidden())
-    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
-  await sidebar.getByRole('button', { name: destination, exact: true }).click();
+  await showSidebar(page);
+  await sidebar(page).getByRole('button', { name: destination, exact: true }).click();
 }
 
 async function openDocument(page: Page) {
   if (await page.locator('#prd-editor').isHidden()) await openNavigation(page, 'Document');
+  await expect(page.locator('#prd-editor')).toBeVisible();
 }
 
 async function openConversation(page: Page) {
-  await openNavigation(page, 'Conversation');
+  if (await page.locator('#conversation-workspace').isHidden())
+    await openNavigation(page, 'Conversation');
+  await expect(page.locator('#conversation-workspace')).toBeVisible();
 }
 
 async function openSettings(page: Page) {
   await openNavigation(page, 'AI settings');
+  await expect(page.getByRole('main', { name: 'AI settings', exact: true })).toBeVisible();
 }
 
 async function openHistory(page: Page) {
   await openNavigation(page, 'History');
+  await expect(page.getByRole('main', { name: 'History', exact: true })).toBeVisible();
 }
 
-async function closeSheet(page: Page, name: string) {
-  const sheet = page.getByRole('dialog', { name, exact: true });
-  await page
-    .getByRole('dialog', { name, exact: true })
-    .getByRole('button', { name: 'Close', exact: true })
-    .click();
-  await expect(sheet).toHaveCount(0);
+async function openSources(page: Page) {
+  await openNavigation(page, 'Sources');
+  await expect(page.getByRole('main', { name: 'Sources', exact: true })).toBeVisible();
 }
 
-test('production provider and model dialogs satisfy CSP and release scroll locks', async ({
+async function openStructures(page: Page) {
+  await openNavigation(page, 'Structures');
+  await expect(page.getByRole('main', { name: 'Structures', exact: true })).toBeVisible();
+}
+
+async function chooseScope(page: Page, label: string | RegExp) {
+  // Wait for any closing menu to finish its exit animation before opening a new one.
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Apply to/ }).click();
+  const menu = page.locator('[role="menu"][data-state="open"]');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('menuitemradio', { name: label }).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+}
+
+async function configureMockProvider(page: Page) {
+  await openSettings(page);
+  const settings = page.getByRole('main', { name: 'AI settings', exact: true });
+  await settings.getByRole('option', { name: /^OpenAI-compatible endpoint/ }).click();
+  await settings.getByLabel('Base URL').fill('http://127.0.0.1:4312/v1');
+  await settings.getByLabel('API key (optional)').fill('synthetic-session-key');
+  await settings.getByRole('button', { name: 'Check connection' }).click();
+  await expect(settings.getByLabel('Model name')).toHaveValue('synthetic-prd-model');
+  await settings.getByRole('button', { name: 'Use for this project' }).click();
+  await expect(settings.getByRole('button', { name: 'In use for this project' })).toBeVisible();
+}
+
+async function exportAs(page: Page, format: RegExp) {
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const sheet = page.getByRole('dialog', { name: 'Export', exact: true });
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole('radio', { name: format }).check();
+  await sheet.getByRole('button', { name: 'Export…' }).click();
+  await expect(sheet).toBeHidden();
+}
+
+async function removeSource(page: Page, name: string) {
+  await openSources(page);
+  await page.getByRole('option', { name: new RegExp(name.replace('.', '\\.')) }).click();
+  await page.getByRole('button', { name: 'Remove from project…' }).click();
+  const alert = page.getByRole('alertdialog');
+  await expect(alert).toContainText(name);
+  await alert.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(
+    page.getByRole('option', { name: new RegExp(name.replace('.', '\\.')) }),
+  ).toHaveCount(0);
+}
+
+test('production settings, menus and sheets satisfy CSP and release scroll locks', async ({
   page,
   request,
 }) => {
@@ -69,16 +140,26 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
   expect(created.ok()).toBe(true);
   await page.goto('/');
   await selectProject(page, name);
-  const sidebarSettings = page
-    .getByRole('complementary', { name: 'Project navigation' })
-    .getByRole('button', { name: 'AI settings', exact: true });
+  const sidebarSettings = sidebar(page).getByRole('button', { name: 'AI settings', exact: true });
   await sidebarSettings.focus();
   await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog', { name: 'AI settings', exact: true });
-  await expect(dialog).toBeVisible();
-  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+  const settings = page.getByRole('main', { name: 'AI settings', exact: true });
+  await expect(settings).toBeVisible();
   const nonce = await page.locator('meta[name="csp-style-nonce"]').getAttribute('content');
   expect(nonce).toBeTruthy();
+  await openConversation(page);
+  const composerModel = page.getByRole('button', { name: /Choose model$/ });
+  await composerModel.focus();
+  await page.keyboard.press('Enter');
+  const modelMenu = page.getByRole('menu', { name: /Choose model$/ });
+  await expect(modelMenu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(modelMenu).toBeHidden();
+  await expect(composerModel).toBeFocused();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const exportSheet = page.getByRole('dialog', { name: 'Export', exact: true });
+  await expect(exportSheet).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
   await expect(page.locator('style[nonce]').first()).toBeAttached();
   expect(
     await page
@@ -91,22 +172,8 @@ test('production provider and model dialogs satisfy CSP and release scroll locks
         ),
       ),
   ).toBe(true);
-  await dialog.getByRole('button', { name: 'Choose a model' }).click();
-  const modelDialog = page.getByRole('dialog', { name: 'Choose a model', exact: true });
-  await expect(modelDialog).toBeVisible();
-  await modelDialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(dialog).toBeHidden();
-  await expect(sidebarSettings).toBeFocused();
-  const composerModel = page.getByRole('button', { name: 'Choose connected model' });
-  await composerModel.focus();
-  await page.keyboard.press('Enter');
-  const connected = page.getByRole('dialog', { name: 'Connected models', exact: true });
-  await expect(connected).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(connected).toBeHidden();
-  await expect(composerModel).toBeFocused();
+  await expect(exportSheet).toBeHidden();
   await expect(page.getByRole('combobox', { name: 'Action', exact: true })).toHaveCount(0);
   await expect(
     page
@@ -142,12 +209,11 @@ test('creates a project with central conversation and an accessible document wor
   const createdProject = (await created.json()) as { id: string };
   await page.goto('/');
   await selectProject(page, projectName);
-  await expect(page.locator('.project-title strong')).toHaveText(projectName);
   await expect(page.getByLabel('Your instruction')).toBeVisible();
   await expect(page.locator('#prd-editor')).toBeHidden();
   await openDocument(page);
   await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Document outline' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Outline' })).toBeVisible();
   await expect(page.getByLabel('Section title').first()).toHaveValue('Problem');
 
   const accessibility = await new AxeBuilder({ page }).analyze();
@@ -178,11 +244,7 @@ test('exports the latest editor text and reopens it locally', async ({
   await openDocument(page);
   await page.getByLabel('Section content').first().fill('Latest unsaved requirement for the PDF.');
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
-  await page
-    .getByRole('dialog', { name: 'Export document' })
-    .getByRole('button', { name: 'PDF', exact: true })
-    .click();
+  await exportAs(page, /^PDF/);
   expect((await download).suggestedFilename()).toMatch(/\.pdf$/);
   const saved = (await (await request.get(`/api/projects/${project.id}/prd`)).json()) as {
     sections: Array<{ body: string }>;
@@ -206,41 +268,49 @@ test('saves and applies a custom project structure without dropping content', as
   const name = `Custom structure ${testInfo.project.name} ${crypto.randomUUID().slice(0, 8)}`;
   const created = await request.post('/api/projects', { data: { name } });
   expect(created.ok()).toBe(true);
+  const project = (await created.json()) as { id: string };
   await page.goto('/');
   await selectProject(page, name);
   await openDocument(page);
   await page.getByLabel('Section content').first().fill('Keep this confirmed problem.');
-  await page
-    .locator('.workspace-viewbar:visible')
-    .getByRole('button', { name: 'Structure', exact: true })
-    .click();
-  const picker = page.locator('.structure-picker');
-  await picker.getByRole('button', { name: 'Save or enter a structure' }).click();
-  await picker.getByLabel('Name', { exact: true }).fill('Client brief');
-  await picker
-    .getByLabel('Sections, one per line')
-    .fill(
-      'Problem | State the confirmed issue | required\nNext steps | Decisions and owners | optional',
-    );
-  await picker.getByRole('button', { name: 'Save structure' }).click();
-  await picker
-    .locator('.structure-option')
-    .filter({ hasText: 'Client brief' })
-    .getByRole('button', { name: 'Use' })
-    .click();
-  await closeSheet(page, 'Document structure');
-  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
-    'Next steps',
-  );
+  await openStructures(page);
+  await page.getByRole('button', { name: 'New structure' }).click();
+  await expect(page.getByLabel('Structure name')).toHaveValue(/^Structure \d+$/);
+  await page.getByLabel('Structure name').fill('Client brief');
+  await page.getByLabel('Section 1 title').fill('Problem');
+  await page.getByLabel('Section 1 purpose').fill('State the confirmed issue');
+  await page.getByRole('button', { name: 'Add section' }).click();
+  await page.getByLabel('Section 2 title').fill('Next steps');
+  await page.getByLabel('Section 2 purpose').fill('Decisions and owners');
+  await expect
+    .poll(
+      async () => {
+        const result = (await (
+          await request.get(`/api/projects/${project.id}/structures`)
+        ).json()) as {
+          structures: Array<{ name: string; sections: Array<{ title: string }> }>;
+        };
+        return result.structures
+          .find((item) => item.name === 'Client brief')
+          ?.sections.map((section) => section.title)
+          .join('|');
+      },
+      { timeout: 10_000 },
+    )
+    .toBe('Problem|Next steps');
+  await page.getByRole('button', { name: 'Use for this project…' }).click();
+  const alert = page.getByRole('alertdialog');
+  await expect(alert).toContainText('Client brief');
+  await alert.getByRole('button', { name: 'Use', exact: true }).click();
+  await openDocument(page);
+  await expect(page.getByRole('list', { name: 'Outline' })).toContainText('Next steps');
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Keep this confirmed problem.',
   );
   await page.reload();
   await selectProject(page, name);
   await openDocument(page);
-  await expect(page.getByRole('navigation', { name: 'Document outline' })).toContainText(
-    'Next steps',
-  );
+  await expect(page.getByRole('list', { name: 'Outline' })).toContainText('Next steps');
 });
 
 test('isolates provider drafts and discloses active and pending outbound hosts', async ({
@@ -299,25 +369,27 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
   await page.goto('/');
   await selectProject(page, projectName);
   await openSettings(page);
-  const dialog = page.getByRole('dialog', { name: 'AI settings' });
-  const providerSelect = dialog.getByRole('combobox').first();
+  const settings = page.getByRole('main', { name: 'AI settings', exact: true });
+  const pick = (provider: RegExp) => settings.getByRole('option', { name: provider }).click();
 
-  await providerSelect.selectOption('openai-compatible');
-  await expect(dialog.locator('.provider-host').first()).toContainText('models.saved.example.test');
-  await dialog.getByLabel('API key for this session').fill('replacement-compatible-key');
-  await expect(dialog.getByText('Re-enter the full endpoint')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Configure and discover' })).toBeDisabled();
-  await dialog.getByLabel('API key for this session').fill('');
-  await dialog.getByLabel('Endpoint').fill('https://models.example.test/v1');
-  await dialog.getByLabel('API key for this session').fill('old-compatible-key');
-  if (!(await dialog.getByLabel('Optional headers as JSON').isVisible()))
-    await dialog.getByText('Additional headers', { exact: true }).click();
-  await dialog.getByLabel('Optional headers as JSON').fill('{"X-Old-Provider":"retained"}');
+  await pick(/^OpenAI-compatible endpoint/);
+  await expect(settings.locator('.provider-host').first()).toContainText(
+    'models.saved.example.test',
+  );
+  await settings.getByLabel('API key (optional)').fill('replacement-compatible-key');
+  await expect(settings.getByText('Re-enter the full endpoint')).toBeVisible();
+  await expect(settings.getByRole('button', { name: 'Check connection' })).toBeDisabled();
+  await settings.getByLabel('API key (optional)').fill('');
+  await settings.getByLabel('Base URL').fill('https://models.example.test/v1');
+  await settings.getByLabel('API key (optional)').fill('old-compatible-key');
+  if (!(await settings.getByLabel('Optional headers as JSON').isVisible()))
+    await settings.getByText('Additional headers', { exact: true }).click();
+  await settings.getByLabel('Optional headers as JSON').fill('{"X-Old-Provider":"retained"}');
 
-  await providerSelect.selectOption('anthropic');
-  await expect(dialog.getByLabel('API key for this session')).toHaveValue('');
-  await expect(dialog.getByLabel('Endpoint')).toHaveCount(0);
-  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
+  await pick(/^Anthropic/);
+  await expect(settings.getByLabel('API key', { exact: true })).toHaveValue('');
+  await expect(settings.getByLabel('Base URL')).toHaveCount(0);
+  await expect(settings.getByLabel('Optional headers as JSON')).toHaveCount(0);
 
   let anthropicConfiguration: unknown;
   const anthropicKey = ['new', 'anthropic', 'key'].join('-');
@@ -344,39 +416,37 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
       body: JSON.stringify({ models: [{ id: 'claude-synthetic', name: 'Claude synthetic' }] }),
     }),
   );
-  await dialog.getByLabel('API key for this session').fill(anthropicKey);
-  const configureAnthropic = dialog.getByRole('button', { name: 'Configure and discover' });
-  await configureAnthropic.click();
-  await expect(providerSelect).toBeDisabled();
-  await expect(dialog.getByLabel('API key for this session')).toBeDisabled();
-  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeDisabled();
-  await page.keyboard.press('Escape');
-  await expect(dialog).toBeVisible();
+  await settings.getByLabel('API key', { exact: true }).fill(anthropicKey);
+  await settings.getByRole('button', { name: 'Check key' }).click();
+  await expect(
+    settings.getByRole('option', { name: /^OpenAI-compatible endpoint/ }),
+  ).toBeDisabled();
+  await expect(settings.getByLabel('API key', { exact: true })).toBeDisabled();
   releaseAnthropicConfiguration?.();
-  await expect(dialog.getByLabel('Or enter a model ID')).toHaveValue('claude-synthetic');
+  await expect(settings.getByLabel('Model name')).toHaveValue('claude-synthetic');
   expect(anthropicConfiguration).toEqual({ apiKey: anthropicKey });
 
-  await providerSelect.selectOption('openai-compatible');
-  await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
-  await expect(dialog.getByLabel('API key for this session')).toHaveValue('');
-  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveValue('');
-  await dialog.getByLabel('Endpoint').fill('https://remote.example.test/v1');
-  await dialog.getByLabel('API key for this session').fill('second-compatible-key');
-  if (!(await dialog.getByLabel('Optional headers as JSON').isVisible()))
-    await dialog.getByText('Additional headers', { exact: true }).click();
-  await dialog.getByLabel('Optional headers as JSON').fill('{"X-Remote":"true"}');
-  await dialog.getByLabel('Or enter a model ID').fill('manual-compatible');
-  await expect(dialog.getByRole('button', { name: 'Use provider' })).toBeDisabled();
-  await expect(dialog.locator('.provider-host').filter({ hasText: 'Pending' })).toContainText(
+  await pick(/^OpenAI-compatible endpoint/);
+  await expect(settings.getByLabel('Base URL')).toHaveValue('');
+  await expect(settings.getByLabel('API key (optional)')).toHaveValue('');
+  if (!(await settings.getByLabel('Optional headers as JSON').isVisible()))
+    await settings.getByText('Additional headers', { exact: true }).click();
+  await expect(settings.getByLabel('Optional headers as JSON')).toHaveValue('');
+  await settings.getByLabel('Base URL').fill('https://remote.example.test/v1');
+  await settings.getByLabel('API key (optional)').fill('second-compatible-key');
+  await settings.getByLabel('Optional headers as JSON').fill('{"X-Remote":"true"}');
+  await settings.getByLabel('Model name').fill('manual-compatible');
+  await expect(settings.getByRole('button', { name: 'Use for this project' })).toBeDisabled();
+  await expect(settings.locator('.provider-host').filter({ hasText: 'Pending' })).toContainText(
     'remote.example.test',
   );
 
-  await providerSelect.selectOption('ollama');
-  await expect(dialog.getByLabel('Endpoint')).toHaveValue('');
-  await expect(dialog.getByLabel('API key for this session')).toHaveCount(0);
-  await expect(dialog.getByLabel('Optional headers as JSON')).toHaveCount(0);
-  await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
-  await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
+  await pick(/^Ollama/);
+  await expect(settings.getByLabel(/^Host/)).toHaveValue('');
+  await expect(settings.getByLabel(/^API key/)).toHaveCount(0);
+  await expect(settings.getByLabel('Optional headers as JSON')).toHaveCount(0);
+  await expect(settings.locator('.provider-host')).toContainText('ollama.saved.example.test');
+  await expect(settings.locator('.provider-host')).not.toContainText('remote.example.test');
 
   let ollamaConfiguration: unknown;
   await page.route('**/api/session/providers/ollama', async (route) => {
@@ -397,18 +467,18 @@ test('isolates provider drafts and discloses active and pending outbound hosts',
       body: JSON.stringify({ models: [{ id: 'local-synthetic', name: 'Local synthetic' }] }),
     }),
   );
-  await dialog.getByRole('button', { name: /Configure and discover|Refresh models/ }).click();
-  await expect(dialog.getByLabel('Or enter a model ID')).toHaveValue('local-synthetic');
+  await settings.getByRole('button', { name: /^Check (connection|again)$/ }).click();
+  await expect(settings.getByLabel('Model name')).toHaveValue('local-synthetic');
   expect(ollamaConfiguration).toBeUndefined();
-  await expect(dialog.locator('.provider-host')).toContainText('ollama.saved.example.test');
-  await expect(dialog.locator('.provider-host')).not.toContainText('remote.example.test');
+  await expect(settings.locator('.provider-host')).toContainText('ollama.saved.example.test');
+  await expect(settings.locator('.provider-host')).not.toContainText('remote.example.test');
 
-  await dialog.getByLabel('Endpoint').fill('https://pending-close.example.test/v1');
-  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await settings.getByLabel(/^Host/).fill('https://pending-close.example.test/v1');
+  await openConversation(page);
   await openSettings(page);
-  const reopened = page.getByRole('dialog', { name: 'AI settings' });
-  await reopened.getByRole('combobox').first().selectOption('ollama');
-  await expect(reopened.getByLabel('Endpoint')).toHaveValue('');
+  const reopened = page.getByRole('main', { name: 'AI settings', exact: true });
+  await reopened.getByRole('option', { name: /^Ollama/ }).click();
+  await expect(reopened.getByLabel(/^Host/)).toHaveValue('');
   await expect(reopened.locator('.provider-host')).toContainText('ollama.saved.example.test');
   await expect(reopened.locator('.provider-host')).not.toContainText('pending-close.example.test');
 });
@@ -456,36 +526,43 @@ test('exports current AI evidence immediately and clears handoff selection bound
       { timeout: 15_000 },
     )
     .not.toBe('processing');
-  await closeSheet(page, 'Sources');
 
-  await openSettings(page);
-  const providerDialog = page.getByRole('dialog', { name: 'AI settings' });
-  await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
-  await providerDialog.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
-  await providerDialog.getByLabel('API key for this session').fill('synthetic-session-key');
-  await providerDialog.getByRole('button', { name: 'Configure and discover' }).click();
-  await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
-  await providerDialog.getByRole('button', { name: 'Use provider' }).click();
-
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await configureMockProvider(page);
+  await openConversation(page);
+  await chooseScope(page, /Problem/);
   await page.getByLabel('Your instruction').fill('Rewrite the problem using the current evidence.');
-  await page.getByLabel('Submit').click();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
   await page
     .getByRole('checkbox', {
       name: "I reviewed the supporting material and this proposal's claims.",
     })
     .check();
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Accept change' })).toBeEnabled();
 
-  await openHistory(page);
-  const evidenceCheckbox = page.getByRole('checkbox', { name: /handoff-evidence\.md/ });
+  const openHandoff = async () => {
+    await openHistory(page);
+    await page.getByRole('button', { name: 'Manual handoff…' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Manual handoff', exact: true });
+    await expect(sheet).toBeVisible();
+    return sheet;
+  };
+  const closeHandoff = async () => {
+    await page
+      .getByRole('dialog', { name: 'Manual handoff', exact: true })
+      .getByRole('button', { name: 'Cancel', exact: true })
+      .click();
+    await expect(page.getByRole('dialog', { name: 'Manual handoff', exact: true })).toBeHidden();
+  };
+
+  let sheet = await openHandoff();
+  const evidenceCheckbox = sheet.getByRole('checkbox', { name: /handoff-evidence\.md/ });
   await expect(evidenceCheckbox).toBeVisible();
   await evidenceCheckbox.check();
-  await page
-    .getByPlaceholder('Describe the draft, review, or rewrite you want ChatGPT to propose.')
+  await sheet
+    .getByLabel('Instruction')
     .fill('Rewrite the problem using only the selected evidence.');
   const handoffDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export request' }).click();
+  await sheet.getByRole('button', { name: 'Save as file…' }).click();
   const handoffPath = await (await handoffDownload).path();
   expect(handoffPath).toBeTruthy();
   const handoffRequest = JSON.parse(fs.readFileSync(handoffPath, 'utf8')) as {
@@ -497,10 +574,11 @@ test('exports current AI evidence immediately and clears handoff selection bound
       sourceName: 'handoff-evidence.md',
     }),
   ]);
+  await closeHandoff();
 
   await openConversation(page);
   await page.getByLabel('Your instruction').fill('Summarize the current evidence.');
-  await page.getByLabel('Submit').click();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect
     .poll(async () => {
       const result = (await (await request.get(`/api/projects/${project.id}/ai-runs`)).json()) as {
@@ -509,36 +587,37 @@ test('exports current AI evidence immediately and clears handoff selection bound
       return result.runs.length;
     })
     .toBe(2);
-  await openHistory(page);
-  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+  sheet = await openHandoff();
+  await expect(sheet.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+  await sheet.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
+  await closeHandoff();
 
-  await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
+  await page.getByRole('button', { name: 'AI runs', exact: true }).click();
   const rewriteRun = page
     .locator('.history-row')
-    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'Proposal · Problem' })
     .filter({ hasText: 'synthetic-prd-model' })
     .first();
-  await rewriteRun.getByRole('button', { name: 'Inspect' }).click();
-  await openHistory(page);
-  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+  await rewriteRun.click();
+  await page.getByRole('button', { name: 'Open in conversation' }).click();
+  await expect(page.getByRole('group', { name: 'Proposed change to Problem' })).toBeVisible();
+  sheet = await openHandoff();
+  await expect(sheet.getByRole('checkbox', { name: /handoff-evidence\.md/ })).not.toBeChecked();
+  await sheet.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
+  await closeHandoff();
 
-  await page.getByRole('checkbox', { name: /handoff-evidence\.md/ }).check();
   await selectProject(page, alternateName);
-  await expect(page.locator('.project-title strong')).toHaveText(alternateName);
   await selectProject(page, projectName);
-  await openHistory(page);
-  await expect(page.getByRole('checkbox', { name: /handoff-evidence\.md/ })).toHaveCount(0);
+  sheet = await openHandoff();
+  await expect(sheet.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await closeHandoff();
 
-  await page.getByRole('button', { name: 'Sources', exact: true }).first().click();
-  page.once('dialog', (dialog) => void dialog.accept());
-  await page.getByRole('button', { name: 'Delete handoff-evidence.md' }).click();
+  await removeSource(page, 'handoff-evidence.md');
+  await openHistory(page);
+  await page.getByRole('button', { name: 'AI runs', exact: true }).click();
   await expect(
-    page
-      .getByRole('dialog', { name: 'Sources', exact: true })
-      .getByText('handoff-evidence.md', { exact: true }),
-  ).toHaveCount(0);
-  await closeSheet(page, 'Sources');
-  await expect(page.locator('.handoff-row').first()).toContainText('stale');
+    page.locator('.history-row').filter({ hasText: 'Manual handoff' }).first(),
+  ).toContainText('Out of date');
   const runsAfterDeletion = (await (
     await request.get(`/api/projects/${project.id}/ai-runs`)
   ).json()) as {
@@ -564,15 +643,20 @@ test('exports current AI evidence immediately and clears handoff selection bound
   expect((await rejectedApply.json()) as { error: { code: string } }).toMatchObject({
     error: { code: 'stale_evidence' },
   });
-  const deletedEvidenceRun = page
+  await page
     .locator('.history-row')
-    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'Proposal · Problem' })
     .filter({ hasText: 'synthetic-prd-model' })
-    .first();
-  await deletedEvidenceRun.getByRole('button', { name: 'Inspect' }).click();
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeDisabled();
+    .first()
+    .click();
+  await page.getByRole('button', { name: 'Open in conversation' }).click();
+  const invalidProposal = page.getByRole('group', { name: 'Proposed change to Problem' });
+  await expect(invalidProposal).toBeVisible();
+  await expect(invalidProposal.getByRole('button', { name: 'Accept change' })).toHaveCount(0);
   await expect(
-    page.getByText('This proposal cannot be applied because its source evidence was deleted.'),
+    invalidProposal.getByText(
+      'This proposal cites an excerpt that isn’t in Sources. It can’t be applied.',
+    ),
   ).toBeVisible();
 });
 
@@ -598,39 +682,36 @@ test('keeps uncertain grounding visible and requires renewed source review befor
       '# Research\nEight of twelve product managers lost an unsaved PRD draft. Reconstruction took 23 minutes on average.',
     ),
   });
-  await closeSheet(page, 'Sources');
-  await openSettings(page);
-  const settings = page.getByRole('dialog', { name: 'AI settings' });
-  await settings.getByRole('combobox').first().selectOption('openai-compatible');
-  await settings.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
-  await settings.getByLabel('API key for this session').fill('synthetic-session-key');
-  await settings.getByRole('button', { name: 'Configure and discover' }).click();
-  await expect(settings.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
-  await settings.getByRole('button', { name: 'Use provider' }).click();
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await expect(page.getByRole('option', { name: /research\.md/ })).toContainText('Ready', {
+    timeout: 15_000,
+  });
+  await configureMockProvider(page);
+  await openConversation(page);
+  await chooseScope(page, /Problem/);
   await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
-  await page.getByLabel('Submit').click();
-  const notice = page.getByRole('region', { name: 'Grounding review' });
-  const apply = page.getByRole('button', { name: 'Apply to Problem' });
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const notice = page.getByRole('region', { name: 'Needs source review' });
+  const apply = page.getByRole('button', { name: 'Accept change' });
   const acknowledgement = page.getByRole('checkbox', {
     name: "I reviewed the supporting material and this proposal's claims.",
   });
   await expect(notice).toBeVisible();
   await expect(apply).toBeDisabled();
-  await notice.getByText(/Compare source excerpts/).click();
-  await expect(notice.locator('blockquote')).toContainText('Reconstruction took 23 minutes');
+  await expect(notice).toContainText('Reconstruction took 23 minutes');
   await acknowledgement.check();
   await expect(apply).toBeEnabled();
   await page.reload();
   await selectProject(page, name);
   await openHistory(page);
-  const row = page.locator('.history-row').filter({ hasText: 'rewrite on section' }).first();
-  await expect(row).toContainText('Grounding review required');
-  await row.getByRole('button', { name: 'Inspect' }).click();
+  await page.getByRole('button', { name: 'AI runs', exact: true }).click();
+  const row = page.locator('.history-row').filter({ hasText: 'Proposal · Problem' }).first();
+  await expect(row).toContainText('Needs source review');
+  await row.click();
+  await page.getByRole('button', { name: 'Open in conversation' }).click();
   await expect(acknowledgement).not.toBeChecked();
   await expect(apply).toBeDisabled();
   await acknowledgement.check();
-  await page.getByText('Revise proposal before applying').click();
+  await page.getByText('Edit…', { exact: true }).click();
   await page
     .getByLabel('Revised AI proposal')
     .fill('Eight of twelve product managers lost an unsaved PRD draft. Reviewed locally.');
@@ -638,7 +719,7 @@ test('keeps uncertain grounding visible and requires renewed source review befor
   await expect(apply).toBeDisabled();
   await acknowledgement.check();
   await apply.click();
-  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Accepted ·' })).toBeVisible();
   const runs = (await (await request.get(`/api/projects/${project.id}/ai-runs`)).json()) as {
     runs: Array<{ grounding: { status: string }; appliedRevision: number | null }>;
   };
@@ -650,6 +731,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   page,
   request,
 }, testInfo) => {
+  testInfo.setTimeout(90_000);
   await expect
     .poll(async () => (await request.get('/api/health')).status(), { timeout: 10_000 })
     .toBe(200);
@@ -674,69 +756,61 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
       '# Research\n\nEight of twelve product managers lost an unsaved PRD draft.\n\nReconstruction took 23 minutes on average.',
     ),
   });
-  await expect(
-    page
-      .getByRole('dialog', { name: 'Sources', exact: true })
-      .getByText('research.md', { exact: true }),
-  ).toBeVisible();
-  await closeSheet(page, 'Sources');
+  await expect(page.getByRole('option', { name: /research\.md/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /research\.md/ })).toContainText('Ready', {
+    timeout: 15_000,
+  });
 
-  await openSettings(page);
-  let providerDialog = page.getByRole('dialog', { name: 'AI settings' });
-  await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
-  await providerDialog.getByLabel('Endpoint').fill('http://127.0.0.1:4312/v1');
-  await providerDialog.getByLabel('API key for this session').fill('synthetic-session-key');
-  await providerDialog.getByRole('button', { name: 'Configure and discover' }).click();
-  await expect(providerDialog.getByLabel('Or enter a model ID')).toHaveValue('synthetic-prd-model');
-  await providerDialog.getByRole('button', { name: 'Use provider' }).click();
+  await configureMockProvider(page);
+  await openConversation(page);
 
   let chooserGenerationCalls = 0;
   const countGeneration = (request: import('@playwright/test').Request) => {
     if (request.url().endsWith('/api/ai/actions')) chooserGenerationCalls++;
   };
   page.on('request', countGeneration);
-  await page.getByRole('button', { name: 'Choose connected model' }).click();
-  const connectedModels = page.getByRole('dialog', { name: 'Connected models', exact: true });
-  await expect(
-    connectedModels
-      .getByRole('region', { name: 'Local / OpenAI-compatible', exact: true })
-      .getByText('On this Mac', { exact: true }),
-  ).toBeVisible();
-  await connectedModels.getByRole('button', { name: 'synthetic-prd-model', exact: true }).click();
-  await expect(connectedModels).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Choose connected model' })).toContainText(
-    'Local · synthetic-prd-model',
+  await page.getByRole('button', { name: /Choose model$/ }).click();
+  const modelMenu = page.getByRole('menu', { name: /Choose model$/ });
+  await expect(modelMenu).toBeVisible();
+  await expect(modelMenu.getByText('On this Mac', { exact: true })).toBeVisible();
+  await modelMenu
+    .getByRole('group', { name: 'On this Mac · OpenAI-compatible endpoint', exact: true })
+    .getByRole('menuitemradio', { name: /synthetic-prd-model/ })
+    .click();
+  await expect(modelMenu).toBeHidden();
+  await expect(page.getByRole('button', { name: /Choose model$/ })).toContainText(
+    'synthetic-prd-model',
   );
   expect(chooserGenerationCalls).toBe(0);
   page.off('request', countGeneration);
 
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await chooseScope(page, /Problem/);
   await page.getByLabel('Your instruction').fill('Make the problem evidence-led.');
-  await page.getByLabel('Submit').click();
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const proposal = page.getByRole('group', { name: 'Proposed change to Problem' });
+  const accept = page.getByRole('button', { name: 'Accept change' });
+  await expect(accept).toBeEnabled();
   await page.reload();
   await selectProject(page, projectName);
   await openHistory(page);
+  await page.getByRole('button', { name: 'AI runs', exact: true }).click();
   const durableRewrite = page
     .locator('.history-row')
-    .filter({ hasText: 'rewrite on section' })
+    .filter({ hasText: 'Proposal · Problem' })
     .filter({ hasText: 'synthetic-prd-model' })
     .first();
-  await expect(durableRewrite).toContainText('openai-compatible');
-  await expect(durableRewrite).toContainText('Revision 0');
-  await durableRewrite.getByRole('button', { name: 'Inspect' }).click();
-  await expect(
-    page.getByText('Proposed change · Based on version 0', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('document');
-  await expect(
-    page.getByText('Proposed change · Based on version 0', { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('section');
+  await expect(durableRewrite).toContainText('OpenAI-compatible endpoint');
+  await expect(durableRewrite).toContainText('Based on Version 0');
+  await durableRewrite.click();
+  await page.getByRole('button', { name: 'Open in conversation' }).click();
+  await expect(proposal).toBeVisible();
+  await expect(proposal).toContainText('Based on Version 0');
+  await expect(accept).toBeEnabled();
+  await chooseScope(page, 'Whole PRD');
+  await expect(proposal).toBeVisible();
+  await expect(proposal).toContainText('Based on Version 0');
+  await expect(accept).toBeEnabled();
+  await chooseScope(page, /Problem/);
   const beforeTargetSwitch = (await (
     await request.get(`/api/projects/${project.id}/prd`)
   ).json()) as { sections: Array<{ id: string; title: string; body: string }> };
@@ -747,23 +821,23 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   const contextEditor = page.locator(`#section-${contextSection.id}`);
   await openDocument(page);
   await page
-    .getByRole('navigation', { name: 'Document outline' })
-    .getByRole('link', { name: /Context$/ })
+    .getByRole('list', { name: 'Outline' })
+    .getByRole('link', { name: /^02 Context\b/ })
     .click();
   await openConversation(page);
-  await expect(page.locator('.scope-caption')).toContainText('Proposal target: Problem');
-  await expect(page.getByText('Target: Problem', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Apply to: Context' })).toBeVisible();
+  await expect(proposal).toBeVisible();
   await openDocument(page);
   await contextEditor.getByLabel('Section content').focus();
   await page.keyboard.insertText('Unsaved local edit must be preserved.');
   await openConversation(page);
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeDisabled();
+  await expect(accept).toBeDisabled();
   await openDocument(page);
   await contextEditor.getByLabel('Section content').focus();
-  await contextEditor.getByLabel('Undo editor change').click();
+  await page.getByRole('button', { name: 'Undo editor change' }).click();
   await expect(contextEditor.getByLabel('Section content')).toHaveText(contextBefore);
   await openConversation(page);
-  await expect(page.getByRole('button', { name: 'Apply to Problem' })).toBeEnabled();
+  await expect(accept).toBeEnabled();
   let releaseApply!: () => void;
   const heldApply = new Promise<void>((resolve) => {
     releaseApply = resolve;
@@ -772,23 +846,19 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     await heldApply;
     await route.continue();
   });
-  await page.getByText('Revise proposal before applying').click();
-  await page.getByRole('button', { name: 'Apply to Problem' }).click();
-  await expect(page.getByLabel('Section content').first()).toHaveAttribute(
-    'contenteditable',
-    'false',
-  );
-  await expect(page.getByLabel('Section title').first()).toBeDisabled();
+  await page.getByText('Edit…', { exact: true }).click();
+  await accept.click();
   await expect(page.getByLabel('Your instruction')).toBeDisabled();
   await expect(page.getByLabel('Revised AI proposal')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Dismiss proposal' })).toBeDisabled();
-  await expect(page.getByRole('combobox', { name: 'Apply to', exact: true })).toBeDisabled();
-  await expect(page.getByLabel('Submit', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Reject', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Apply to/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
   releaseApply();
-  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toContainText(
-    'proposal changed',
+  await expect(page.getByRole('status').filter({ hasText: 'Accepted ·' })).toContainText(
+    'Problem updated',
   );
   await page.unroute('**/api/projects/*/ai-runs/*/apply');
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Eight of twelve product managers lost an unsaved PRD draft',
   );
@@ -799,11 +869,11 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     contextBefore,
   );
   const appliedBody = persisted.sections[0]!.body;
-  await openDocument(page);
   await page
     .getByLabel('Section content')
     .first()
     .fill(`${appliedBody} Unsaved local work must survive revision controls.`);
+  await openConversation(page);
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
   expect(
     await page.evaluate(() => {
@@ -811,14 +881,20 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
       return window.dispatchEvent(event);
     }),
   ).toBe(false);
-  await page.getByLabel('Create project', { exact: true }).click();
-  await expect(page.getByRole('dialog', { name: 'New project', exact: true })).toBeVisible();
-  await closeSheet(page, 'New project');
+  await showSidebar(page);
+  await sidebar(page)
+    .getByRole('button', { name: /Show project menu$/ })
+    .click();
+  await page.getByRole('menuitem', { name: 'New project' }).click();
+  const newProject = page.getByRole('dialog', { name: 'New project', exact: true });
+  await expect(newProject).toBeVisible();
+  await newProject.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(newProject).toBeHidden();
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
   );
   await selectProject(page, alternateName);
-  await expect(page.locator('.project-title strong')).toHaveText(alternateName);
   const savedBeforeSwitch = (await (
     await request.get(`/api/projects/${project.id}/prd`)
   ).json()) as { sections: Array<{ body: string }> };
@@ -843,57 +919,49 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     buffer: Buffer.from('not imported'),
   });
   expect((await invalidImport).ok()).toBe(false);
-  await expect(page.locator('.project-title strong')).toHaveText(projectName);
+  await expectProject(page, projectName);
   const savedBeforeImport = (await (
     await request.get(`/api/projects/${project.id}/prd`)
   ).json()) as { sections: Array<{ body: string }> };
   expect(savedBeforeImport.sections[0]?.body).toContain('Further unsaved work.');
+  await openDocument(page);
   await page
     .getByLabel('Section content')
     .first()
     .fill(`${savedBeforeImport.sections[0]!.body} Keep work after failed import.`);
-  page.once('dialog', (dialog) => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message().toLowerCase()).toContain('discard unsaved changes');
-    void dialog.dismiss();
-  });
-  await page.getByRole('button', { name: 'Delete project' }).click();
-  await expect(page.locator('.project-title strong')).toHaveText(projectName);
+  await showSidebar(page);
+  await sidebar(page)
+    .getByRole('button', { name: /Show project menu$/ })
+    .click();
+  await page.getByRole('menuitem', { name: 'Delete project…' }).click();
+  const deleteAlert = page.getByRole('alertdialog');
+  await expect(deleteAlert).toContainText('discards unsaved changes');
+  await deleteAlert.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(deleteAlert).toBeHidden();
+  await expectProject(page, projectName);
+  await openDocument(page);
   await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await openConversation(page);
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
   );
 
   await openConversation(page);
-  await page.getByRole('combobox', { name: 'Apply to', exact: true }).selectOption('document');
+  await chooseScope(page, 'Whole PRD');
   await page.getByLabel('Your instruction').fill('Run the full structured review.');
-  await page.getByLabel('Submit', { exact: true }).click();
-  await expect(
-    page.getByText('Reconstruction took 23 minutes on average.', { exact: true }),
-  ).toBeVisible();
-  await openHistory(page);
-  const durableReview = page
-    .locator('.history-row')
-    .filter({ hasText: 'review on document' })
-    .filter({ hasText: 'synthetic-prd-model' })
-    .first();
-  await durableReview.getByRole('button', { name: 'Inspect' }).click();
-  await expect(page.getByRole('button', { name: /^Apply to/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const finding = page.locator('.finding').first();
+  await expect(finding).toBeVisible();
+  await expect(finding).toContainText('Reconstruction took 23 minutes on average.');
   await expect(page.getByLabel('Revised AI proposal')).toHaveCount(0);
-  await page
-    .locator('.workspace-viewbar:visible')
-    .getByRole('button', { name: /^Review findings/ })
-    .click();
-  await page.getByText('Inspect proposed diff').click();
+  await expect(page.locator('.finding')).toHaveCount(1);
   await openDocument(page);
   await page.getByLabel('Section content').first().fill('Unsaved review edit must be preserved.');
   await openConversation(page);
-  await page
-    .locator('.workspace-viewbar:visible')
-    .getByRole('button', { name: /^Review findings/ })
-    .click();
-  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
+  await expect(finding.getByRole('button', { name: 'Accept change' })).toBeDisabled();
   await expect
     .poll(async () => {
       const workspace = (await (
@@ -918,12 +986,7 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
   ).json()) as { sections: Array<{ body: string }> };
   await page.getByLabel('Section content').first().fill(savedBeforeRecovery.sections[0]!.body);
   await openConversation(page);
-  await page
-    .locator('.workspace-viewbar:visible')
-    .getByRole('button', { name: /^Review findings/ })
-    .click();
-  await page.getByText('Inspect proposed diff').click();
-  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeEnabled();
+  await expect(finding.getByRole('button', { name: 'Accept change' })).toBeEnabled();
   let releaseFinding!: () => void;
   const heldFinding = new Promise<void>((resolve) => {
     releaseFinding = resolve;
@@ -932,53 +995,45 @@ test('completes the provider, evidence, proposal, review, undo, and export workf
     await heldFinding;
     await route.continue();
   });
-  await page.getByRole('button', { name: 'Accept', exact: true }).click();
+  await finding.getByRole('button', { name: 'Accept change' }).click();
   await expect(page.locator('.finding-revision textarea')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeDisabled();
+  await expect(finding.getByRole('button', { name: 'Accept change' })).toBeDisabled();
+  await expect(finding.getByRole('button', { name: 'Reject', exact: true })).toBeDisabled();
   releaseFinding();
-  await expect(page.getByRole('status').filter({ hasText: 'A proposal changed' })).toContainText(
-    'proposal changed',
+  await expect(page.getByRole('status').filter({ hasText: 'Accepted ·' })).toContainText(
+    'Problem updated',
   );
   await page.unroute('**/api/projects/*/review-findings/*/accept');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Unsaved local work must survive revision controls.',
   );
 
-  await page.getByRole('button', { name: 'Run review' }).click();
-  await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Sources', exact: true }).first().click();
-  page.once('dialog', (dialog) => void dialog.accept());
-  await page.getByRole('button', { name: 'Delete research.md' }).click();
+  await openConversation(page);
+  await page.getByLabel('Your instruction').fill('Run the full structured review.');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(
-    page
-      .getByRole('dialog', { name: 'Sources', exact: true })
-      .getByText('research.md', { exact: true }),
-  ).toHaveCount(0);
-  await closeSheet(page, 'Sources');
-  const staleFinding = page.locator('article.finding').filter({ hasText: 'Status: stale' }).first();
+    page.locator('.finding').first().getByRole('button', { name: 'Accept change' }),
+  ).toBeVisible();
+  await removeSource(page, 'research.md');
+  await openConversation(page);
+  const staleFinding = page.locator('.finding').filter({ hasText: 'Status: stale' }).first();
   await expect(staleFinding).toBeVisible();
   await staleFinding.getByRole('button', { name: /research\.md/ }).click();
-  await expect(page.getByText('Historical snapshot, source deleted')).toBeVisible();
+  await expect(page.getByRole('main', { name: 'Sources', exact: true })).toBeVisible();
+  await expect(page.getByText('Source removed.', { exact: false })).toBeVisible();
 
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
-  await page
-    .getByRole('dialog', { name: 'Export document' })
-    .getByRole('button', { name: 'Markdown', exact: true })
-    .click();
+  await exportAs(page, /^Markdown/);
   expect((await download).suggestedFilename()).toMatch(/\.md$/);
-  await closeSheet(page, 'Export document');
 
   await openSettings(page);
-  providerDialog = page.getByRole('dialog', { name: 'AI settings' });
-  await providerDialog.getByRole('combobox').first().selectOption('openai-compatible');
-  await providerDialog.getByText('Data and credentials', { exact: true }).click();
-  await providerDialog.getByRole('button', { name: 'Clear session configuration' }).click();
-  await expect(
-    providerDialog.getByRole('button', { name: 'Configure and discover' }),
-  ).toBeVisible();
+  const settings = page.getByRole('main', { name: 'AI settings', exact: true });
+  await settings.getByRole('option', { name: /^OpenAI-compatible endpoint/ }).click();
+  await settings.getByRole('button', { name: 'Remove key' }).click();
+  await expect(settings.getByRole('button', { name: 'Remove key' })).toHaveCount(0);
+  await expect(settings.getByRole('button', { name: 'Check connection' })).toBeVisible();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -999,12 +1054,14 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
   await page.goto('/');
   await selectProject(page, projectName);
   await openHistory(page);
-  await page
-    .getByPlaceholder('Describe the draft, review, or rewrite you want ChatGPT to propose.')
+  await page.getByRole('button', { name: 'Manual handoff…' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Manual handoff', exact: true });
+  await sheet
+    .getByLabel('Instruction')
     .fill('Rewrite the problem using only the supplied synthetic context.');
 
   const requestDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export request' }).click();
+  await sheet.getByRole('button', { name: 'Save as file…' }).click();
   const requestPath = await (await requestDownload).path();
   expect(requestPath).toBeTruthy();
   const handoffRequest = JSON.parse(fs.readFileSync(requestPath, 'utf8')) as {
@@ -1033,11 +1090,11 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
     findings: [],
     hostModel: 'synthetic-chatgpt-model',
   };
-  await page.getByLabel('Import ChatGPT handoff response').setInputFiles({
-    name: 'response.json',
-    mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify(response)),
-  });
+  await sheet
+    .getByLabel('Paste the full response from the other chat tool')
+    .fill(JSON.stringify(response));
+  await sheet.getByRole('button', { name: 'Create proposal' }).click();
+  await expect(sheet).toBeHidden();
   await expect(page.getByText('Adds a concrete synthetic user problem.')).toBeVisible();
   let releaseHandoff!: () => void;
   const heldHandoff = new Promise<void>((resolve) => {
@@ -1047,30 +1104,37 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
     await heldHandoff;
     await route.continue();
   });
-  await page.getByRole('button', { name: 'Apply selected' }).click();
   const stagedHandoff = page.locator('.handoff-row').filter({
     hasText: 'Adds a concrete synthetic user problem.',
   });
+  await stagedHandoff.getByRole('button', { name: 'Accept change' }).click();
   await expect(stagedHandoff.getByRole('checkbox')).toBeDisabled();
   await expect(stagedHandoff.locator('textarea')).toBeDisabled();
-  await expect(stagedHandoff.getByRole('button', { name: 'Apply selected' })).toBeDisabled();
-  await expect(stagedHandoff.getByRole('button', { name: 'Delete handoff' })).toBeDisabled();
+  await expect(stagedHandoff.getByRole('button', { name: 'Accept change' })).toBeDisabled();
+  await expect(stagedHandoff.getByRole('button', { name: 'Reject', exact: true })).toBeDisabled();
   releaseHandoff();
+  await expect(page.getByRole('status').filter({ hasText: 'Accepted ·' })).toBeVisible();
+  await page.unroute('**/api/projects/*/chatgpt-handoffs/*/apply');
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).toContainText(
     'Working product managers',
   );
-  await page.unroute('**/api/projects/*/chatgpt-handoffs/*/apply');
-  await expect(page.getByText('Revision 1', { exact: true })).toBeVisible();
+  await openHistory(page);
+  await expect(page.getByRole('option', { name: /^Version 1\b/ })).toBeVisible();
 
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: 'Restore', exact: true }).last().click();
-  await expect(page.getByText('Revision 2', { exact: true })).toBeVisible();
+  await page.getByRole('option', { name: /^Version 0\b/ }).click();
+  await page.getByRole('button', { name: 'Restore Version 0…' }).click();
+  const restoreAlert = page.getByRole('alertdialog');
+  await expect(restoreAlert).toContainText('Restore Version 0?');
+  await restoreAlert.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(page.getByRole('option', { name: /^Version 2\b/ })).toBeVisible();
+  await openDocument(page);
   await expect(page.getByLabel('Section content').first()).not.toContainText(
     'Working product managers',
   );
 
   const archiveDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export archive' }).click();
+  await exportAs(page, /^Project archive/);
   const downloadedArchive = await archiveDownload;
   const archivePath = await downloadedArchive.path();
   expect(archivePath).toBeTruthy();
@@ -1087,7 +1151,7 @@ test('validates a ChatGPT handoff, durable history, revision restore, and archiv
       return projects.projects.filter((item) => item.name === projectName).length;
     })
     .toBe(2);
-  await expect(page.locator('.project-title strong')).toHaveText(projectName);
+  await expectProject(page, projectName);
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -1102,21 +1166,20 @@ for (const width of [320, 375, 414, 768]) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
     await selectProject(page, projectName);
-    const sidebar = page.getByRole('complementary', { name: 'Project navigation' });
-    const outline = page.getByRole('navigation', { name: 'Document outline' });
+    const outline = page.getByRole('list', { name: 'Outline' });
     await expect(outline).toBeHidden();
-    if (await sidebar.isVisible())
-      await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+    await hideSidebar(page);
     await expect(page.getByLabel('Your instruction')).toBeVisible();
     await openDocument(page);
     await expect(page.getByLabel('Section content').first()).toBeVisible();
+    await showSidebar(page);
     await expect(outline).toBeVisible();
-    await page.getByRole('button', { name: 'Toggle project navigation' }).click();
+    await hideSidebar(page);
     await expect(outline).toBeHidden();
     await openConversation(page);
     await expect(page.getByLabel('Your instruction')).toBeVisible();
     await openSettings(page);
-    await expect(page.getByRole('heading', { name: 'AI settings' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AI settings', exact: true })).toBeVisible();
     await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
     if (width === 768) {
       // Exercise the same preference flags supplied by the native shell,
@@ -1128,11 +1191,12 @@ for (const width of [320, 375, 414, 768]) {
           increaseContrast: 'true',
         });
       });
+      await page.getByRole('button', { name: 'Export', exact: true }).click();
       await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCSS(
         'background-color',
         'rgb(236, 236, 239)',
       );
-      await expect(page.getByRole('dialog', { name: 'AI settings', exact: true })).toHaveCSS(
+      await expect(page.getByRole('dialog', { name: 'Export', exact: true })).toHaveCSS(
         'animation-name',
         'none',
       );
@@ -1141,6 +1205,11 @@ for (const width of [320, 375, 414, 768]) {
           getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim(),
         ),
       ).toBe('#45454a');
+      await page
+        .getByRole('dialog', { name: 'Export', exact: true })
+        .getByRole('button', { name: 'Cancel', exact: true })
+        .click();
+      await expect(page.getByRole('dialog', { name: 'Export', exact: true })).toBeHidden();
     }
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);

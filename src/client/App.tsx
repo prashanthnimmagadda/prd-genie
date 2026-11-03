@@ -1,27 +1,41 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowDown,
-  ArrowUp,
-  BookOpenText,
-  Check,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  ArrowLeftRight,
+  Bold,
+  BookOpen,
   CircleAlert,
-  Download,
-  FilePlus2,
+  CircleCheck,
+  CircleX,
+  FilePlus,
   FolderOpen,
-  History,
+  Italic,
+  LifeBuoy,
+  List,
+  ListChecks,
+  ListOrdered,
+  CircleHelp,
   PanelLeft,
-  MessageSquare,
+  PanelRight,
   Paperclip,
-  Settings2,
-  FileText,
+  PenLine,
   Plus,
-  RotateCcw,
-  Save,
+  Redo2,
   SearchCheck,
-  Trash2,
-  Upload,
+  Share,
+  TriangleAlert,
+  Undo2,
+  WifiOff,
   X,
 } from 'lucide-react';
+import type { Editor } from '@tiptap/react';
 import type {
   AiAction,
   AiRunProposal,
@@ -35,43 +49,54 @@ import type {
   ReviewFinding,
   RevisionSummary,
   SourceSummary,
+  StructureSection,
+  StructureTemplate,
   WorkspaceState,
   WorkspaceTurn,
 } from '@shared/types';
+import { DEFAULT_STRUCTURE_SECTIONS } from '@shared/default-structure';
 import { api, ClientApiError, runAction } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { isNative, postShellState, readLocalPrompt } from '@/lib/native-shell';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { MessageResponse } from '@/components/ai-elements/message';
+import { providerIsLocal, providerLabels } from '@/lib/provider-display';
 import {
-  Conversation,
-  ConversationContent,
-  ConversationEmptyState,
-  ConversationScrollButton,
-} from '@/components/ai-elements/conversation';
-import {
-  Message,
-  MessageAction,
-  MessageActions,
-  MessageContent,
-  MessageResponse,
-} from '@/components/ai-elements/message';
-import {
-  PromptInput,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from '@/components/ai-elements/prompt-input';
-import { Source, Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources';
-import { SectionEditor } from '@/components/SectionEditor';
-import { ProviderDialog } from '@/components/ProviderDialog';
-import { ConnectedModelPicker } from '@/components/ConnectedModelPicker';
-import { isLocalProvider } from '@/lib/provider-display';
-import { StructurePanel } from '@/components/StructurePanel';
+  actionForInstruction,
+  countsSource,
+  formatBytes,
+  formatTime,
+  lineDiff,
+  messageFrom,
+  projectNameFromInstruction,
+  sectionNumber,
+  truncateText,
+} from '@/lib/format';
 import { exampleSource, exampleSourceName, fillExample } from '@/example-project';
-
-type PanelTab = 'assist' | 'review' | 'evidence' | 'history';
+import { Sidebar } from '@/components/workbench/Sidebar';
+import { destinationTitles, type Destination } from '@/lib/destinations';
+import { Composer } from '@/components/workbench/Composer';
+import {
+  AcceptedRow,
+  DiffView,
+  InvalidCitationRow,
+  ProposalCard,
+  ReviewBlock,
+  StaleRow,
+} from '@/components/workbench/cards';
+import {
+  SourcesView,
+  type EvidenceDetail,
+  type NotAddedFile,
+} from '@/components/workbench/SourcesView';
+import { HandoffSheet, HistoryView, type HistoryTab } from '@/components/workbench/HistoryView';
+import { SettingsView } from '@/components/workbench/SettingsView';
+import {
+  BUILT_IN_STRUCTURE_ID,
+  StructuresView,
+  type StructureEntry,
+} from '@/components/workbench/StructuresView';
+import { DocumentView } from '@/components/workbench/DocumentView';
 
 interface ProposalContext {
   sourceRunId: string | null;
@@ -84,7 +109,58 @@ interface ProposalContext {
   appliedRevision: number | null;
   targetSectionId: string | null;
   selectionText: string | null;
+  instruction?: string | null;
   grounding?: GroundingAssessment | null;
+}
+
+const SIDEBAR_KEY = 'prd-genie:sidebar-width';
+const INSPECTOR_KEY = 'prd-genie:inspector-open';
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(
+    () =>
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+      document.documentElement.dataset.reduceMotion === 'true',
+  );
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () =>
+      setReduce(query.matches || document.documentElement.dataset.reduceMotion === 'true');
+    query.addEventListener('change', update);
+    window.addEventListener('prd-accessibility', update);
+    return () => {
+      query.removeEventListener('change', update);
+      window.removeEventListener('prd-accessibility', update);
+    };
+  }, []);
+  return reduce;
 }
 
 export default function App() {
@@ -92,7 +168,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [importWarnings, setImportWarnings] = useState<Record<string, string[]>>({});
+  const [importNotices, setImportNotices] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void api
@@ -130,7 +206,11 @@ export default function App() {
         { cause: reason },
       );
     }
-    if (warnings.length) setImportWarnings((current) => ({ ...current, [project.id]: warnings }));
+    if (warnings.length)
+      setImportNotices((current) => ({
+        ...current,
+        [project.id]: `Not added: ${warnings.join(' ')}`,
+      }));
     setSelectedId(project.id);
   }
 
@@ -148,14 +228,24 @@ export default function App() {
 
   async function importProject(file: File) {
     let project: ProjectSummary;
-    if (file.name.toLowerCase().endsWith('.prdgenie.zip')) {
-      project = (await api.restoreProject(file)).project;
-    } else {
-      const imported = await api.importProject(file);
-      project = imported.project;
-      if (imported.warnings.length > 0) {
-        setImportWarnings((current) => ({ ...current, [project.id]: imported.warnings }));
+    try {
+      if (
+        file.name.toLowerCase().endsWith('.prdgenie.zip') ||
+        file.name.toLowerCase().endsWith('.prdgenie')
+      ) {
+        project = (await api.restoreProject(file)).project;
+      } else {
+        const imported = await api.importProject(file);
+        project = imported.project;
+        if (imported.warnings.length > 0) {
+          setImportNotices((current) => ({
+            ...current,
+            [project.id]: `Imported “${file.name}” as a new project. Check: ${imported.warnings.join(' ')}`,
+          }));
+        }
       }
+    } catch (reason) {
+      throw new Error(`Couldn’t import “${file.name}”: ${messageFrom(reason)}`, { cause: reason });
     }
     setProjects((current) => [project, ...current]);
     setSelectedId(project.id);
@@ -177,7 +267,7 @@ export default function App() {
   if (loading) {
     return (
       <main className="boot-state" aria-busy="true">
-        <BookOpenText aria-hidden="true" />
+        <BookOpen aria-hidden="true" />
         <p>Opening your local workspace</p>
       </main>
     );
@@ -185,18 +275,20 @@ export default function App() {
 
   if (error) {
     return (
-      <main className="boot-state error-state">
+      <main className="boot-state">
         <CircleAlert aria-hidden="true" />
         <h1>Workspace unavailable</h1>
         <p>{error}</p>
-        <Button onClick={() => window.location.reload()}>Retry</Button>
+        <button type="button" className="btn" onClick={() => window.location.reload()}>
+          Retry
+        </button>
       </main>
     );
   }
 
   if (!selectedId) {
     return (
-      <EmptyWorkspace
+      <StartScreen
         onCreate={createProject}
         onImport={importProject}
         onExample={createExampleProject}
@@ -218,9 +310,9 @@ export default function App() {
         onProjectImport={importProject}
         onProjectChange={updateProject}
         onProjectDelete={deleteProject}
-        importWarnings={importWarnings[project.id] ?? []}
-        onDismissImportWarnings={() =>
-          setImportWarnings((current) => {
+        importNotice={importNotices[project.id] ?? ''}
+        onDismissImportNotice={() =>
+          setImportNotices((current) => {
             const next = { ...current };
             delete next[project.id];
             return next;
@@ -231,7 +323,7 @@ export default function App() {
   );
 }
 
-function EmptyWorkspace({
+function StartScreen({
   onCreate,
   onImport,
   onExample,
@@ -240,7 +332,6 @@ function EmptyWorkspace({
   onImport: (file: File) => Promise<void>;
   onExample: () => Promise<void>;
 }) {
-  const [name, setName] = useState('');
   const [instruction, setInstruction] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
@@ -248,121 +339,204 @@ function EmptyWorkspace({
   const importRef = useRef<HTMLInputElement | null>(null);
   const sourcesRef = useRef<HTMLInputElement | null>(null);
   const instructionRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const perform = useCallback(
+    async (operation: () => Promise<void>) => {
+      if (busy) return;
+      setBusy(true);
+      setError('');
+      try {
+        await operation();
+      } catch (reason) {
+        setError(messageFrom(reason));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy],
+  );
+
   useEffect(() => {
     postShellState({
       title: 'PRD Genie',
-      subtitle: 'Local workspace',
+      subtitle: '',
       dirty: false,
       busy,
       recoveryPending: Boolean(instruction || files.length),
       hasProject: false,
     });
+  }, [busy, instruction, files.length]);
+
+  useEffect(() => {
     const command = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === 'new-project') instructionRef.current?.focus();
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === 'new-project') instructionRef.current?.focus();
+      if (detail === 'import') importRef.current?.click();
+    };
+    const keyboard = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || isNative) return;
+      if (event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        importRef.current?.click();
+      }
+      if (event.key.toLowerCase() === 'n' && event.shiftKey) {
+        event.preventDefault();
+        void perform(() => onCreate('Untitled project'));
+      }
     };
     window.addEventListener('prd-command', command);
-    return () => window.removeEventListener('prd-command', command);
-  }, [busy, instruction, files.length]);
-  async function perform(operation: () => Promise<void>) {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      await operation();
-    } catch (reason) {
-      setError(messageFrom(reason));
-    } finally {
-      setBusy(false);
-    }
+    window.addEventListener('keydown', keyboard);
+    return () => {
+      window.removeEventListener('prd-command', command);
+      window.removeEventListener('keydown', keyboard);
+    };
+  }, [perform, onCreate]);
+
+  useEffect(() => {
+    const element = instructionRef.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(264, Math.max(66, element.scrollHeight))}px`;
+  }, [instruction]);
+
+  function create() {
+    void perform(() => onCreate(projectNameFromInstruction(instruction), instruction, files));
   }
+
   return (
-    <main className="onboarding" aria-busy={busy}>
-      <BookOpenText className="onboarding-mark" aria-hidden="true" />
-      <h1>Start with instructions or material.</h1>
-      <p className="onboarding-copy">
-        Describe a product, review a PRD, or bring a question. Your instructions and material stay
-        together in a local project.
-      </p>
-      <form
-        className="create-project"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void perform(() => onCreate(name.trim() || 'Untitled project', instruction, files));
-        }}
-      >
-        <label className="visually-hidden" htmlFor="first-instruction">
-          Your instruction
-        </label>
-        <textarea
-          id="first-instruction"
-          ref={instructionRef}
-          value={instruction}
-          onChange={(event) => setInstruction(event.target.value)}
-          placeholder="What would you like to work on?"
-          maxLength={20000}
-          disabled={busy}
-        />
-        {files.length > 0 && (
-          <ul className="pending-sources">
-            {files.map((file, index) => (
-              <li key={`${file.name}-${index}`}>
-                <Paperclip aria-hidden="true" />
-                <span>{file.name}</span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  aria-label={`Remove ${file.name}`}
-                  onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="start-actions">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => sourcesRef.current?.click()}
-          >
-            <Paperclip aria-hidden="true" />
-            Add material
-          </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Opening…' : 'Open workspace'}
-          </Button>
+    <main className="start" aria-label="Start" aria-busy={busy}>
+      <div className="start-inner">
+        <div className="start-heading">
+          <span className="t-label" style={{ fontSize: 13, lineHeight: '18px' }}>
+            PRD Genie
+          </span>
+          <h1>What are you working on?</h1>
+          <p>
+            Describe a product, paste rough notes or ask for a review. Your project stays on this
+            Mac.
+          </p>
         </div>
-        <details>
-          <summary>
-            Name this project <span className="muted">(optional)</span>
-          </summary>
-          <label className="visually-hidden" htmlFor="project-name">
-            Project name
+        <form
+          className="composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            create();
+          }}
+        >
+          <label className="visually-hidden" htmlFor="first-instruction">
+            Your instruction
           </label>
-          <input
-            id="project-name"
-            value={name}
-            placeholder="Untitled project"
-            maxLength={120}
-            onChange={(event) => setName(event.target.value)}
+          <textarea
+            id="first-instruction"
+            ref={instructionRef}
+            value={instruction}
+            autoFocus
+            rows={3}
+            style={{ minHeight: 66 }}
+            onChange={(event) => setInstruction(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                create();
+              }
+            }}
+            placeholder="For example: a scheduler that helps coordinators find a time and a free room"
+            maxLength={20000}
             disabled={busy}
           />
-        </details>
-      </form>
-      <p className="sheet-note">
-        Nothing is sent to AI until you choose a provider and send an instruction.
-      </p>
-      <div className="start-alternatives">
-        <Button variant="ghost" disabled={busy} onClick={() => importRef.current?.click()}>
-          <FilePlus2 aria-hidden="true" />
-          Open an existing PRD
-        </Button>
-        <Button variant="ghost" disabled={busy} onClick={() => void perform(onExample)}>
-          <BookOpenText aria-hidden="true" />
-          Explore an example
-        </Button>
+          {files.length > 0 && (
+            <ul className="pending-files">
+              {files.map((file, index) => (
+                <li key={`${file.name}-${index}`}>
+                  <Paperclip aria-hidden="true" />
+                  <span>{file.name}</span>
+                  <button
+                    type="button"
+                    className="btn btn-icon"
+                    style={{ width: 20, height: 20 }}
+                    disabled={busy}
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}
+                  >
+                    <X aria-hidden="true" style={{ width: 12, height: 12 }} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="composer-row">
+            <button
+              type="button"
+              className="chip"
+              style={{ fontSize: 13 }}
+              disabled={busy}
+              onClick={() => sourcesRef.current?.click()}
+            >
+              <Paperclip aria-hidden="true" />
+              Add material…
+            </button>
+            <span style={{ flex: 1 }} />
+            <span className="t-secondary" style={{ fontSize: 11 }} aria-hidden="true">
+              ⌘↩
+            </span>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy}
+              style={{ marginLeft: 4 }}
+            >
+              Create project
+            </button>
+          </div>
+        </form>
+        <div className="start-options">
+          <span className="t-label">Other ways to start</span>
+          <button
+            type="button"
+            className="start-option"
+            disabled={busy}
+            onClick={() => importRef.current?.click()}
+          >
+            <FolderOpen aria-hidden="true" />
+            <span>Open an existing PRD or archive…</span>
+            <span className="t-secondary">Markdown, Word, text or .prdgenie</span>
+            <span className="t-secondary" aria-hidden="true">
+              ⌘O
+            </span>
+          </button>
+          <button
+            type="button"
+            className="start-option"
+            disabled={busy}
+            onClick={() => void perform(onExample)}
+          >
+            <BookOpen aria-hidden="true" />
+            <span>Explore the example</span>
+            <span className="t-secondary">A fictional meeting-scheduler PRD</span>
+          </button>
+          <button
+            type="button"
+            className="start-option"
+            disabled={busy}
+            onClick={() => void perform(() => onCreate('Untitled project'))}
+          >
+            <FilePlus aria-hidden="true" />
+            <span>Blank PRD</span>
+            <span className="t-secondary">Default 13-section structure</span>
+            <span className="t-secondary" aria-hidden="true">
+              ⇧⌘N
+            </span>
+          </button>
+        </div>
+        {error && (
+          <p className="t-secondary start-footnote" role="alert" style={{ color: 'var(--danger)' }}>
+            {error}
+          </p>
+        )}
+        <p className="t-secondary start-footnote">
+          No account needed. Editing, history and export work offline. Nothing is sent to AI until
+          you choose a model and press Send.
+        </p>
       </div>
       <input
         ref={sourcesRef}
@@ -383,22 +557,13 @@ function EmptyWorkspace({
         type="file"
         hidden
         aria-label="Import PRD file"
-        accept=".md,.markdown,.docx,.txt,.prdgenie.zip"
+        accept=".md,.markdown,.docx,.txt,.prdgenie.zip,.prdgenie"
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file) void perform(() => onImport(file));
           event.target.value = '';
         }}
       />
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      <p className="disk-note">
-        No account required. Editing, history and export work offline. Local files rely on your
-        Mac’s disk protection.
-      </p>
     </main>
   );
 }
@@ -411,9 +576,18 @@ interface WorkbenchProps {
   onProjectImport: (file: File) => Promise<void>;
   onProjectChange: (project: ProjectSummary) => void;
   onProjectDelete: (id: string) => Promise<void>;
-  importWarnings: string[];
-  onDismissImportWarnings: () => void;
+  importNotice: string;
+  onDismissImportNotice: () => void;
 }
+
+type AlertKind =
+  | { kind: 'delete-project' }
+  | { kind: 'remove-source'; source: SourceSummary }
+  | { kind: 'remove-section'; sectionId: string }
+  | { kind: 'restore'; revision: RevisionSummary }
+  | { kind: 'use-structure'; entry: StructureEntry }
+  | { kind: 'delete-structure'; structure: StructureTemplate }
+  | { kind: 'discard-recovery' };
 
 function Workbench({
   project,
@@ -423,9 +597,53 @@ function Workbench({
   onProjectImport,
   onProjectChange,
   onProjectDelete,
-  importWarnings,
-  onDismissImportWarnings,
+  importNotice,
+  onDismissImportNotice,
 }: WorkbenchProps) {
+  const viewport = useViewportWidth();
+  const reduceMotion = useReduceMotion();
+  const narrow = viewport < 900;
+  const inspectorOverlay = viewport < 1180;
+
+  const [destination, setDestinationState] = useState<Destination>('conversation');
+  const [sidebarOpen, setSidebarOpen] = useState(() => !(window.innerWidth < 900));
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = Number(readStored(SIDEBAR_KEY));
+    return stored >= 200 && stored <= 320 ? stored : 240;
+  });
+  const [inspectorOpen, setInspectorOpen] = useState(() => readStored(INSPECTOR_KEY) === 'true');
+  const [historyTab, setHistoryTab] = useState<HistoryTab>('revisions');
+  const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [notAdded, setNotAdded] = useState<NotAddedFile[]>([]);
+  const [alert, setAlert] = useState<AlertKind | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'markdown' | 'docx' | 'pdf' | 'archive'>(
+    'markdown',
+  );
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(project.name);
+  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [structures, setStructures] = useState<StructureTemplate[]>([]);
+  const [structureSelection, setStructureSelection] = useState<string>('');
+  const [flashSectionId, setFlashSectionId] = useState<string | null>(null);
+  const [acceptedInfo, setAcceptedInfo] = useState<{ section: string; revision: number } | null>(
+    null,
+  );
+  const [rejectedSection, setRejectedSection] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string>('');
+  const [stoppedAt, setStoppedAt] = useState<string>('');
+  const [queued, setQueued] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState('');
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
+  const [toolbarScrolled, setToolbarScrolled] = useState(false);
+
   const [turns, setTurns] = useState<WorkspaceTurn[]>([]);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
@@ -461,46 +679,17 @@ function Workbench({
     context: ProposalContext;
     text: string;
   } | null>(null);
-  const [tab, setPanelTab] = useState<PanelTab>('assist');
-  const setTab = useCallback((next: PanelTab) => {
-    setGroundingAcknowledgement(null);
-    setPanelTab(next);
-  }, []);
-  const [railOpen, setRailOpen] = useState(true);
-  const [documentOpen, setDocumentVisibility] = useState(false);
-  const setDocumentOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
-    setGroundingAcknowledgement(null);
-    setDocumentVisibility(next);
-  }, []);
-  const [sourcesOpen, setSourcesVisibility] = useState(false);
-  const setSourcesOpen = useCallback((next: boolean) => {
-    setGroundingAcknowledgement(null);
-    setSourcesVisibility(next);
-  }, []);
-  const [structureOpen, setStructureVisibility] = useState(false);
-  const setStructureOpen = useCallback((next: boolean) => {
-    setGroundingAcknowledgement(null);
-    setStructureVisibility(next);
-  }, []);
-  const [exportOpen, setExportVisibility] = useState(false);
-  const setExportOpen = useCallback((next: boolean) => {
-    setGroundingAcknowledgement(null);
-    setExportVisibility(next);
-  }, []);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
   const [uploading, setUploading] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
   const [submittedPrompt, setSubmittedPrompt] = useState('');
   const [activitySequence, setActivitySequence] = useState(0);
   const [stalled, setStalled] = useState(false);
   const [storageError, setStorageError] = useState('');
-  const [providerOpen, setProviderOpen] = useState(false);
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [providerState, setActiveProviderState] = useState<ProviderState | null>(null);
   const activeProviderState =
     providerState?.provider === project.selectedProvider ? providerState : null;
-  const [scope, setScope] = useState<ActionScope>('document');
+  const [scope, setScopeState] = useState<ActionScope>('document');
+  const scopeBeforeSelection = useRef<ActionScope>('document');
   const [output, setOutput] = useState('');
   const [prompt, setPrompt] = useState(() => readLocalPrompt(project.id));
   const [interrupted, setInterrupted] = useState(false);
@@ -521,22 +710,61 @@ function Workbench({
   const [documentMutationBusy, setDocumentMutationBusy] = useState(false);
   const [error, setError] = useState('');
   const [offline, setOffline] = useState(!navigator.onLine);
-  const [evidenceDetail, setEvidenceDetail] = useState<{
-    locator: string;
-    content: string;
-    excerpt: string;
-    available: boolean;
-  } | null>(null);
+  const [evidenceDetail, setEvidenceDetail] = useState<EvidenceDetail | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const [findingDrafts, setFindingDrafts] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
-  const handoffInputRef = useRef<HTMLInputElement | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const documentMutationRef = useRef(false);
+  const editors = useRef(new Map<string, Editor>());
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  const setDestination = useCallback(
+    (next: Destination) => {
+      setGroundingAcknowledgement(null);
+      setDestinationState(next);
+      if (narrow) setSidebarOpen(false);
+      if (next !== 'sources') setEvidenceDetail(null);
+    },
+    [narrow],
+  );
+
+  const setScope = useCallback((next: ActionScope, targetSectionId?: string | null) => {
+    setScopeState(next);
+    if (next !== 'selection') scopeBeforeSelection.current = next;
+    if (targetSectionId) setSelectedSectionId(targetSectionId);
+  }, []);
+
+  // Apply to follows a text selection in Document and returns when it clears.
+  useEffect(() => {
+    if (selection.trim()) {
+      setScopeState((current) => {
+        if (current !== 'selection') scopeBeforeSelection.current = current;
+        return 'selection';
+      });
+    } else {
+      setScopeState((current) =>
+        current === 'selection' ? scopeBeforeSelection.current : current,
+      );
+    }
+  }, [selection]);
 
   useEffect(() => {
-    if (providerOpen || !project.selectedProvider) return;
+    writeStored(SIDEBAR_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+  useEffect(() => {
+    writeStored(INSPECTOR_KEY, String(inspectorOpen));
+  }, [inspectorOpen]);
+  useEffect(() => {
+    if (narrow) setSidebarOpen(false);
+    else setSidebarOpen(true);
+  }, [narrow]);
+
+  useEffect(() => {
+    if (destination === 'settings' || !project.selectedProvider) return;
     let current = true;
     void api
       .providerStates()
@@ -552,7 +780,7 @@ function Workbench({
     return () => {
       current = false;
     };
-  }, [providerOpen, project.selectedProvider]);
+  }, [destination, project.selectedProvider]);
 
   useEffect(() => {
     const onOnline = () => setOffline(false);
@@ -607,19 +835,40 @@ function Workbench({
           setHandoffInstruction(workspace.handoffInstruction ?? '');
           setHandoffDrafts(workspace.handoffDrafts ?? {});
           setProposalDraft(workspace.proposal);
-          if (workspace.proposal) {
-            const run = runResult.runs.find((item) => item.id === workspace.proposal?.runId);
-            setOutput(workspace.proposal.text);
+          const savedProposal = workspace.proposal;
+          if (savedProposal?.text) {
+            const run = runResult.runs.find((item) => item.id === savedProposal.runId);
+            setOutput(savedProposal.text);
             if (run) {
               setCitations(run.citations);
-              setProposalContext(contextForRun(run, document.revision));
+              setProposalContext(contextForRun(run, document.revision, workspace.turns));
               setActiveTurnId(workspace.turns.find((turn) => turn.runId === run.id)?.id ?? null);
             }
+          } else if (!savedProposal) {
+            // No saved edit or rejection: the latest unapplied proposal stays open in the conversation.
+            const lastTurn = workspace.turns[workspace.turns.length - 1];
+            const run = lastTurn?.runId
+              ? runResult.runs.find((item) => item.id === lastTurn.runId)
+              : undefined;
+            if (
+              lastTurn &&
+              run &&
+              (run.action === 'draft' || run.action === 'rewrite') &&
+              run.status === 'completed' &&
+              run.appliedRevision === null &&
+              run.outputText
+            ) {
+              setOutput(run.outputText);
+              setCitations(run.citations);
+              setProposalContext(contextForRun(run, document.revision, workspace.turns));
+              setActiveTurnId(lastTurn.id);
+            }
           }
-          if (workspace.revision > 0) setPrompt(workspace.prompt);
+          if (workspace.revision > 0) {
+            setPrompt(workspace.prompt);
+            if (workspace.prompt.trim()) setDraftRestored(true);
+          }
           recoveryRevision.current = workspace.revision;
-          // Opening a saved workspace is read-only. Establish the persisted
-          // baseline before autosave so another viewer cannot create a conflict.
           const recoveredKey = JSON.stringify({
             prompt: workspace.prompt,
             turns: workspace.turns,
@@ -653,6 +902,32 @@ function Workbench({
     }, 1500);
     return () => window.clearInterval(timer);
   }, [project.id, sources]);
+
+  const structuresVisible = destination === 'structures';
+  useEffect(() => {
+    let current = true;
+    void api
+      .structures(project.id)
+      .then((result) => {
+        if (!current) return;
+        setStructures(result.structures);
+        setStructureSelection((selected) => {
+          if (
+            selected &&
+            (selected === BUILT_IN_STRUCTURE_ID ||
+              result.structures.some((item) => item.id === selected))
+          )
+            return selected;
+          return result.selectedStructureId ?? result.structures[0]?.id ?? BUILT_IN_STRUCTURE_ID;
+        });
+      })
+      .catch((reason: unknown) => {
+        if (current) setError(messageFrom(reason));
+      });
+    return () => {
+      current = false;
+    };
+  }, [structuresVisible, project.id]);
 
   const dirty = useMemo(
     () =>
@@ -707,8 +982,6 @@ function Workbench({
     return () => window.removeEventListener('beforeunload', warnBeforeUnload);
   }, [dirty, recoveryPending, busy]);
 
-  const selectedSection = prd?.sections.find((section) => section.id === selectedSectionId);
-
   async function runDocumentMutation<T>(operation: () => Promise<T>): Promise<T | undefined> {
     if (documentMutationRef.current) return undefined;
     if (recoveryUnavailable) return undefined;
@@ -741,14 +1014,16 @@ function Workbench({
       if (!saved) return null;
       setPrd(saved);
       setSavedPrd(saved);
+      setSaveFailed('');
       if (recoverySnapshot.current)
         recoverySnapshot.current = { ...recoverySnapshot.current, draft: null };
       setUndoRevision(null);
+      setAcceptedInfo(null);
       setFindings((current) => current.map((finding) => ({ ...finding, status: 'stale' })));
       void api.revisions(project.id).then((result) => setRevisions(result.revisions));
       return saved;
     } catch (reasonCaught) {
-      setError(messageFrom(reasonCaught));
+      setSaveFailed(messageFrom(reasonCaught));
       return null;
     } finally {
       setSaveBusy(false);
@@ -762,7 +1037,7 @@ function Workbench({
       setRecoveryOpen(true);
       return;
     }
-    setExportStatus('Preparing the latest document…');
+    setExportStatus('');
     if (dirty && !(await save('Saved before export'))) {
       setExportStatus(
         'Export paused because the document could not be saved. Your edits are still here.',
@@ -774,28 +1049,55 @@ function Workbench({
     document.body.append(link);
     link.click();
     link.remove();
-    setExportStatus(
-      isNative
-        ? 'Choose where to save the exported file.'
-        : 'Export requested. Check your browser downloads.',
-    );
+    setExportOpen(false);
+    setExportStatus(isNative ? '' : 'Export requested. Check your browser downloads.');
+  }
+
+  function describeFailure(reason: unknown): string {
+    const provider = project.selectedProvider
+      ? providerLabels[project.selectedProvider]
+      : 'The provider';
+    if (reason instanceof ClientApiError) {
+      switch (reason.code) {
+        case 'invalid_credentials':
+        case 'missing_credentials':
+          return `${provider} rejected the key. Update it in AI settings.`;
+        case 'rate_limit':
+          return `${provider} reports a usage limit. Nothing was changed.`;
+        case 'network_failure':
+        case 'provider_unavailable':
+          return project.selectedProvider === 'ollama'
+            ? 'Ollama isn’t running. Start Ollama, then try again.'
+            : `${provider} didn’t respond. Nothing was changed, and your instruction is back in the composer.`;
+        case 'sign_in_required':
+          return 'ChatGPT sign-in expired. Sign in again to use your ChatGPT plan.';
+        default:
+          return reason.message;
+      }
+    }
+    if (reason instanceof DOMException && reason.name === 'TimeoutError')
+      return `${provider} didn’t respond within 60 seconds. Nothing was changed, and your instruction is back in the composer.`;
+    return messageFrom(reason);
   }
 
   async function submitAction(
     instruction: string,
-    override?: { action: AiAction; scope: ActionScope },
-  ) {
-    if (documentMutationRef.current) return;
-    if (recoveryUnavailable) return;
+    override?: { action: AiAction; scope: ActionScope; targetSectionId?: string | null },
+  ): Promise<boolean> {
+    if (documentMutationRef.current) return false;
+    if (recoveryUnavailable) return false;
     if (recoveryConflict) {
       setRecoveryOpen(true);
-      return;
+      return false;
     }
     if (!prd || !project.selectedProvider || !project.selectedModel) {
-      setProviderOpen(true);
-      return;
+      setDestination('settings');
+      return false;
     }
-    if (busy) return false;
+    if (busy) {
+      setQueued(instruction);
+      return false;
+    }
     if (instruction.length > 10000) {
       setError(
         'Keep the instruction under 10,000 characters. Add longer material as a source; your text is retained.',
@@ -805,27 +1107,31 @@ function Workbench({
     const requestedAction = override?.action ?? actionForInstruction(instruction, prd);
     const requestedScope = override?.scope ?? scope;
     const requestedTargetSectionId =
-      requestedScope === 'document' ? null : selectedSectionId || null;
+      requestedScope === 'document'
+        ? null
+        : (override?.targetSectionId ?? selectedSectionId ?? null);
     const requestedSelectionText = requestedScope === 'selection' ? selection : null;
     if (!requestedTargetSectionId && requestedScope !== 'document') {
-      setError('Choose a target section before running this action.');
-      return;
+      setError('Choose a section in the Apply to menu before sending.');
+      return false;
     }
     if (requestedScope === 'selection' && !requestedSelectionText?.trim()) {
-      setError('Select document text before running a selection action.');
-      return;
+      setError('Select text in Document first, or choose another Apply to option.');
+      return false;
     }
-    if (offline && !isLocalProvider(activeProviderState)) {
+    if (offline && !providerIsLocal(project.selectedProvider, activeProviderState)) {
       setError(
-        'This provider requires a network connection. A configured local model can work offline.',
+        'You’re offline. Online models can’t be used to send; models on this Mac still work.',
       );
-      return;
+      return false;
     }
     const savedBeforeAction = dirty ? await save('Saved before AI action') : prd;
-    if (!savedBeforeAction) return;
+    if (!savedBeforeAction) return false;
     const current = savedBeforeAction;
     setActiveReviewGrounding(null);
     setBusy(true);
+    setFailure('');
+    setStoppedAt('');
     setSubmittedPrompt(instruction.trim());
     const turnId = crypto.randomUUID();
     setActiveTurnId(turnId);
@@ -835,11 +1141,12 @@ function Workbench({
     ]);
     setActivitySequence((sequence) => sequence + 1);
     setStalled(false);
-    setDocumentOpen(false);
-    setTab('assist');
+    setDestination('conversation');
     setError('');
     setOutput('');
     setInterrupted(false);
+    setAcceptedInfo(null);
+    setRejectedSection(null);
     setProposalContext(
       requestedAction === 'draft' || requestedAction === 'rewrite'
         ? {
@@ -853,6 +1160,7 @@ function Workbench({
             appliedRevision: null,
             targetSectionId: requestedTargetSectionId,
             selectionText: requestedSelectionText,
+            instruction: instruction.trim(),
           }
         : null,
     );
@@ -891,9 +1199,17 @@ function Workbench({
           onFinding: (finding) => setFindings((value) => [...value, finding]),
           onStatus: (next) => {
             setActivitySequence((sequence) => sequence + 1);
-            setStatus(next.detail);
+            const excerpts = /^(\d+) source excerpts? selected/.exec(next.detail);
+            setStatus(
+              excerpts
+                ? `Reading ${excerpts[1]} excerpt${excerpts[1] === '1' ? '' : 's'}…`
+                : next.stage === 'review'
+                  ? 'Reviewing…'
+                  : next.detail,
+            );
           },
           onCompletion: (completion) => {
+            setStatus('Writing…');
             if (requestedAction === 'review') {
               setActiveReviewGrounding(
                 completion.grounding
@@ -924,6 +1240,7 @@ function Workbench({
                 appliedRevision: null,
                 targetSectionId: requestedTargetSectionId,
                 selectionText: requestedSelectionText,
+                instruction: instruction.trim(),
                 grounding: completion.grounding ?? null,
               });
             }
@@ -932,12 +1249,15 @@ function Workbench({
         },
         controller.signal,
       );
-      if (requestedAction === 'review') setTab('review');
+      setAnnouncement('Response complete');
       return true;
     } catch (reasonCaught) {
       setInterrupted(true);
-      if (!(reasonCaught instanceof DOMException && reasonCaught.name === 'AbortError')) {
-        setError(messageFrom(reasonCaught));
+      setAnnouncement('Response stopped, incomplete');
+      if (reasonCaught instanceof DOMException && reasonCaught.name === 'AbortError') {
+        setStoppedAt(new Date().toISOString());
+      } else {
+        setFailure(describeFailure(reasonCaught));
       }
       return false;
     } finally {
@@ -946,6 +1266,25 @@ function Workbench({
       setStatus('');
       abortRef.current = null;
     }
+  }
+
+  useEffect(() => {
+    if (busy || !queued) return;
+    const next = queued;
+    setQueued(null);
+    void submitAction(next).then((sent) => {
+      if (sent) setPrompt((current) => (current === next ? '' : current));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, queued]);
+
+  function flash(sectionId: string | null) {
+    if (!sectionId) return;
+    setFlashSectionId(sectionId);
+    window.setTimeout(
+      () => setFlashSectionId((current) => (current === sectionId ? null : current)),
+      650,
+    );
   }
 
   async function applyOutput() {
@@ -961,17 +1300,21 @@ function Workbench({
       documentMutationRef.current
     )
       return;
-    const { runId, sourceRevision } = proposalContext;
+    const { runId, sourceRevision, targetSectionId } = proposalContext;
+    const sectionTitle =
+      prd.sections.find((section) => section.id === targetSectionId)?.title ?? 'Whole PRD';
     const saved = await runDocumentMutation(() =>
       api.applyAiRun(project.id, runId, sourceRevision, output.trim(), groundingReviewed),
     );
     if (!saved) return;
     setUndoRevision(sourceRevision);
+    setAcceptedInfo({ section: sectionTitle, revision: saved.revision });
     setPrd(saved);
     setSavedPrd(saved);
     setOutput('');
     setProposalDraft((draft) => (draft?.runId === runId ? undefined : draft));
     setProposalContext(null);
+    flash(targetSectionId);
     setFindings((current) =>
       current.map((finding) =>
         finding.status === 'open' ? { ...finding, status: 'stale' } : finding,
@@ -983,6 +1326,18 @@ function Workbench({
         setAiRuns(runResult.runs);
       },
     );
+  }
+
+  function rejectProposal() {
+    if (documentMutationRef.current || !proposalContext) return;
+    const sectionTitle =
+      prd?.sections.find((section) => section.id === proposalContext.targetSectionId)?.title ??
+      'Whole PRD';
+    setOutput('');
+    // An empty saved text records the rejection so a reload does not reopen the proposal.
+    setProposalDraft({ runId: proposalContext.sourceRunId ?? null, text: '' });
+    setProposalContext(null);
+    setRejectedSection(sectionTitle);
   }
 
   async function acceptFinding(finding: ReviewFinding) {
@@ -997,6 +1352,8 @@ function Workbench({
     const sourceRevision = prd.revision;
     const proposedPatch = finding.proposedPatch;
     const revised = findingDrafts[finding.id];
+    const sectionTitle =
+      prd.sections.find((section) => section.id === finding.targetSectionId)?.title ?? 'Section';
     const saved = await runDocumentMutation(() =>
       api.acceptFinding(
         project.id,
@@ -1007,8 +1364,10 @@ function Workbench({
     );
     if (!saved) return;
     setUndoRevision(sourceRevision);
+    setAcceptedInfo({ section: sectionTitle, revision: saved.revision });
     setPrd(saved);
     setSavedPrd(saved);
+    flash(finding.targetSectionId);
     setFindings((current) =>
       current.map((item) =>
         item.id === finding.id
@@ -1052,12 +1411,56 @@ function Workbench({
     setPrd(restored);
     setSavedPrd(restored);
     setUndoRevision(null);
+    setAcceptedInfo(null);
     setRevisions((await api.revisions(project.id)).revisions);
   }
 
   async function upload(file: File) {
-    const source = await api.addSource(project.id, file);
-    setSources((current) => [...current, source]);
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setNotAdded((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          name: file.name,
+          size: file.size,
+          reason: 'Too large',
+          detail: `${formatBytes(file.size)} is over the 25 MB limit`,
+        },
+      ]);
+      return;
+    }
+    try {
+      const source = await api.addSource(project.id, file);
+      setSources((current) => [...current, source]);
+      setSelectedSourceId(source.id);
+    } catch (reason) {
+      const entry: NotAddedFile = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        size: file.size,
+        reason: 'Not added',
+        detail: messageFrom(reason),
+      };
+      if (reason instanceof ClientApiError) {
+        if (reason.code === 'duplicate_source') {
+          const existing = sources.find(
+            (item) => item.size === file.size && item.name === file.name,
+          );
+          entry.reason = 'Duplicate';
+          entry.detail = existing
+            ? `Same content as ${existing.name}`
+            : 'Same content as a file already in Sources';
+        } else if (reason.status === 413) {
+          entry.reason = 'Too large';
+          entry.detail = `${formatBytes(file.size)} is over the 25 MB limit`;
+        } else if (reason.status === 415 || reason.code === 'unsupported_file') {
+          const extension = file.name.split('.').pop() ?? '';
+          entry.reason = 'Not supported';
+          entry.detail = extension ? `.${extension} files can’t be read.` : reason.message;
+        }
+      }
+      setNotAdded((current) => [...current, entry]);
+    }
   }
 
   async function removeSource(source: SourceSummary) {
@@ -1069,6 +1472,7 @@ function Workbench({
       return;
     }
     setSources((current) => current.filter((item) => item.id !== source.id));
+    setSelectedSourceId((current) => (current === source.id ? null : current));
     setEvidenceDetail(null);
     try {
       const [findingResult, runResult, handoffResult] = await Promise.all([
@@ -1094,20 +1498,23 @@ function Workbench({
   }
 
   async function openCitation(citation: Citation) {
-    setDocumentOpen(false);
-    setTab('evidence');
+    setDestinationState('sources');
+    if (narrow) setSidebarOpen(false);
     if (!citation.available || !citation.sourceId || !citation.locationId) {
       setEvidenceDetail({
+        sourceName: citation.sourceName,
         locator: citation.locator,
-        content: 'The local source was deleted. This historical excerpt is retained for audit.',
+        content: '',
         excerpt: citation.excerpt,
         available: false,
       });
       return;
     }
+    setSelectedSourceId(citation.sourceId);
     try {
       const location = await api.sourceLocation(project.id, citation);
       setEvidenceDetail({
+        sourceName: citation.sourceName,
         locator: location.locator,
         content: location.content,
         excerpt: citation.excerpt,
@@ -1118,46 +1525,40 @@ function Workbench({
     }
   }
 
-  async function createChatGptHandoff() {
-    if (
-      !prd ||
-      !selectedSectionId ||
-      !handoffInstruction.trim() ||
-      dirty ||
-      documentMutationRef.current
-    )
-      return;
+  async function prepareHandoff(handoffScope: ActionScope, sectionId: string | null) {
+    if (!prd || !handoffInstruction.trim() || dirty || documentMutationRef.current) return null;
     const inferred = actionForInstruction(handoffInstruction, prd);
     const handoffAction = inferred === 'ask' ? 'rewrite' : inferred;
-    const handoffScope = scope === 'document' ? 'document' : 'section';
+    const resolvedScope: 'document' | 'section' =
+      handoffScope === 'document' ? 'document' : 'section';
     const sectionIds =
-      handoffScope === 'document' ? prd.sections.map((section) => section.id) : [selectedSectionId];
+      resolvedScope === 'document'
+        ? prd.sections.map((section) => section.id)
+        : [sectionId ?? selectedSectionId].filter(Boolean);
     const handoff = await api.createChatGptHandoff(project.id, {
       revision: prd.revision,
       action: handoffAction,
-      scope: handoffScope,
+      scope: resolvedScope,
       instruction: handoffInstruction.trim(),
       sectionIds,
       citationIds: handoffCitationIds,
     });
     setHandoffs((current) => [handoff, ...current]);
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(handoff.request, null, 2)], { type: 'application/json' }),
-    );
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `prd-genie-request-${handoff.id}.json`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return handoff;
   }
 
-  async function importChatGptHandoff(file: File) {
+  async function importHandoffResponse(text: string) {
     if (documentMutationRef.current) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('The response must be the JSON block produced by the other chat tool.');
+    }
+    const file = new File([JSON.stringify(parsed)], 'response.json', { type: 'application/json' });
     const handoff = await api.importChatGptHandoff(project.id, file);
     setHandoffs((current) => [handoff, ...current.filter((item) => item.id !== handoff.id)]);
-    setTab('history');
+    setDestination('conversation');
   }
 
   async function applyChatGptHandoff(handoff: ChatGptHandoffSummary) {
@@ -1169,15 +1570,22 @@ function Workbench({
       return [{ sectionId: patch.sectionId, afterMarkdown: revised ?? patch.afterMarkdown }];
     });
     if (patches.length === 0) {
-      setError('Select at least one ChatGPT patch before applying the handoff.');
+      setError('Keep at least one section change before accepting the handoff.');
       return;
     }
     const restoredRevision = prd.revision;
+    const titles = patches
+      .map(
+        (patch) =>
+          prd.sections.find((section) => section.id === patch.sectionId)?.title ?? 'Section',
+      )
+      .join(', ');
     const saved = await runDocumentMutation(() =>
       api.applyChatGptHandoff(project.id, handoff.id, prd.revision, patches),
     );
     if (!saved) return;
     setUndoRevision(restoredRevision);
+    setAcceptedInfo({ section: titles, revision: saved.revision });
     setPrd(saved);
     setSavedPrd(saved);
     const [handoffResult, revisionResult] = await Promise.all([
@@ -1215,7 +1623,7 @@ function Workbench({
         setStorageError(
           reason instanceof ClientApiError && reason.code === 'workspace_conflict'
             ? 'Another window saved this workspace. Keep this window open and copy any unsent text before reloading; the newer recovery record has not been overwritten.'
-            : `Recovery could not be saved locally. Keep this window open. ${messageFrom(reason)}`,
+            : `Couldn’t save: ${messageFrom(reason)} Your edits are kept until you save.`,
         );
         return false;
       }
@@ -1228,7 +1636,7 @@ function Workbench({
     if (!workspaceSnapshot) return;
     const timer = window.setTimeout(() => {
       void persistRecovery();
-    }, 350);
+    }, 500);
     return () => window.clearTimeout(timer);
   }, [workspaceSnapshot, persistRecovery]);
 
@@ -1239,69 +1647,87 @@ function Workbench({
     return () => window.clearInterval(timer);
   }, [busy, activitySequence]);
 
+  const modalOpen =
+    exportOpen || handoffOpen || createOpen || renameOpen || recoveryOpen || alert !== null;
+  const saveSubtitle = saveBusy
+    ? 'Edited · saving…'
+    : saveFailed
+      ? 'Not saved'
+      : dirty
+        ? 'Edited'
+        : `Saved · Version ${prd?.revision ?? 0}`;
+  const subtitle = (() => {
+    const base = `${offline ? 'Offline · ' : ''}${saveSubtitle}`;
+    switch (destination) {
+      case 'sources': {
+        const counted = sources.filter(countsSource);
+        const reading = counted.filter((source) => source.status === 'processing').length;
+        return `${counted.length} ${counted.length === 1 ? 'file' : 'files'}${reading ? ` · ${reading} reading` : ''}`;
+      }
+      case 'settings':
+        return project.selectedModel && project.selectedProvider
+          ? `In use: ${project.selectedModel} · ${providerLabels[project.selectedProvider]}`
+          : 'No model chosen';
+      case 'structures':
+        return `This project uses ${structures.find((item) => item.id === project.selectedStructureId)?.name ?? 'the current structure'}`;
+      default:
+        return narrow ? `${destinationTitles[destination]} · ${base}` : base;
+    }
+  })();
+
   useEffect(() => {
     postShellState({
-      title: project.name,
-      subtitle: saveBusy
-        ? 'Saving…'
-        : dirty
-          ? 'Unsaved edits'
-          : `Saved locally · Version ${prd?.revision ?? 0}`,
+      title: narrow ? project.name : destinationTitles[destination],
+      subtitle,
       dirty,
       busy: busy || navigationBusy,
       recoveryPending,
-      modalOpen:
-        providerOpen ||
-        modelPickerOpen ||
-        sourcesOpen ||
-        structureOpen ||
-        exportOpen ||
-        createOpen ||
-        recoveryOpen,
+      modalOpen,
       hasProject: true,
     });
   }, [
     project.name,
-    saveBusy,
+    destination,
+    subtitle,
     dirty,
     busy,
     navigationBusy,
     recoveryPending,
-    prd?.revision,
-    providerOpen,
-    modelPickerOpen,
-    sourcesOpen,
-    structureOpen,
-    exportOpen,
-    createOpen,
-    recoveryOpen,
+    modalOpen,
+    narrow,
   ]);
+
+  const toggleInspector = useCallback(() => setInspectorOpen((open) => !open), []);
 
   useEffect(() => {
     const command = (event: Event) => {
       switch ((event as CustomEvent<string>).detail) {
         case 'toggle-sidebar':
-          setRailOpen((open) => !open);
+          setSidebarOpen((open) => !open);
+          break;
+        case 'toggle-inspector':
+          toggleInspector();
           break;
         case 'conversation':
-          setDocumentOpen(false);
-          setTab('assist');
+          setDestination('conversation');
           break;
         case 'document':
-          setDocumentOpen((open) => !open);
+          setDestination('document');
           break;
         case 'sources':
-          setSourcesOpen(true);
+          setDestination('sources');
           break;
         case 'history':
-          setDocumentOpen(false);
-          setTab('history');
+          setDestination('history');
+          break;
+        case 'structures':
+          setDestination('structures');
           break;
         case 'export':
           setExportOpen(true);
           break;
         case 'settings':
-          setProviderOpen(true);
+          setDestination('settings');
           break;
         case 'save':
           if (dirty) void save();
@@ -1309,28 +1735,121 @@ function Workbench({
         case 'new-project':
           setCreateOpen(true);
           break;
+        case 'import':
+          archiveInputRef.current?.click();
+          break;
+        case 'focus-composer':
+          setDestination('conversation');
+          window.setTimeout(() => composerRef.current?.focus(), 0);
+          break;
       }
     };
     const download = (event: Event) => {
-      const result = (event as CustomEvent<{ status: string; message?: string }>).detail;
+      const result = (event as CustomEvent<{ status: string; message?: string; file?: string }>)
+        .detail;
       setExportStatus(
         result.status === 'completed'
-          ? 'Export saved.'
+          ? result.file
+            ? `Exported “${result.file}”`
+            : 'Export saved.'
           : result.status === 'cancelled'
-            ? 'Export cancelled. Your document is unchanged.'
+            ? ''
             : result.message || 'Export could not finish. Try another location.',
       );
     };
     const keyboard = (event: KeyboardEvent) => {
-      if (!isNative && (event.metaKey || event.ctrlKey)) {
-        if (event.key === 's') {
-          event.preventDefault();
-          if (dirty) void save();
+      const target = event.target as HTMLElement | null;
+      const editing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        Boolean(target?.isContentEditable);
+      const meta = event.metaKey || event.ctrlKey;
+      if (event.key === 'Escape') {
+        if (busy && abortRef.current) {
+          abortRef.current.abort();
+          return;
         }
-        if (event.key === ',') {
+        if (narrow && sidebarOpen) setSidebarOpen(false);
+        return;
+      }
+      if (!meta) return;
+      const key = event.key.toLowerCase();
+      if (event.altKey && key === 'a') {
+        event.preventDefault();
+        setDestination('conversation');
+        setScopeMenuOpen(true);
+        return;
+      }
+      if (event.altKey && key === 'm') {
+        event.preventDefault();
+        setDestination('conversation');
+        setModelMenuOpen(true);
+        return;
+      }
+      if (event.altKey && (key === '0' || event.code === 'Digit0')) {
+        if (isNative) return;
+        event.preventDefault();
+        toggleInspector();
+        return;
+      }
+      if (event.key === 'Enter' && !editing) {
+        if (proposalContext && canAccept) {
           event.preventDefault();
-          setProviderOpen(true);
+          void applyOutput().catch((reason: unknown) => setError(messageFrom(reason)));
         }
+        return;
+      }
+      if (event.key === 'Backspace' && !editing && proposalContext) {
+        event.preventDefault();
+        rejectProposal();
+        return;
+      }
+      if (
+        key === 'z' &&
+        !event.shiftKey &&
+        !editing &&
+        undoRevision !== null &&
+        prd?.revision === undoRevision + 1
+      ) {
+        event.preventDefault();
+        void undoAccepted().catch((reason: unknown) => setError(messageFrom(reason)));
+        return;
+      }
+      if (isNative) return;
+      if (event.ctrlKey && event.metaKey && key === 's') {
+        event.preventDefault();
+        setSidebarOpen((open) => !open);
+        return;
+      }
+      if (key === 's' && !event.shiftKey) {
+        event.preventDefault();
+        if (dirty) void save();
+      } else if (key === ',' && event.shiftKey) {
+        event.preventDefault();
+        setDestination('structures');
+      } else if (key === ',') {
+        event.preventDefault();
+        setDestination('settings');
+      } else if (key === 'e' && event.shiftKey) {
+        event.preventDefault();
+        setExportOpen(true);
+      } else if (key === 'o') {
+        event.preventDefault();
+        archiveInputRef.current?.click();
+      } else if (key === 'n' && !event.shiftKey) {
+        event.preventDefault();
+        setCreateOpen(true);
+      } else if (key === 'l') {
+        event.preventDefault();
+        setDestination('conversation');
+        window.setTimeout(() => composerRef.current?.focus(), 0);
+      } else if (['1', '2', '3', '4'].includes(event.key) && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        setDestination(
+          (['conversation', 'document', 'sources', 'history'] as Destination[])[
+            Number(event.key) - 1
+          ]!,
+        );
       }
     };
     window.addEventListener('prd-command', command);
@@ -1343,27 +1862,42 @@ function Workbench({
     };
   });
 
+  const mainId =
+    destination === 'document'
+      ? 'prd-editor'
+      : destination === 'conversation'
+        ? 'conversation-workspace'
+        : `destination-${destination}`;
   useEffect(() => {
-    document
-      .getElementById(documentOpen ? 'prd-editor' : 'conversation-workspace')
-      ?.focus({ preventScroll: true });
-  }, [documentOpen, tab]);
+    document.getElementById(mainId)?.focus({ preventScroll: true });
+  }, [mainId]);
+
+  useEffect(() => {
+    if (!announcement) return;
+    const timer = window.setTimeout(() => setAnnouncement(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [announcement]);
+
+  useLayoutEffect(() => {
+    const element = contentRef.current;
+    if (!element) return;
+    const scrollers = element.querySelectorAll<HTMLElement>(
+      '.conversation-scroll, .document, .split-list, .split-detail, .sources-list',
+    );
+    const update = () =>
+      setToolbarScrolled(Array.from(scrollers).some((node) => node.scrollTop > 0));
+    update();
+    scrollers.forEach((node) => node.addEventListener('scroll', update, { passive: true }));
+    return () => scrollers.forEach((node) => node.removeEventListener('scroll', update));
+  }, [destination, turns.length, workspaceLoaded]);
 
   async function uploadFiles(files: File[]) {
     if (!files.length) return;
-    setSourcesOpen(true);
+    setDestination('sources');
     setUploading(true);
-    const failures: string[] = [];
     setError('');
     try {
-      for (const file of files) {
-        try {
-          await upload(file);
-        } catch (reason) {
-          failures.push(`${file.name}: ${messageFrom(reason)}`);
-        }
-      }
-      if (failures.length) setError(failures.join(' '));
+      for (const file of files) await upload(file);
     } finally {
       setUploading(false);
     }
@@ -1401,1377 +1935,1692 @@ function Workbench({
     }
   }
 
-  async function importAnotherProject(file: File) {
-    await leaveWorkspace(() => onProjectImport(file), 'Saved before opening another PRD');
-  }
+  const registerEditor = useCallback((sectionId: string, editor: Editor | null) => {
+    if (editor) editors.current.set(sectionId, editor);
+    else editors.current.delete(sectionId);
+  }, []);
 
-  async function createAnotherProject() {
-    if (!newProjectName.trim()) return;
-    await leaveWorkspace(
-      () => onProjectCreate(newProjectName.trim()),
-      'Saved before creating project',
-    );
-  }
+  const onStatesChange = useCallback(
+    (states: ProviderState[]) => {
+      setActiveProviderState(
+        states.find((item) => item.provider === project.selectedProvider) ?? null,
+      );
+    },
+    [project.selectedProvider],
+  );
+
+  const updateStructure = useCallback(
+    async (id: string, patch: { name?: string; sections?: StructureSection[] }) => {
+      const updated = await api.updateStructure(project.id, id, patch);
+      setStructures((current) => current.map((item) => (item.id === id ? updated : item)));
+    },
+    [project.id],
+  );
 
   if (!prd || !workspaceLoaded) {
     return (
       <main className="boot-state" aria-busy={!error}>
-        <BookOpenText aria-hidden="true" />
+        <BookOpen aria-hidden="true" />
         <p>{error || 'Opening project…'}</p>
-        {error && <Button onClick={() => window.location.reload()}>Retry</Button>}
+        {error && (
+          <button type="button" className="btn" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        )}
       </main>
     );
   }
 
+  const currentPrd = prd;
+  const editingDisabled = documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict);
   const proposalTargetSection = proposalContext?.targetSectionId
-    ? prd.sections.find((section) => section.id === proposalContext.targetSectionId)
+    ? currentPrd.sections.find((section) => section.id === proposalContext.targetSectionId)
     : undefined;
-  const proposalTargetLabel =
+  const proposalSectionTitle =
     proposalContext?.scope === 'document'
-      ? 'Complete document'
-      : proposalTargetSection
-        ? proposalTargetSection.title
-        : proposalContext?.targetSectionId
-          ? 'Archived section'
-          : 'Unknown target';
-  const proposalApplyLabel =
-    proposalContext?.scope === 'document'
-      ? 'Apply to document'
-      : proposalContext?.scope === 'selection'
-        ? `Apply to selection in ${proposalTargetSection?.title ?? 'section'}`
-        : `Apply to ${proposalTargetSection?.title ?? 'section'}`;
+      ? 'Whole PRD'
+      : (proposalTargetSection?.title ?? 'Removed section');
+  const proposalStale = Boolean(
+    proposalContext && proposalContext.sourceRevision !== currentPrd.revision,
+  );
+  const proposalInvalid = citations.some((citation) => !citation.available);
+  const canAccept = Boolean(
+    proposalContext?.runId &&
+    !proposalStale &&
+    !proposalInvalid &&
+    output.trim() &&
+    !(groundingReviewRequired && !groundingReviewed) &&
+    !busy &&
+    !dirty &&
+    !documentMutationBusy,
+  );
+  const emptySections = currentPrd.sections.filter((section) => !section.body.trim());
+  const requiredEmpty = emptySections.filter((section) => section.required);
+  const readySources = sources.filter(
+    (source) => source.status === 'ready' || source.status === 'partial',
+  );
+  const latestReview = [...aiRuns]
+    .filter((run) => run.action === 'review')
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+  const activeStructureName =
+    structures.find((item) => item.id === project.selectedStructureId)?.name ??
+    (currentPrd.sections.every((section) =>
+      DEFAULT_STRUCTURE_SECTIONS.some((item) => item.title === section.title),
+    ) && currentPrd.sections.length === DEFAULT_STRUCTURE_SECTIONS.length
+      ? 'Default'
+      : 'Current');
+  const builtIn: StructureEntry = {
+    id: BUILT_IN_STRUCTURE_ID,
+    name: 'Default PRD',
+    sections: [...DEFAULT_STRUCTURE_SECTIONS],
+    builtIn: true,
+  };
+  const inspectorAvailable =
+    (destination === 'conversation' || destination === 'document') && !narrow;
+  const showInspector = inspectorAvailable && inspectorOpen;
+  const sidebarMode = narrow ? 'overlay' : 'docked';
+  const activeEditor = editors.current.get(selectedSectionId) ?? null;
+
+  const suggestions = (() => {
+    const list: Array<{ icon: typeof SearchCheck; text: string }> = [];
+    const sourceName = readySources[0]?.name;
+    const material = sourceName ? `from ${sourceName}` : 'from my notes';
+    list.push({ icon: SearchCheck, text: 'Review the whole PRD for gaps and contradictions' });
+    const toDraft = (requiredEmpty.length ? requiredEmpty : emptySections)
+      .slice(0, 2)
+      .map((section) => section.title);
+    list.push({
+      icon: PenLine,
+      text: toDraft.length
+        ? `Draft ${toDraft.join(' and ')} ${material}`
+        : `Draft a summary of the PRD ${material}`,
+    });
+    list.push({
+      icon: CircleHelp,
+      text: sourceName
+        ? `List the open questions ${sourceName} raises`
+        : 'List the open questions this PRD leaves',
+    });
+    const requirements = currentPrd.sections.find(
+      (section) => /requirement/i.test(section.title) && section.body.trim(),
+    );
+    const filled = currentPrd.sections.find((section) => section.body.trim());
+    list.push({
+      icon: ListChecks,
+      text: `Tighten ${(requirements ?? filled)?.title ?? 'the first section'}${requirements ? '' : ' and make it testable'}`,
+    });
+    return list;
+  })();
+
+  function applyStructure(entry: StructureEntry) {
+    void (async () => {
+      try {
+        if (recoveryUnavailable)
+          throw new Error('Reload when recovery is available before changing structure.');
+        if (recoveryConflict) throw new Error('Review recovered edits before changing structure.');
+        const current = dirty ? await save('Saved before structure change') : currentPrd;
+        if (!current) throw new Error('Save the current document before changing its structure.');
+        let structureId = entry.id;
+        if (entry.builtIn) {
+          const existing = structures.find((item) => item.name === entry.name);
+          if (existing) structureId = existing.id;
+          else {
+            const created = await api.createStructure(project.id, {
+              name: entry.name,
+              sections: entry.sections,
+            });
+            setStructures((items) => [...items, created]);
+            structureId = created.id;
+          }
+        }
+        const result = await api.selectStructure(project.id, structureId, current.revision);
+        setPrd(result.prd);
+        setSavedPrd(result.prd);
+        setSelectedSectionId(result.prd.sections[0]?.id ?? '');
+        onProjectChange(result.project);
+        setStructureSelection(structureId);
+        setRevisions((await api.revisions(project.id)).revisions);
+      } catch (reason) {
+        setError(messageFrom(reason));
+      }
+    })();
+  }
+
+  function renderTurnMeta(turn: WorkspaceTurn | null, run: AiRunProposal | undefined) {
+    const model = run?.model ?? project.selectedModel ?? '';
+    const provider = run
+      ? providerLabels[run.provider]
+      : project.selectedProvider
+        ? providerLabels[project.selectedProvider]
+        : '';
+    const time = run ? formatTime(run.startedAt) : turn ? '' : formatTime(new Date());
+    return [model, provider, time].filter(Boolean).join(' · ');
+  }
+
+  function proposalDiff(): ReactNode {
+    if (!proposalContext) return null;
+    if (proposalContext.scope === 'document') {
+      const blocks = output.trim().split(/(?=<!--\s*section:)/i);
+      const bySection = new Map<string, string>();
+      for (const block of blocks) {
+        const match =
+          /^<!--\s*section:([0-9a-f-]{36})\s*-->\s*\r?\n##[ \t]+[^\r\n]+\r?\n([\s\S]*)$/i.exec(
+            block.trim(),
+          );
+        if (match) bySection.set(match[1]!, (match[2] ?? '').trim());
+      }
+      if (bySection.size === 0) return <DiffView lines={lineDiff('', output)} />;
+      return (
+        <div className="patch-list">
+          {currentPrd.sections.map((section, index) => {
+            const after = bySection.get(section.id);
+            if (after === undefined || after === section.body.trim()) return null;
+            return (
+              <div key={section.id} className="section-diff">
+                <strong style={{ fontSize: 13 }}>
+                  {sectionNumber(index)} {section.title}
+                </strong>
+                <DiffView lines={lineDiff(section.body, after)} />
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    const before =
+      proposalContext.scope === 'selection'
+        ? (proposalContext.selectionText ?? '')
+        : (proposalTargetSection?.body ?? '');
+    return <DiffView lines={lineDiff(before, output)} />;
+  }
+
+  function renderProposalCard(): ReactNode {
+    if (!proposalContext || !output || busy) return null;
+    const ariaLabel = `Proposed change to ${proposalSectionTitle}`;
+    const index = proposalTargetSection ? currentPrd.sections.indexOf(proposalTargetSection) : -1;
+    const title = `Proposed change · ${index >= 0 ? `${sectionNumber(index)} ` : ''}${proposalSectionTitle}`;
+    if (proposalInvalid) {
+      return (
+        <ProposalCard
+          ariaLabel={ariaLabel}
+          title={title}
+          meta={`Based on Version ${proposalContext.sourceRevision}`}
+        >
+          <InvalidCitationRow
+            disabled={documentMutationBusy}
+            onRegenerate={proposalContext.instruction ? () => void regenerate() : undefined}
+            onDismiss={rejectProposal}
+          />
+        </ProposalCard>
+      );
+    }
+    if (proposalStale) {
+      return (
+        <ProposalCard
+          ariaLabel={ariaLabel}
+          title={title}
+          meta={`Based on Version ${proposalContext.sourceRevision}`}
+        >
+          <StaleRow
+            basedOn={proposalContext.sourceRevision}
+            section={proposalSectionTitle}
+            disabled={documentMutationBusy}
+            onRegenerate={proposalContext.instruction ? () => void regenerate() : undefined}
+            onDismiss={rejectProposal}
+          />
+        </ProposalCard>
+      );
+    }
+    const reasons = proposalContext.grounding?.reasons.length ?? 0;
+    const footNote =
+      groundingReviewRequired && !groundingReviewed
+        ? `Review ${reasons || 1} statement${reasons === 1 ? '' : 's'} to accept this change.`
+        : dirty
+          ? 'Save your edits in Document (⌘S) to accept this change.'
+          : !proposalContext.grounding
+            ? 'No grounding check was saved for this proposal. Compare it with your sources before accepting.'
+            : 'Accepting creates a new version.';
+    return (
+      <ProposalCard
+        ariaLabel={ariaLabel}
+        title={title}
+        meta={`Based on Version ${proposalContext.sourceRevision}`}
+        footNote={footNote}
+        footTone={groundingReviewRequired && !groundingReviewed ? 'warning' : undefined}
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn"
+              disabled={documentMutationBusy}
+              onClick={rejectProposal}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              aria-disabled={!canAccept}
+              disabled={!canAccept}
+              title={!canAccept ? footNote : undefined}
+              onClick={() =>
+                void applyOutput().catch((reason: unknown) => setError(messageFrom(reason)))
+              }
+            >
+              Accept change
+            </button>
+          </>
+        }
+      >
+        {proposalContext.selectionText && (
+          <p className="t-secondary">
+            Selected text: “{truncateText(proposalContext.selectionText)}”
+          </p>
+        )}
+        {proposalDiff()}
+        {citations.length > 0 && (
+          <div className="citation-list" style={{ marginTop: 8 }}>
+            {citations.map((citation, citationIndex) => (
+              <button key={citation.id} type="button" onClick={() => void openCitation(citation)}>
+                <b>{citationIndex + 1}</b> {citation.sourceName} · {citation.locator}
+              </button>
+            ))}
+          </div>
+        )}
+        {groundingReviewRequired && proposalContext.grounding && (
+          <ReviewBlock
+            assessment={proposalContext.grounding}
+            citations={citations}
+            onOpenCitation={(citation) => void openCitation(citation)}
+          >
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={groundingReviewed}
+                disabled={documentMutationBusy || recoveryUnavailable}
+                onChange={(event) =>
+                  setGroundingAcknowledgement(
+                    event.target.checked ? { context: proposalContext, text: output } : null,
+                  )
+                }
+              />
+              I reviewed the supporting material and this proposal&apos;s claims.
+            </label>
+          </ReviewBlock>
+        )}
+        <details className="proposal-edit">
+          <summary>Edit…</summary>
+          <textarea
+            className="field"
+            aria-label="Revised AI proposal"
+            value={output}
+            disabled={documentMutationBusy || recoveryUnavailable}
+            onChange={(event) => {
+              if (documentMutationRef.current || recoveryUnavailable) return;
+              if (
+                proposalDraft &&
+                proposalDraft.runId !== proposalContext.sourceRunId &&
+                !window.confirm(
+                  'Replace your saved edits to the other proposal? Cancel to keep them in History.',
+                )
+              )
+                return;
+              setOutput(event.target.value);
+              setGroundingAcknowledgement(null);
+              setProposalDraft({
+                runId: proposalContext.sourceRunId ?? null,
+                text: event.target.value,
+              });
+            }}
+          />
+        </details>
+      </ProposalCard>
+    );
+  }
+
+  async function regenerate() {
+    if (!proposalContext?.instruction) return;
+    const { instruction, scope: runScope, targetSectionId } = proposalContext;
+    setScope(runScope === 'selection' ? 'section' : runScope, targetSectionId);
+    await submitAction(instruction, {
+      action: proposalContext.action,
+      scope: runScope === 'selection' ? 'section' : runScope,
+      targetSectionId,
+    });
+  }
+
+  function renderFindingCard(finding: ReviewFinding): ReactNode {
+    const index = currentPrd.sections.findIndex(
+      (section) => section.id === finding.targetSectionId,
+    );
+    const sectionTitle = index >= 0 ? currentPrd.sections[index]!.title : 'Removed section';
+    const open = finding.status === 'open';
+    const stale = finding.sourceRevision !== currentPrd.revision;
+    const statusLabel =
+      finding.status === 'accepted'
+        ? 'Accepted'
+        : finding.status === 'dismissed'
+          ? 'Rejected'
+          : finding.status === 'stale' || stale
+            ? 'Out of date'
+            : '';
+    return (
+      <ProposalCard
+        key={finding.id}
+        className={`finding finding-${finding.severity}`}
+        ariaLabel={`Proposed change to ${sectionTitle}`}
+        title={`Proposed change · ${index >= 0 ? `${sectionNumber(index)} ` : ''}${sectionTitle}`}
+        meta={`Based on Version ${finding.sourceRevision}`}
+        footNote={
+          open && !stale
+            ? dirty
+              ? 'Save your edits in Document (⌘S) to accept this change.'
+              : `${finding.severity === 'blocking' ? 'Blocking' : finding.severity === 'warning' ? 'Warning' : 'Note'} · ${finding.category.replace('-', ' ')}`
+            : `Status: ${finding.status}${statusLabel ? ` · ${statusLabel}` : ''}`
+        }
+        actions={
+          open && !stale ? (
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={documentMutationBusy}
+                onClick={() => {
+                  if (documentMutationRef.current) return;
+                  void api
+                    .dismissFinding(project.id, finding.id)
+                    .then(() =>
+                      setFindings((current) =>
+                        current.map((item) =>
+                          item.id === finding.id ? { ...item, status: 'dismissed' } : item,
+                        ),
+                      ),
+                    )
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
+                }}
+              >
+                Reject
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!finding.proposedPatch || dirty || documentMutationBusy}
+                onClick={() =>
+                  void acceptFinding(finding).catch(
+                    (reason: unknown) => void handleFindingError(reason),
+                  )
+                }
+              >
+                Accept change
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        <p className="turn-text" style={{ fontSize: 13, lineHeight: '20px' }}>
+          {finding.rationale}
+        </p>
+        {finding.proposedPatch && (
+          <DiffView
+            lines={lineDiff(
+              finding.proposedPatch.beforeMarkdown,
+              finding.proposedPatch.afterMarkdown,
+            )}
+          />
+        )}
+        {finding.citations.length > 0 && (
+          <div className="citation-list" style={{ marginTop: 8 }} aria-label="Finding evidence">
+            {finding.citations.map((citation, citationIndex) => (
+              <button key={citation.id} type="button" onClick={() => void openCitation(citation)}>
+                <b>{citationIndex + 1}</b> {citation.sourceName} · {citation.locator}
+                {citation.available ? '' : ' · source removed'}
+              </button>
+            ))}
+          </div>
+        )}
+        {open && !stale && finding.proposedPatch && (
+          <details className="proposal-edit finding-revision">
+            <summary>Edit…</summary>
+            <textarea
+              className="field"
+              aria-label="Revised finding"
+              value={findingDrafts[finding.id] ?? finding.proposedPatch.afterMarkdown}
+              disabled={documentMutationBusy || recoveryUnavailable}
+              onChange={(event) => {
+                if (documentMutationRef.current || recoveryUnavailable) return;
+                setFindingDrafts((current) => ({ ...current, [finding.id]: event.target.value }));
+              }}
+            />
+          </details>
+        )}
+      </ProposalCard>
+    );
+  }
+
+  function renderHandoffCard(handoff: ChatGptHandoffSummary): ReactNode {
+    if (!handoff.response) return null;
+    const stale = handoff.status === 'stale' || handoff.sourceRevision !== currentPrd.revision;
+    const titles = handoff.response.patches
+      .map(
+        (patch) =>
+          currentPrd.sections.find((section) => section.id === patch.sectionId)?.title ??
+          'Removed section',
+      )
+      .join(', ');
+    return (
+      <ProposalCard
+        key={handoff.id}
+        className="handoff-row"
+        ariaLabel={`Proposed change to ${titles || 'the PRD'} from a manual handoff`}
+        title={`Manual handoff · ${titles || 'No section changes'}`}
+        meta={`Based on Version ${handoff.sourceRevision}`}
+        footNote={
+          handoff.status === 'staged' && !stale
+            ? dirty
+              ? 'Save your edits in Document (⌘S) to accept this change.'
+              : 'Keep the sections you want, then accept. Accepting creates a new version.'
+            : undefined
+        }
+        actions={
+          handoff.status === 'staged' && !stale ? (
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={documentMutationBusy}
+                onClick={() => {
+                  if (documentMutationRef.current) return;
+                  void api
+                    .dismissChatGptHandoff(project.id, handoff.id)
+                    .then(() =>
+                      setHandoffs((current) => current.filter((item) => item.id !== handoff.id)),
+                    )
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
+                }}
+              >
+                Reject
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={dirty || documentMutationBusy}
+                onClick={() =>
+                  void applyChatGptHandoff(handoff).catch((reason: unknown) =>
+                    setError(messageFrom(reason)),
+                  )
+                }
+              >
+                Accept change
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        <p className="turn-text" style={{ fontSize: 13, lineHeight: '20px' }}>
+          {handoff.response.summary}
+        </p>
+        {stale && (
+          <StaleRow
+            basedOn={handoff.sourceRevision}
+            section={titles || 'The PRD'}
+            disabled={documentMutationBusy}
+            onDismiss={() => {
+              void api
+                .dismissChatGptHandoff(project.id, handoff.id)
+                .then(() =>
+                  setHandoffs((current) => current.filter((item) => item.id !== handoff.id)),
+                )
+                .catch((reason: unknown) => setError(messageFrom(reason)));
+            }}
+          />
+        )}
+        {!stale && (
+          <div className="patch-list">
+            {handoff.response.patches.map((patch) => {
+              const configured = handoffDrafts[handoff.id]?.[patch.sectionId];
+              const enabled = configured !== null;
+              const section = currentPrd.sections.find((item) => item.id === patch.sectionId);
+              const editable = handoff.status === 'staged';
+              return (
+                <div key={patch.sectionId} className="section-diff">
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      disabled={documentMutationBusy || recoveryUnavailable || !editable}
+                      onChange={(event) => {
+                        if (documentMutationRef.current || recoveryUnavailable) return;
+                        setHandoffDrafts((current) => ({
+                          ...current,
+                          [handoff.id]: {
+                            ...current[handoff.id],
+                            [patch.sectionId]: event.target.checked ? patch.afterMarkdown : null,
+                          },
+                        }));
+                      }}
+                    />
+                    {section?.title ?? 'Removed section'}
+                  </label>
+                  <DiffView
+                    lines={lineDiff(section?.body ?? '', configured ?? patch.afterMarkdown)}
+                  />
+                  {editable && (
+                    <details className="proposal-edit">
+                      <summary>Edit…</summary>
+                      <textarea
+                        className="field"
+                        aria-label={`Revised change to ${section?.title ?? 'section'}`}
+                        disabled={documentMutationBusy || recoveryUnavailable || !enabled}
+                        value={configured ?? patch.afterMarkdown}
+                        onChange={(event) => {
+                          if (documentMutationRef.current || recoveryUnavailable) return;
+                          setHandoffDrafts((current) => ({
+                            ...current,
+                            [handoff.id]: {
+                              ...current[handoff.id],
+                              [patch.sectionId]: event.target.value,
+                            },
+                          }));
+                        }}
+                      />
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+            {handoff.response.findings.map((finding, index) => (
+              <p key={`${handoff.id}-${index}`} className="t-secondary">
+                {finding.severity}: {finding.category.replace('-', ' ')}. {finding.rationale}
+              </p>
+            ))}
+          </div>
+        )}
+      </ProposalCard>
+    );
+  }
+
+  const composerProps = {
+    value: prompt,
+    onChange: (value: string) => {
+      setPrompt(value);
+      setDraftRestored(false);
+    },
+    onSend: (text: string) => {
+      void submitAction(text).then((sent) => {
+        if (sent) setPrompt((current) => (current === text ? '' : current));
+      });
+    },
+    onStop: () => abortRef.current?.abort(),
+    busy,
+    disabled: documentMutationBusy || recoveryUnavailable,
+    offline,
+    runningStatus: stalled
+      ? 'Still waiting for the provider. You can stop safely; your instruction is kept.'
+      : status,
+    scope,
+    targetSectionId: scope === 'document' ? null : selectedSectionId || null,
+    selection,
+    sections: currentPrd.sections,
+    onScopeChange: (next: ActionScope, targetSectionId: string | null) => {
+      if (documentMutationRef.current) return;
+      setScope(next, targetSectionId);
+    },
+    project,
+    activeState: activeProviderState,
+    onProjectChange,
+    onOpenSettings: () => setDestination('settings'),
+    scopeMenuOpen,
+    onScopeMenuOpenChange: setScopeMenuOpen,
+    modelMenuOpen,
+    onModelMenuOpenChange: setModelMenuOpen,
+    reduceMotion,
+  };
+
+  const pendingHandoffs = handoffs.filter(
+    (handoff) => handoff.response && handoff.status !== 'applied' && handoff.status !== 'dismissed',
+  );
+  const acceptedVisible =
+    acceptedInfo !== null && undoRevision !== null && currentPrd.revision === undoRevision + 1;
+  const conversationEmpty =
+    turns.length === 0 &&
+    !output &&
+    !busy &&
+    !interrupted &&
+    !acceptedVisible &&
+    !rejectedSection &&
+    pendingHandoffs.length === 0 &&
+    findings.length === 0;
+  const placeholder =
+    turns.length > 0 || output
+      ? 'Reply, or ask for another change'
+      : 'Ask for a draft, an edit, a review or an answer';
+
+  function banner(): ReactNode {
+    if (saveFailed)
+      return (
+        <div className="banner danger" role="alert">
+          <CircleX aria-hidden="true" />
+          <span>Couldn’t save: {saveFailed} Your edits are kept until you save.</span>
+          <button type="button" className="btn-link" onClick={() => void save()}>
+            Try again
+          </button>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => {
+              setExportFormat('archive');
+              setExportOpen(true);
+            }}
+          >
+            Save a copy…
+          </button>
+        </div>
+      );
+    if (storageError)
+      return (
+        <div className="banner danger" role="alert">
+          <CircleX aria-hidden="true" />
+          <span>{storageError}</span>
+          {!recoveryUnavailable && (
+            <button type="button" className="btn-link" onClick={() => void persistRecovery()}>
+              Try again
+            </button>
+          )}
+        </div>
+      );
+    if (error)
+      return (
+        <div className="banner danger" role="alert">
+          <CircleAlert aria-hidden="true" />
+          <span>{error}</span>
+          <button
+            type="button"
+            className="btn btn-icon"
+            aria-label="Dismiss"
+            onClick={() => setError('')}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      );
+    if (recoveryConflict) {
+      const latest = recoveryConflict.sections
+        .map((section) => section.updatedAt)
+        .sort()
+        .at(-1);
+      return (
+        <div className="banner warning" role="alert">
+          <LifeBuoy aria-hidden="true" />
+          <span>
+            Recovered unsaved edits{latest ? ` from ${formatTime(latest)}` : ''}. Version{' '}
+            {currentPrd.revision} is newer.
+          </span>
+          <button type="button" className="btn-link" onClick={() => setRecoveryOpen(true)}>
+            Compare
+          </button>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => setAlert({ kind: 'discard-recovery' })}
+          >
+            Keep Version {currentPrd.revision}
+          </button>
+          <button
+            type="button"
+            className="btn-link"
+            disabled={busy || documentMutationBusy}
+            onClick={() => {
+              const sections = recoveryConflict.sections;
+              setRecoveryConflict(null);
+              setRecoveryOpen(false);
+              setPrd({ ...currentPrd, sections });
+              setDestination('document');
+            }}
+          >
+            Save edits as Version {currentPrd.revision + 1}
+          </button>
+        </div>
+      );
+    }
+    if (offline)
+      return (
+        <div className="banner" role="status">
+          <WifiOff aria-hidden="true" />
+          <span>
+            You’re offline. Editing, history and export still work. Models on this Mac still work.
+          </span>
+        </div>
+      );
+    if (project.selectedProvider === 'chatgpt' && activeProviderState?.error)
+      return (
+        <div className="banner warning" role="status">
+          <TriangleAlert aria-hidden="true" />
+          <span>ChatGPT sign-in expired. Sign in again to use your ChatGPT plan.</span>
+          <button type="button" className="btn-link" onClick={() => setDestination('settings')}>
+            Sign in…
+          </button>
+        </div>
+      );
+    if (importNotice)
+      return (
+        <div className="banner warning" role="status">
+          <CircleAlert aria-hidden="true" />
+          <span>{importNotice}</span>
+          <button
+            type="button"
+            className="btn btn-icon"
+            aria-label="Dismiss"
+            onClick={onDismissImportNotice}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      );
+    if (exportStatus)
+      return (
+        <div className="banner" role="status">
+          <span>{exportStatus}</span>
+          <button
+            type="button"
+            className="btn btn-icon"
+            aria-label="Dismiss"
+            onClick={() => setExportStatus('')}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      );
+    if (recoveryStatus)
+      return (
+        <div className="banner" role="status">
+          <LifeBuoy aria-hidden="true" />
+          <span>{recoveryStatus}</span>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => {
+              setDestination('document');
+              setRecoveryStatus('');
+            }}
+          >
+            Review document
+          </button>
+        </div>
+      );
+    return null;
+  }
+
+  const formatButtons = activeEditor
+    ? [
+        {
+          label: 'Bold',
+          icon: Bold,
+          active: activeEditor.isActive('bold'),
+          run: () => activeEditor.chain().focus().toggleBold().run(),
+        },
+        {
+          label: 'Italic',
+          icon: Italic,
+          active: activeEditor.isActive('italic'),
+          run: () => activeEditor.chain().focus().toggleItalic().run(),
+        },
+        {
+          label: 'Bulleted list',
+          icon: List,
+          active: activeEditor.isActive('bulletList'),
+          run: () => activeEditor.chain().focus().toggleBulletList().run(),
+        },
+        {
+          label: 'Numbered list',
+          icon: ListOrdered,
+          active: activeEditor.isActive('orderedList'),
+          run: () => activeEditor.chain().focus().toggleOrderedList().run(),
+        },
+      ]
+    : [];
+
+  function viewActions(): ReactNode {
+    switch (destination) {
+      case 'document':
+        return (
+          <div
+            className="toolbar-view-actions"
+            role="toolbar"
+            aria-label="Text formatting"
+            onMouseDown={(event) => {
+              // Keep the editor selection while a formatting button is pressed.
+              if (event.button === 0) event.preventDefault();
+            }}
+          >
+            {formatButtons.map(({ label, icon: Icon, active, run }) => (
+              <button
+                key={label}
+                type="button"
+                className="btn btn-icon"
+                aria-label={label}
+                aria-pressed={active}
+                disabled={editingDisabled || !activeEditor}
+                onClick={run}
+              >
+                <Icon aria-hidden="true" />
+              </button>
+            ))}
+            <button
+              type="button"
+              className="btn btn-icon"
+              aria-label="Undo editor change"
+              disabled={editingDisabled || !activeEditor?.can().undo()}
+              onClick={() => activeEditor?.chain().focus().undo().run()}
+            >
+              <Undo2 aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="btn btn-icon"
+              aria-label="Redo editor change"
+              disabled={editingDisabled || !activeEditor?.can().redo()}
+              onClick={() => activeEditor?.chain().focus().redo().run()}
+            >
+              <Redo2 aria-hidden="true" />
+            </button>
+            {dirty && (
+              <button
+                type="button"
+                className="btn"
+                style={{ marginLeft: 8 }}
+                disabled={saveBusy || documentMutationBusy}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => void save()}
+              >
+                {saveBusy ? 'Saving…' : 'Save'}
+              </button>
+            )}
+          </div>
+        );
+      case 'sources':
+        return (
+          <button
+            type="button"
+            className="btn"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Plus aria-hidden="true" />
+            <span>Add files…</span>
+          </button>
+        );
+      case 'history':
+        return (
+          <button
+            type="button"
+            className="btn"
+            disabled={documentMutationBusy}
+            onClick={() => setHandoffOpen(true)}
+          >
+            <ArrowLeftRight aria-hidden="true" />
+            <span>Manual handoff…</span>
+          </button>
+        );
+      case 'structures': {
+        const selectedEntry: StructureEntry | null =
+          structureSelection === BUILT_IN_STRUCTURE_ID
+            ? builtIn
+            : (() => {
+                const found = structures.find((item) => item.id === structureSelection);
+                return found
+                  ? { id: found.id, name: found.name, sections: found.sections, builtIn: false }
+                  : null;
+              })();
+        return (
+          <>
+            <button
+              type="button"
+              className="btn"
+              disabled={documentMutationBusy}
+              onClick={() => {
+                void api
+                  .createStructure(project.id, {
+                    name: `Structure ${structures.length + 1}`,
+                    sections: [{ ...DEFAULT_STRUCTURE_SECTIONS[0]! }],
+                  })
+                  .then((created) => {
+                    setStructures((current) => [...current, created]);
+                    setStructureSelection(created.id);
+                  })
+                  .catch((reason: unknown) => setError(messageFrom(reason)));
+              }}
+            >
+              <Plus aria-hidden="true" />
+              <span>New structure</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={
+                !selectedEntry ||
+                documentMutationBusy ||
+                (!selectedEntry.builtIn && selectedEntry.id === project.selectedStructureId)
+              }
+              onClick={() =>
+                selectedEntry && setAlert({ kind: 'use-structure', entry: selectedEntry })
+              }
+            >
+              Use for this project…
+            </button>
+          </>
+        );
+      }
+      default:
+        return null;
+    }
+  }
+
+  const inspectorLabel = destination === 'document' ? 'Assistant' : 'PRD inspector';
 
   return (
     <div
       inert={navigationBusy}
       aria-busy={navigationBusy}
-      className={`workbench ${railOpen ? 'rail-visible' : 'rail-hidden'} ${isNative ? 'native-workbench' : ''}`}
+      className={`workbench ${isNative ? 'native-workbench' : ''}`}
+      data-sidebar={sidebarMode}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
       }}
       onDrop={(event) => {
         if (event.dataTransfer.files.length) {
           event.preventDefault();
-          setSourcesOpen(true);
           void uploadFiles(Array.from(event.dataTransfer.files));
         }
       }}
     >
-      <a className="skip-link" href={documentOpen ? '#prd-editor' : '#conversation-workspace'}>
-        Skip to workspace
+      <a className="skip-link" href={`#${mainId}`}>
+        Skip to content
       </a>
-      <header className={`topbar ${isNative ? 'native-hidden' : ''}`}>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Toggle project navigation"
-          aria-expanded={railOpen}
-          onClick={() => setRailOpen(!railOpen)}
-        >
-          <PanelLeft aria-hidden="true" />
-        </Button>
-        <div className="project-title">
-          <strong>{project.name}</strong>
-          <small>
-            {saveBusy
-              ? 'Saving…'
-              : dirty
-                ? 'Unsaved edits'
-                : `Saved locally · Version ${prd.revision}`}
-          </small>
-        </div>
-        <div className="topbar-actions">
-          <Button variant="outline" onClick={() => setExportOpen(true)}>
-            Export
-          </Button>
-        </div>
-      </header>
-      <div className="workspace-notices">
-        {offline && (
-          <div className="offline-banner" role="status">
-            You are offline. Editing, saving and export remain available. AI works offline only with
-            a running local model.
-          </div>
-        )}
-
-        {importWarnings.length > 0 && (
-          <div className="inline-error" role="alert">
-            <CircleAlert aria-hidden="true" />
-            <span>Import needs a visual check: {importWarnings.join(' ')}</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Dismiss import warning"
-              onClick={onDismissImportWarnings}
-            >
-              <X aria-hidden="true" />
-            </Button>
-          </div>
-        )}
-        {undoRevision !== null && prd.revision === undoRevision + 1 && (
-          <div className="undo-banner" role="status">
-            <span>A proposal changed the current revision.</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={dirty || documentMutationBusy}
-              onClick={() => void undoAccepted()}
-            >
-              <RotateCcw aria-hidden="true" />
-              Undo
-            </Button>
-          </div>
-        )}
-        {error && (
-          <div className="inline-error" role="alert">
-            <CircleAlert aria-hidden="true" />
-            <span>{error}</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Dismiss error"
-              onClick={() => setError('')}
-            >
-              <X aria-hidden="true" />
-            </Button>
-          </div>
-        )}
-        {storageError && (
-          <div role="alert" className="inline-error">
-            <span>{storageError}</span>
-            {!recoveryUnavailable && (
-              <Button variant="ghost" onClick={() => void persistRecovery()}>
-                Retry
-              </Button>
-            )}
-          </div>
-        )}
-        {recoveryStatus && (
-          <div className="undo-banner" role="status">
-            <span>{recoveryStatus}</span>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setDocumentOpen(true);
-                setRecoveryStatus('');
-              }}
-            >
-              Review document
-            </Button>
-          </div>
-        )}
-        {recoveryConflict && (
-          <div className="inline-error" role="alert">
-            <span>
-              Recovered edits were based on an older document version. Choose what to keep before
-              editing.
-            </span>
-            <Button variant="ghost" onClick={() => setRecoveryOpen(true)}>
-              Review recovered edits
-            </Button>
-          </div>
-        )}
+      <div className="visually-hidden" role="status" aria-live="polite">
+        {announcement}
       </div>
-
-      <aside
-        className={`left-rail ${railOpen ? 'drawer-open' : ''}`}
-        hidden={!railOpen}
-        aria-label="Project navigation"
-      >
-        <div className="drawer-heading mobile-only">
-          <strong>Workspace</strong>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Close navigation"
-            onClick={() => setRailOpen(false)}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-        <nav className="project-switcher" aria-label="Projects">
-          <div className="rail-label">
-            <span>Projects</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Create project"
-              disabled={documentMutationBusy}
-              onClick={() => setCreateOpen(true)}
-            >
-              <Plus aria-hidden="true" />
-            </Button>
+      {sidebarOpen && narrow && (
+        <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+      )}
+      {sidebarOpen && (
+        <Sidebar
+          projects={projects}
+          project={project}
+          destination={destination}
+          sections={currentPrd.sections}
+          selectedSectionId={selectedSectionId}
+          pendingSectionId={
+            proposalContext && !proposalStale && output ? proposalContext.targetSectionId : null
+          }
+          sourceCount={sources.filter(countsSource).length}
+          width={narrow ? 240 : sidebarWidth}
+          overlay={narrow}
+          disabled={documentMutationBusy}
+          onNavigate={setDestination}
+          onSelectSection={(id) => {
+            setSelectedSectionId(id);
+            setDestination('document');
+          }}
+          onProjectSelect={(id) =>
+            void leaveWorkspace(() => onProjectSelect(id), 'Saved before switching projects')
+          }
+          onNewProject={() => setCreateOpen(true)}
+          onImport={() => archiveInputRef.current?.click()}
+          onRename={() => {
+            setRenameValue(project.name);
+            setRenameOpen(true);
+          }}
+          onDelete={() => setAlert({ kind: 'delete-project' })}
+          onHide={() => setSidebarOpen(false)}
+          onWidthChange={setSidebarWidth}
+        />
+      )}
+      <div className="workbench-main">
+        <header className="toolbar" data-scrolled={toolbarScrolled}>
+          {!sidebarOpen && (
+            <div className="toolbar-leading">
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label="Show sidebar"
+                aria-expanded="false"
+                aria-keyshortcuts="Control+Meta+S"
+                onClick={() => setSidebarOpen(true)}
+              >
+                <PanelLeft aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          <div className="toolbar-title project-title">
+            <strong title={narrow ? project.name : undefined}>
+              {narrow ? project.name : destinationTitles[destination]}
+            </strong>
+            <small role="status">{subtitle}</small>
           </div>
-          {projects.map((item) => (
-            <button
-              key={item.id}
-              className={item.id === project.id ? 'rail-item selected' : 'rail-item'}
-              disabled={documentMutationBusy}
-              onClick={() => {
-                if (item.id !== project.id)
-                  void leaveWorkspace(
-                    () => onProjectSelect(item.id),
-                    'Saved before switching projects',
-                  );
-              }}
-            >
-              <FolderOpen aria-hidden="true" />
-              <span>{item.name}</span>
-            </button>
-          ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={documentMutationBusy}
-            onClick={() => archiveInputRef.current?.click()}
-          >
-            <Upload aria-hidden="true" />
-            Import PRD or archive
-          </Button>
-          <input
-            ref={archiveInputRef}
-            className="visually-hidden"
-            type="file"
-            hidden
-            accept=".prdgenie.zip,.md,.markdown,.txt,.docx"
-            aria-label="Import PRD or restore project archive"
-            disabled={documentMutationBusy}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file && !documentMutationRef.current) {
-                void importAnotherProject(file).catch((reason: unknown) =>
-                  setError(messageFrom(reason)),
-                );
-              }
-              event.target.value = '';
-            }}
-          />
-        </nav>
-
-        <nav className="workspace-navigation" aria-label="Workspace">
-          <button
-            className={!documentOpen && tab === 'assist' ? 'rail-item selected' : 'rail-item'}
-            onClick={() => {
-              setDocumentOpen(false);
-              setTab('assist');
-            }}
-          >
-            <MessageSquare aria-hidden="true" />
-            <span>Conversation</span>
-          </button>
-          <button
-            className={documentOpen ? 'rail-item selected' : 'rail-item'}
-            onClick={() => setDocumentOpen(true)}
-          >
-            <FileText aria-hidden="true" />
-            <span>Document</span>
-          </button>
-          <button
-            className="rail-item"
-            aria-label="Sources"
-            aria-description={`${sources.length} sources`}
-            onClick={() => setSourcesOpen(true)}
-          >
-            <Paperclip aria-hidden="true" />
-            <span>Sources</span>
-            <small>{sources.length}</small>
-          </button>
-          <button
-            className={!documentOpen && tab === 'history' ? 'rail-item selected' : 'rail-item'}
-            onClick={() => {
-              setDocumentOpen(false);
-              setTab('history');
-            }}
-          >
-            <History aria-hidden="true" />
-            <span>History</span>
-          </button>
-          <button className="rail-item" onClick={() => setProviderOpen(true)}>
-            <Settings2 aria-hidden="true" />
-            <span>AI settings</span>
-          </button>
-        </nav>
-        <nav className="document-outline" aria-label="Document outline" hidden={!documentOpen}>
-          <div className="rail-label">
-            <span>Outline</span>
-            <span>{prd.sections.length}</span>
-          </div>
-          {prd.sections.map((section) => (
-            <a
-              key={section.id}
-              href={`#section-${section.id}`}
-              className={
-                section.id === selectedSectionId ? 'outline-item selected' : 'outline-item'
-              }
-              onClick={() => {
-                setSelectedSectionId(section.id);
-                setDocumentOpen(true);
-              }}
-            >
-              <span>{String(section.position + 1).padStart(2, '0')}</span>
-              {section.title}
-            </a>
-          ))}
-        </nav>
-
-        <section className="project-lifecycle" aria-label="Project data">
-          <button
-            type="button"
-            disabled={documentMutationBusy || saveBusy}
-            onClick={() => void exportCurrent('archive')}
-          >
-            <Download aria-hidden="true" />
-            Export archive
-          </button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={documentMutationBusy}
-            onClick={() => {
-              if (documentMutationRef.current) return;
-              if (
-                !window.confirm(
-                  dirty
-                    ? `Delete ${project.name} and discard unsaved changes? Export an archive first if you may need this project later.`
-                    : `Delete ${project.name}? Export an archive first if you may need this project later.`,
-                )
-              )
-                return;
-              void runDocumentMutation(() => onProjectDelete(project.id)).catch((reason: unknown) =>
-                setError(messageFrom(reason)),
-              );
-            }}
-          >
-            <Trash2 aria-hidden="true" />
-            Delete project
-          </Button>
-        </section>
-      </aside>
-
-      <main id="prd-editor" className="document-surface" hidden={!documentOpen} tabIndex={-1}>
-        <div className="workspace-viewbar">
-          <span>Document</span>
-          <Button variant="ghost" onClick={() => setStructureOpen(true)}>
-            Structure
-          </Button>
-          <Button disabled={!dirty || saveBusy || documentMutationBusy} onClick={() => void save()}>
-            <Save aria-hidden="true" />
-            {saveBusy ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-        <div className="document-heading">
-          <p className="eyebrow">Product requirements document</p>
-          <h1>{project.name}</h1>
-          <p>
-            {project.description || `Version ${prd.revision} · ${prd.sections.length} sections`}
-          </p>
-        </div>
-        <div className="sections">
-          {prd.sections.map((section, index) => (
-            <section
-              key={section.id}
-              id={`section-${section.id}`}
-              className={section.id === selectedSectionId ? 'prd-section active' : 'prd-section'}
-            >
-              <div className="section-heading">
-                <span className="section-number">{String(index + 1).padStart(2, '0')}</span>
-                <input
-                  aria-label="Section title"
-                  disabled={
-                    documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)
-                  }
-                  value={section.title}
-                  onFocus={() => setSelectedSectionId(section.id)}
-                  onChange={(event) => {
-                    if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
-                      return;
-                    setPrd((current) =>
-                      current
-                        ? {
-                            ...current,
-                            sections: current.sections.map((item) =>
-                              item.id === section.id
-                                ? { ...item, title: event.target.value }
-                                : item,
-                            ),
-                          }
-                        : current,
-                    );
-                  }}
-                />
-                <div className="section-controls">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Move ${section.title} up`}
-                    disabled={documentMutationBusy || index === 0}
-                    onClick={() => {
-                      if (!documentMutationRef.current) setPrd(reorder(prd, index, index - 1));
-                    }}
-                  >
-                    <ArrowUp aria-hidden="true" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Move ${section.title} down`}
-                    disabled={documentMutationBusy || index === prd.sections.length - 1}
-                    onClick={() => {
-                      if (!documentMutationRef.current) setPrd(reorder(prd, index, index + 1));
-                    }}
-                  >
-                    <ArrowDown aria-hidden="true" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Remove ${section.title}`}
-                    disabled={
-                      documentMutationBusy || Boolean(recoveryConflict) || prd.sections.length === 1
-                    }
-                    onClick={() => {
-                      if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
-                        return;
-                      if (!window.confirm(`Remove the ${section.title} section?`)) return;
-                      setPrd({
-                        ...prd,
-                        sections: prd.sections
-                          .filter((item) => item.id !== section.id)
-                          .map((item, position) => ({ ...item, position })),
-                      });
-                    }}
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </Button>
-                </div>
+          {destination === 'history' && (
+            <div className="toolbar-center">
+              <div className="segmented" role="group" aria-label="History view">
+                <button
+                  type="button"
+                  aria-pressed={historyTab === 'revisions'}
+                  onClick={() => setHistoryTab('revisions')}
+                >
+                  Revisions
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={historyTab === 'runs'}
+                  onClick={() => setHistoryTab('runs')}
+                >
+                  AI runs
+                </button>
               </div>
-              <SectionEditor
-                sectionId={section.id}
-                value={section.body}
-                disabled={documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)}
-                onFocus={() => setSelectedSectionId(section.id)}
-                onSelectionChange={setSelection}
-                onChange={(body) => {
-                  if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
-                    return;
-                  setPrd((current) =>
-                    current
-                      ? {
-                          ...current,
-                          sections: current.sections.map((item) =>
-                            item.id === section.id ? { ...item, body } : item,
-                          ),
-                        }
-                      : current,
-                  );
-                }}
-              />
-            </section>
-          ))}
-          <Button
-            variant="outline"
-            className="add-section"
-            disabled={documentMutationBusy || recoveryUnavailable || Boolean(recoveryConflict)}
-            onClick={() => {
-              if (documentMutationRef.current || recoveryUnavailable || recoveryConflict) return;
-              setPrd({
-                ...prd,
-                sections: [
-                  ...prd.sections,
-                  {
-                    id: crypto.randomUUID(),
-                    projectId: project.id,
-                    title: 'New section',
-                    body: '',
-                    position: prd.sections.length,
-                    updatedAt: new Date().toISOString(),
-                  },
-                ],
-              });
-            }}
-          >
-            <Plus aria-hidden="true" />
-            Add section
-          </Button>
-        </div>
-      </main>
-
-      <main
-        id="conversation-workspace"
-        className="workspace-panel"
-        hidden={documentOpen}
-        tabIndex={-1}
-        aria-label="Conversation and document work"
-      >
-        <h1 className="visually-hidden">{project.name}</h1>
-        <div className="workspace-viewbar">
-          <span className="workspace-title">
-            {tab === 'assist'
-              ? 'Conversation'
-              : tab === 'review'
-                ? 'Review findings'
-                : tab === 'history'
-                  ? 'History'
-                  : 'Evidence'}
-          </span>
-          <span className="viewbar-spacer" />
-          {findings.filter((finding) => finding.status === 'open').length > 0 &&
-            tab !== 'review' && (
-              <button onClick={() => setTab('review')}>
-                Review findings ({findings.filter((finding) => finding.status === 'open').length})
+            </div>
+          )}
+          <div className="toolbar-actions">
+            {viewActions()}
+            {inspectorAvailable && (
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label={`${showInspector ? 'Hide' : 'Show'} ${inspectorLabel}`}
+                aria-pressed={showInspector}
+                aria-keyshortcuts="Alt+Meta+0"
+                onClick={toggleInspector}
+              >
+                <PanelRight aria-hidden="true" />
               </button>
             )}
-          <button onClick={() => setStructureOpen(true)}>Structure</button>
-        </div>
-
-        {tab === 'assist' && (
-          <div className="assist-panel">
-            <Conversation className="assist-conversation">
-              <ConversationContent>
-                {turns
-                  .filter((turn) => turn.id !== activeTurnId)
-                  .map((turn) => (
-                    <div className="conversation-turn" key={turn.id}>
-                      <Message from="user">
-                        <span className="message-author">You</span>
-                        <MessageContent>
-                          <p>{turn.request || 'Document action'}</p>
-                        </MessageContent>
-                      </Message>
-                      <Message from="assistant">
-                        <span className="message-author">PRD Genie</span>
-                        <MessageContent>
-                          <MessageResponse>
-                            {turn.response ||
-                              (turn.status === 'complete'
-                                ? 'Review completed. Open findings or History for the result.'
-                                : 'This response did not finish.')}
-                          </MessageResponse>
-                          {aiRuns.find((run) => run.id === turn.runId)?.grounding?.status ===
-                            'review_required' && (
-                            <p className="recovery-note" role="status">
-                              Grounding review required. Inspect the saved run in History to compare
-                              its claims with the source excerpts.
-                            </p>
-                          )}
-                        </MessageContent>
-                        {turn.status === 'interrupted' && (
-                          <p className="recovery-note">
-                            Incomplete response. No changes were applied automatically.
-                          </p>
-                        )}
-                        {turn.runId && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
+            <button
+              ref={exportButtonRef}
+              type="button"
+              className="btn toolbar-export"
+              aria-label="Export"
+              aria-keyshortcuts="Shift+Meta+E"
+              disabled={documentMutationBusy}
+              onClick={() => setExportOpen(true)}
+            >
+              <Share aria-hidden="true" />
+              <span>Export</span>
+            </button>
+          </div>
+        </header>
+        {banner()}
+        <div className="content" ref={contentRef}>
+          {destination === 'conversation' && (
+            <main
+              id="conversation-workspace"
+              className="conversation"
+              tabIndex={-1}
+              aria-label="Conversation"
+            >
+              <h1 className="visually-hidden">Conversation</h1>
+              {conversationEmpty ? (
+                <div className="conversation-empty">
+                  <div className="conversation-empty-inner">
+                    <div className="conversation-status">
+                      <strong>Continue the PRD</strong>
+                      <span>
+                        {currentPrd.sections.length} sections, {emptySections.length} empty (
+                        {requiredEmpty.length} required) · {readySources.length}{' '}
+                        {readySources.length === 1 ? 'source' : 'sources'} ready
+                      </span>
+                    </div>
+                    <ul className="suggestions" aria-label="Suggestions">
+                      {suggestions.map(({ icon: Icon, text }) => (
+                        <li key={text}>
+                          <button
+                            type="button"
                             onClick={() => {
-                              setTab('history');
+                              setPrompt(text);
+                              setDraftRestored(false);
+                              composerRef.current?.focus();
                             }}
                           >
-                            Inspect saved run in History
-                          </Button>
-                        )}
-                      </Message>
-                    </div>
-                  ))}
-                {submittedPrompt && (
-                  <Message from="user">
-                    <span className="message-author">You</span>
-                    <MessageContent>
-                      <p>{submittedPrompt}</p>
-                    </MessageContent>
-                  </Message>
-                )}
-
-                {!output && !busy && !interrupted && turns.length === 0 ? (
-                  <ConversationEmptyState
-                    icon={<SearchCheck />}
-                    title={
-                      prd.sections.some((section) => section.body.trim())
-                        ? 'Continue with this PRD'
-                        : 'What would you like to work on?'
-                    }
-                    description="Describe what you need, add supporting material, or ask for a review. Proposed changes are yours to accept."
-                  />
-                ) : output || busy || interrupted ? (
-                  <Message from="assistant">
-                    <span className="message-author">PRD Genie</span>
-                    <MessageContent>
-                      {busy && (
-                        <p className="stream-status" role="status">
-                          {status || 'Preparing response…'}
-                        </p>
+                            <Icon aria-hidden="true" />
+                            {text}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <Composer
+                      {...composerProps}
+                      placeholder={placeholder}
+                      textareaRef={composerRef}
+                    />
+                    <span className="t-secondary composer-caption">
+                      {draftRestored ? 'Draft restored. ' : ''}A suggestion fills the composer.
+                      Nothing is sent until you press Send (⌘↩).
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="conversation-scroll">
+                    <div className="conversation-column">
+                      {turns
+                        .filter((turn) => turn.id !== activeTurnId)
+                        .map((turn) => {
+                          const run = aiRuns.find((item) => item.id === turn.runId);
+                          return (
+                            <div key={turn.id} className="turn-assistant" style={{ gap: 20 }}>
+                              <div className="turn-user">{turn.request || 'Document action'}</div>
+                              <div className="turn-assistant">
+                                <span className="turn-meta">{renderTurnMeta(turn, run)}</span>
+                                <div className="turn-text">
+                                  <MessageResponse>
+                                    {turn.response ||
+                                      (turn.status === 'complete'
+                                        ? run?.action === 'review'
+                                          ? 'Review complete.'
+                                          : 'Reply complete.'
+                                        : '')}
+                                  </MessageResponse>
+                                </div>
+                                {turn.status === 'interrupted' && (
+                                  <div className="turn-state">
+                                    <span className="pill">Incomplete</span>
+                                    <span className="t-secondary">
+                                      Incomplete responses can’t be applied.
+                                    </span>
+                                  </div>
+                                )}
+                                {run && run.action !== 'review' && run.appliedRevision !== null && (
+                                  <AcceptedRow
+                                    section={
+                                      currentPrd.sections.find(
+                                        (section) => section.id === run.targetSectionId,
+                                      )?.title ?? 'Whole PRD'
+                                    }
+                                    revision={run.appliedRevision}
+                                  />
+                                )}
+                                {run &&
+                                  (run.action === 'draft' || run.action === 'rewrite') &&
+                                  run.appliedRevision === null &&
+                                  run.outputText &&
+                                  run.id !== proposalContext?.sourceRunId && (
+                                    <button
+                                      type="button"
+                                      className="btn-link"
+                                      style={{ alignSelf: 'flex-start' }}
+                                      disabled={busy || documentMutationBusy}
+                                      onClick={() => inspectRun(run)}
+                                    >
+                                      Review this proposal
+                                    </button>
+                                  )}
+                                {run && run.id === latestReview?.id && findings.length > 0 && (
+                                  <div className="patch-list" style={{ marginTop: 8 }}>
+                                    {findings.map(renderFindingCard)}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {(submittedPrompt || activeTurnId) && (
+                        <>
+                          {(() => {
+                            const activeTurn =
+                              turns.find((turn) => turn.id === activeTurnId) ?? null;
+                            const request = submittedPrompt || activeTurn?.request || '';
+                            return request ? <div className="turn-user">{request}</div> : null;
+                          })()}
+                        </>
                       )}
-                      {stalled && busy && (
-                        <p className="recovery-note" role="status">
-                          Still waiting for the provider. You can stop safely; your instruction will
-                          be kept.
-                        </p>
-                      )}
-                      {interrupted && (
-                        <p className="inline-error" role="alert">
-                          This response stopped before completion. Your request is kept below; run
-                          it again when ready.
-                        </p>
-                      )}
-                      <MessageResponse>{output}</MessageResponse>
-                      {!busy &&
-                        !proposalContext &&
-                        activeReviewGrounding?.grounding.status === 'review_required' && (
-                          <GroundingNotice
-                            assessment={activeReviewGrounding.grounding}
-                            citations={citations}
-                            onOpenCitation={openCitation}
-                          />
-                        )}
-                      {!busy && output && (
-                        <Button variant="ghost" size="sm" onClick={() => setDocumentOpen(true)}>
-                          Open document
-                        </Button>
-                      )}
-                    </MessageContent>
-                    {citations.length > 0 && (
-                      <Sources>
-                        <SourcesTrigger count={citations.length} />
-                        <SourcesContent>
-                          {citations.map((citation) => (
-                            <Source
-                              key={citation.id}
-                              href="#"
-                              title={`${citation.sourceName}, ${citation.locator}`}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                void openCitation(citation);
-                              }}
-                            />
-                          ))}
-                        </SourcesContent>
-                      </Sources>
-                    )}
-                    {output && proposalContext && (
-                      <>
-                        <p className="proposal-provenance">
-                          Proposed change · Based on version {proposalContext.sourceRevision}
-                        </p>
-                        <p className="proposal-provenance">
-                          Target: {proposalTargetLabel}
-                          {proposalContext.selectionText
-                            ? `. Selected text: "${truncateText(proposalContext.selectionText)}"`
-                            : ''}
-                        </p>
-                        {!busy && groundingReviewRequired && (
-                          <GroundingNotice
-                            assessment={proposalContext.grounding!}
-                            citations={citations}
-                            onOpenCitation={openCitation}
-                          >
-                            <label className="grounding-acknowledgement">
-                              <input
-                                type="checkbox"
-                                checked={groundingReviewed}
-                                disabled={documentMutationBusy || recoveryUnavailable}
-                                onChange={(event) =>
-                                  setGroundingAcknowledgement(
-                                    event.target.checked
-                                      ? { context: proposalContext, text: output }
-                                      : null,
-                                  )
-                                }
+                      {(output || busy || interrupted || proposalContext) && (
+                        <div className="turn-assistant">
+                          <span className="turn-meta">
+                            {renderTurnMeta(
+                              null,
+                              aiRuns.find(
+                                (run) =>
+                                  run.id ===
+                                  (proposalContext?.sourceRunId ??
+                                    turns.find((turn) => turn.id === activeTurnId)?.runId),
+                              ),
+                            )}
+                          </span>
+                          {(output || busy) && !(proposalContext && output && !busy) && (
+                            <div className="turn-text" aria-live="polite">
+                              <MessageResponse>{output}</MessageResponse>
+                              {busy && <span className="caret" aria-hidden="true" />}
+                            </div>
+                          )}
+                          {interrupted && !failure && stoppedAt && (
+                            <div className="turn-state" role="status">
+                              <span className="pill">Incomplete</span>
+                              <span className="t-secondary">
+                                Stopped at {formatTime(stoppedAt)}. Incomplete responses can’t be
+                                applied.
+                              </span>
+                              {submittedPrompt && (
+                                <button
+                                  type="button"
+                                  className="btn-link"
+                                  onClick={() => void submitAction(submittedPrompt)}
+                                >
+                                  Try again
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {interrupted && !failure && !stoppedAt && (
+                            <div className="turn-state" role="status">
+                              <span className="pill">Incomplete</span>
+                              <span className="t-secondary">
+                                Incomplete responses can’t be applied.
+                              </span>
+                            </div>
+                          )}
+                          {failure && (
+                            <div className="turn-failure" role="alert">
+                              <CircleX aria-hidden="true" />
+                              <div>
+                                <span style={{ fontSize: 13, lineHeight: '20px' }}>{failure}</span>
+                                <div className="links">
+                                  {submittedPrompt && (
+                                    <button
+                                      type="button"
+                                      className="btn-link"
+                                      onClick={() => void submitAction(submittedPrompt)}
+                                    >
+                                      Try again
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="btn-link"
+                                    onClick={() => setDestination('settings')}
+                                  >
+                                    AI settings…
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {!busy &&
+                            !proposalContext &&
+                            activeReviewGrounding?.grounding.status === 'review_required' && (
+                              <ReviewBlock
+                                assessment={activeReviewGrounding.grounding}
+                                citations={citations}
+                                onOpenCitation={(citation) => void openCitation(citation)}
                               />
-                              I reviewed the supporting material and this proposal's claims.
-                            </label>
-                          </GroundingNotice>
-                        )}
-                        {!busy && !proposalContext.grounding && (
-                          <p className="proposal-provenance">
-                            Grounding assessment unavailable for this saved proposal. Review its
-                            sources and claims before applying it.
-                          </p>
-                        )}
-                        {citations.some((citation) => !citation.available) && (
-                          <p className="proposal-provenance" role="alert">
-                            This proposal cannot be applied because its source evidence was deleted.
-                          </p>
-                        )}
-                        {!busy && (
-                          <details className="proposal-revision">
-                            <summary>Revise proposal before applying</summary>
-                            <textarea
-                              aria-label="Revised AI proposal"
-                              value={output}
-                              disabled={documentMutationBusy || recoveryUnavailable}
-                              onChange={(event) => {
-                                if (!documentMutationRef.current && !recoveryUnavailable) {
-                                  if (
-                                    proposalDraft &&
-                                    proposalDraft.runId !== proposalContext?.sourceRunId &&
-                                    !window.confirm(
-                                      'Replace your saved edits to the other proposal? Cancel to keep them in History.',
-                                    )
-                                  )
-                                    return;
-                                  setOutput(event.target.value);
-                                  setGroundingAcknowledgement(null);
-                                  setProposalDraft({
-                                    runId: proposalContext?.sourceRunId ?? null,
-                                    text: event.target.value,
-                                  });
-                                }
-                              }}
-                            />
-                          </details>
-                        )}
-                        <MessageActions>
-                          <MessageAction
-                            size="sm"
-                            label={proposalApplyLabel}
-                            tooltip="Creates a revision bound to this AI run"
-                            disabled={
-                              !proposalContext.runId ||
-                              (groundingReviewRequired && !groundingReviewed) ||
-                              proposalContext.sourceRevision !== prd.revision ||
-                              citations.some((citation) => !citation.available) ||
-                              busy ||
-                              dirty ||
-                              documentMutationBusy
-                            }
-                            onClick={() =>
-                              void applyOutput().catch((reason: unknown) =>
+                            )}
+                          {!busy && !proposalContext && citations.length > 0 && (
+                            <div className="citation-list">
+                              {citations.map((citation, index) => (
+                                <button
+                                  key={citation.id}
+                                  type="button"
+                                  onClick={() => void openCitation(citation)}
+                                >
+                                  <b>{index + 1}</b> {citation.sourceName} · {citation.locator}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {renderProposalCard()}
+                          {!busy &&
+                            !proposalContext &&
+                            activeTurnId &&
+                            turns.find((turn) => turn.id === activeTurnId)?.runId ===
+                              latestReview?.id &&
+                            findings.length > 0 && (
+                              <div className="patch-list" style={{ marginTop: 8 }}>
+                                {findings.map(renderFindingCard)}
+                              </div>
+                            )}
+                        </div>
+                      )}
+                      {acceptedInfo &&
+                        undoRevision !== null &&
+                        currentPrd.revision === undoRevision + 1 && (
+                          <AcceptedRow
+                            section={acceptedInfo.section}
+                            revision={acceptedInfo.revision}
+                            undoDisabled={dirty || documentMutationBusy}
+                            onUndo={() =>
+                              void undoAccepted().catch((reason: unknown) =>
                                 setError(messageFrom(reason)),
                               )
                             }
-                          >
-                            <Check aria-hidden="true" />
-                            Apply
-                          </MessageAction>
-                          <MessageAction
-                            size="sm"
-                            label="Dismiss proposal"
-                            tooltip="Leaves the PRD unchanged"
-                            disabled={documentMutationBusy}
-                            onClick={() => {
-                              if (documentMutationRef.current) return;
-                              setOutput('');
-                              setProposalDraft((draft) =>
-                                draft?.runId === proposalContext?.sourceRunId ? undefined : draft,
-                              );
-                              setProposalContext(null);
-                            }}
-                          >
-                            <X aria-hidden="true" />
-                            Dismiss
-                          </MessageAction>
-                        </MessageActions>
-                      </>
+                          />
+                        )}
+                      {rejectedSection && !proposalContext && (
+                        <div className="card-row" role="status">
+                          <span>Rejected · {rejectedSection} unchanged</span>
+                        </div>
+                      )}
+                      {pendingHandoffs.map(renderHandoffCard)}
+                    </div>
+                  </div>
+                  <div className="composer-dock">
+                    <Composer
+                      {...composerProps}
+                      placeholder={placeholder}
+                      textareaRef={composerRef}
+                    />
+                    {draftRestored && (
+                      <span className="t-secondary composer-caption">Draft restored</span>
                     )}
-                  </Message>
-                ) : null}
-              </ConversationContent>
-              <ConversationScrollButton />
-            </Conversation>
-
-            <div className="action-context">
-              <label>
-                <span>Apply to</span>
-                <select
-                  value={scope}
-                  disabled={documentMutationBusy}
-                  onChange={(event) => {
-                    if (!documentMutationRef.current) setScope(event.target.value as ActionScope);
-                  }}
-                >
-                  <option value="section">Section</option>
-                  <option value="selection" disabled={!selection}>
-                    Selection{selection ? '' : ' unavailable'}
-                  </option>
-                  <option value="document">Whole PRD</option>
-                </select>
-              </label>
-            </div>
-            <p className="scope-caption">
-              {proposalContext
-                ? `Proposal target: ${proposalTargetLabel}`
-                : scope === 'section'
-                  ? (selectedSection?.title ?? 'Choose a section')
-                  : scope === 'selection'
-                    ? `${selection.length} selected characters`
-                    : `${prd.sections.length} sections`}
-            </p>
-
-            <PromptInput
-              onSubmit={async ({ text }) => {
-                if (await submitAction(text))
-                  setPrompt((current) => (current === text ? '' : current));
+                  </div>
+                </>
+              )}
+            </main>
+          )}
+          {/* The document stays mounted so editor undo history survives visiting other destinations. */}
+          <main
+            id="prd-editor"
+            className="document"
+            tabIndex={-1}
+            aria-label="Document"
+            hidden={destination !== 'document'}
+          >
+            <DocumentView
+              project={project}
+              prd={currentPrd}
+              structureName={activeStructureName}
+              selectedSectionId={selectedSectionId}
+              flashSectionId={flashSectionId}
+              disabled={editingDisabled}
+              onSelectSection={setSelectedSectionId}
+              onSelectionChange={setSelection}
+              onTitleChange={(id, title) => {
+                if (documentMutationRef.current || recoveryUnavailable || recoveryConflict) return;
+                setPrd((current) =>
+                  current
+                    ? {
+                        ...current,
+                        sections: current.sections.map((item) =>
+                          item.id === id ? { ...item, title } : item,
+                        ),
+                      }
+                    : current,
+                );
               }}
-              className="assist-input"
-            >
-              <PromptInputTextarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.currentTarget.value)}
-                placeholder="Describe a PRD, ask for a review, or explain what to change…"
-                aria-label="Your instruction"
-                disabled={documentMutationBusy || recoveryUnavailable}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                    event.stopPropagation();
-                    if (event.metaKey || event.ctrlKey) {
-                      event.preventDefault();
-                      if (!busy) event.currentTarget.form?.requestSubmit();
-                    }
-                  }
+              onBodyChange={(id, body) => {
+                if (documentMutationRef.current || recoveryUnavailable || recoveryConflict) return;
+                setPrd((current) =>
+                  current
+                    ? {
+                        ...current,
+                        sections: current.sections.map((item) =>
+                          item.id === id ? { ...item, body } : item,
+                        ),
+                      }
+                    : current,
+                );
+              }}
+              onMoveSection={(index, to) => {
+                if (!documentMutationRef.current) setPrd(reorder(currentPrd, index, to));
+              }}
+              onRemoveSection={(id) => setAlert({ kind: 'remove-section', sectionId: id })}
+              onAddSection={() => {
+                if (documentMutationRef.current || recoveryUnavailable || recoveryConflict) return;
+                setPrd({
+                  ...currentPrd,
+                  sections: [
+                    ...currentPrd.sections,
+                    {
+                      id: crypto.randomUUID(),
+                      projectId: project.id,
+                      title: 'New section',
+                      body: '',
+                      position: currentPrd.sections.length,
+                      updatedAt: new Date().toISOString(),
+                    },
+                  ],
+                });
+              }}
+              onEditorReady={registerEditor}
+            />
+          </main>
+          {destination === 'sources' && (
+            <main id="destination-sources" tabIndex={-1} aria-label="Sources">
+              <SourcesView
+                sources={sources}
+                notAdded={notAdded}
+                selectedId={selectedSourceId}
+                evidence={evidenceDetail}
+                uploading={uploading}
+                busy={busy || documentMutationBusy}
+                reduceMotion={reduceMotion}
+                onSelect={(id) => {
+                  setSelectedSourceId(id);
+                  setEvidenceDetail(null);
+                }}
+                onAddFiles={() => fileInputRef.current?.click()}
+                onRetry={(source) => {
+                  void api
+                    .retrySourceIndex(project.id, source.id)
+                    .then((updated) =>
+                      setSources((current) =>
+                        current.map((item) => (item.id === updated.id ? updated : item)),
+                      ),
+                    )
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
+                }}
+                onRemove={(source) => setAlert({ kind: 'remove-source', source })}
+                onDismiss={(id) =>
+                  setNotAdded((current) => current.filter((item) => item.id !== id))
+                }
+                onDismissAll={() => setNotAdded([])}
+                onClearEvidence={() => setEvidenceDetail(null)}
+              />
+            </main>
+          )}
+          {destination === 'history' && (
+            <main id="destination-history" tabIndex={-1} aria-label="History">
+              <HistoryView
+                tab={historyTab}
+                revisions={revisions}
+                aiRuns={aiRuns}
+                handoffs={handoffs}
+                prd={currentPrd}
+                selectedRevision={selectedRevision}
+                selectedRunId={selectedRunId}
+                busy={busy || documentMutationBusy || dirty}
+                onSelectRevision={setSelectedRevision}
+                onSelectRun={setSelectedRunId}
+                onRestore={(revision) => setAlert({ kind: 'restore', revision })}
+                onInspectRun={inspectRun}
+                onDismissHandoff={(handoff) => {
+                  void api
+                    .dismissChatGptHandoff(project.id, handoff.id)
+                    .then(() =>
+                      setHandoffs((current) => current.filter((item) => item.id !== handoff.id)),
+                    )
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
                 }}
               />
-              <PromptInputFooter>
-                <PromptInputTools>
-                  <ConnectedModelPicker
-                    project={project}
-                    activeState={activeProviderState}
-                    open={modelPickerOpen}
-                    onOpenChange={setModelPickerOpen}
-                    disabled={busy || documentMutationBusy}
-                    onProjectChange={onProjectChange}
-                  />
-                </PromptInputTools>
-                <PromptInputSubmit
-                  status={busy ? 'streaming' : 'ready'}
-                  disabled={
-                    documentMutationBusy ||
-                    (!busy && offline && !isLocalProvider(activeProviderState))
-                  }
-                  onClick={(event) => {
-                    if (busy) {
-                      event.preventDefault();
-                      abortRef.current?.abort();
-                    }
-                  }}
-                />
-              </PromptInputFooter>
-            </PromptInput>
-            <p className="composer-caption">
-              {project.selectedProvider
-                ? activeProviderState?.configured
-                  ? isLocalProvider(activeProviderState)
-                    ? 'Local connection. The selected model must be running.'
-                    : 'Relevant source excerpts and document context are sent to the selected online provider.'
-                  : 'Selected provider needs setup. Your work remains available.'
-                : 'AI is optional. Edit the document or use manual handoff in History.'}{' '}
-              <span>⌘ Return to send</span>
-            </p>
-          </div>
-        )}
-
-        {tab === 'review' && (
-          <div className="review-panel">
-            {aiRuns
-              .filter(
-                (run) =>
-                  run.action === 'review' &&
-                  run.sourceRevision === prd.revision &&
-                  run.grounding?.status === 'review_required',
-              )
-              .map((run) => (
-                <GroundingNotice
-                  key={run.id}
-                  assessment={run.grounding!}
-                  citations={run.citations}
-                  onOpenCitation={openCitation}
-                />
-              ))}
-            {activeReviewGrounding?.sourceRevision === prd.revision &&
-              activeReviewGrounding.grounding.status === 'review_required' &&
-              !aiRuns.some((run) => run.id === activeReviewGrounding.runId) && (
-                <GroundingNotice
-                  assessment={activeReviewGrounding.grounding}
-                  citations={citations}
-                  onOpenCitation={openCitation}
-                />
-              )}
-            <div className="panel-intro">
-              <div>
-                <p className="eyebrow">Structured review</p>
-                <h2>Findings</h2>
-              </div>
-              <Button
-                size="sm"
-                disabled={
-                  busy || documentMutationBusy || (offline && !isLocalProvider(activeProviderState))
-                }
-                onClick={() => {
-                  setScope('document');
-                  void submitAction('Run the full structured review.', {
-                    action: 'review',
-                    scope: 'document',
-                  });
+            </main>
+          )}
+          {destination === 'settings' && (
+            <main id="destination-settings" tabIndex={-1} aria-label="AI settings">
+              <h1 className="visually-hidden">AI settings</h1>
+              <SettingsView
+                key={project.id}
+                project={project}
+                offline={offline}
+                disabled={documentMutationBusy}
+                initialProvider={project.selectedProvider}
+                onProjectChange={onProjectChange}
+                onStatesChange={onStatesChange}
+              />
+            </main>
+          )}
+          {destination === 'structures' && (
+            <main id="destination-structures" tabIndex={-1} aria-label="Structures">
+              <StructuresView
+                builtIn={builtIn}
+                structures={structures}
+                selectedId={structureSelection}
+                activeStructureId={project.selectedStructureId ?? null}
+                busy={documentMutationBusy}
+                onSelect={setStructureSelection}
+                onUpdate={updateStructure}
+                onDuplicate={(entry) => {
+                  void api
+                    .createStructure(project.id, {
+                      name: `${entry.name} copy`,
+                      sections: entry.sections,
+                    })
+                    .then((created) => {
+                      setStructures((current) => [...current, created]);
+                      setStructureSelection(created.id);
+                    })
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
                 }}
-              >
-                Run review
-              </Button>
-            </div>
-            {findings.length === 0 ? (
-              <div className="panel-empty">
-                <SearchCheck aria-hidden="true" />
-                <p>No review findings yet.</p>
-                <small>Run a review against the current revision.</small>
-              </div>
-            ) : (
-              findings.map((finding) => (
-                <article className={`finding finding-${finding.severity}`} key={finding.id}>
-                  <header>
-                    <span>{finding.category.replace('-', ' ')}</span>
-                    <strong>{finding.severity}</strong>
-                  </header>
-                  <p>{finding.rationale}</p>
-                  {finding.proposedPatch && (
-                    <details>
-                      <summary>Inspect proposed diff</summary>
-                      <div className="diff">
-                        <div>
-                          <span>Current</span>
-                          <pre>{finding.proposedPatch.beforeMarkdown || '(empty)'}</pre>
-                        </div>
-                        <div>
-                          <span>Proposed</span>
-                          <pre>{finding.proposedPatch.afterMarkdown}</pre>
-                        </div>
-                      </div>
-                      {finding.status === 'open' && (
-                        <label className="finding-revision">
-                          <span>Revise before accepting</span>
-                          <textarea
-                            value={findingDrafts[finding.id] ?? finding.proposedPatch.afterMarkdown}
-                            disabled={documentMutationBusy || recoveryUnavailable}
-                            onChange={(event) => {
-                              if (documentMutationRef.current || recoveryUnavailable) return;
-                              setFindingDrafts((current) => ({
-                                ...current,
-                                [finding.id]: event.target.value,
-                              }));
-                            }}
-                          />
-                        </label>
-                      )}
-                    </details>
-                  )}
-                  {finding.citations.length > 0 && (
-                    <div className="finding-citations" aria-label="Finding evidence">
-                      {finding.citations.map((citation) => (
-                        <Button
-                          key={citation.id}
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => void openCitation(citation)}
-                        >
-                          {citation.sourceName}, {citation.locator}
-                        </Button>
-                      ))}
-                    </div>
-                  )}
-                  {finding.status === 'open' && (
-                    <footer>
-                      <Button
-                        size="sm"
-                        disabled={
-                          !finding.proposedPatch ||
-                          finding.sourceRevision !== prd.revision ||
-                          dirty ||
-                          documentMutationBusy
-                        }
-                        onClick={() =>
-                          void acceptFinding(finding).catch(
-                            (reason: unknown) => void handleFindingError(reason),
-                          )
-                        }
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={documentMutationBusy}
-                        onClick={() => {
-                          if (documentMutationRef.current) return;
-                          void api
-                            .dismissFinding(project.id, finding.id)
-                            .then(() =>
-                              setFindings((current) =>
-                                current.map((item) =>
-                                  item.id === finding.id ? { ...item, status: 'dismissed' } : item,
-                                ),
-                              ),
-                            )
-                            .catch((reason: unknown) => setError(messageFrom(reason)));
-                        }}
-                      >
-                        Dismiss
-                      </Button>
-                    </footer>
-                  )}
-                  {finding.status !== 'open' && <small>Status: {finding.status}</small>}
-                </article>
-              ))
-            )}
-          </div>
-        )}
-
-        {tab === 'evidence' && (
-          <div className="evidence-panel">
-            <div className="panel-intro">
-              <div>
-                <p className="eyebrow">Exact source location</p>
-                <h2>Evidence</h2>
-              </div>
-            </div>
-            {evidenceDetail ? (
-              <article className="evidence-detail">
-                <strong>{evidenceDetail.locator}</strong>
-                {!evidenceDetail.available && <small>Historical snapshot, source deleted</small>}
-                <blockquote>{evidenceDetail.excerpt}</blockquote>
-                <p>{evidenceDetail.content}</p>
-              </article>
-            ) : citations.length > 0 ? (
-              citations.map((citation) => (
+                onDelete={(structure) => setAlert({ kind: 'delete-structure', structure })}
+              />
+            </main>
+          )}
+          {showInspector && destination === 'conversation' && (
+            <aside
+              className={`inspector ${inspectorOverlay ? 'overlay' : ''}`}
+              aria-label="PRD inspector"
+            >
+              <div className="inspector-head">
+                <strong>PRD</strong>
                 <button
-                  key={citation.id}
-                  className="citation-row"
-                  onClick={() => void openCitation(citation)}
+                  type="button"
+                  className="btn-link"
+                  onClick={() => setDestination('document')}
                 >
-                  <span>{citation.sourceName}</span>
-                  <small>
-                    {citation.locator}
-                    {citation.available ? '' : ' (source deleted)'}
-                  </small>
+                  Open Document <kbd style={{ font: 'inherit' }}>⌘2</kbd>
                 </button>
-              ))
-            ) : (
-              <div className="panel-empty">
-                <BookOpenText aria-hidden="true" />
-                <p>No citations in the current action.</p>
-                <small>Generated answers surface the exact excerpts they used.</small>
               </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'history' && (
-          <div className="history-panel">
-            <div className="panel-intro">
-              <div>
-                <p className="eyebrow">Durable project record</p>
-                <h2>History</h2>
-              </div>
-            </div>
-            <section className="history-section" aria-labelledby="chatgpt-handoff-heading">
-              <h3 id="chatgpt-handoff-heading">ChatGPT handoff</h3>
-              <div className="handoff-compose">
-                <p>
-                  Export only the current {scope === 'document' ? 'document' : 'section'} and the
-                  evidence you select below. OpenAI processes this material inside ChatGPT. This
-                  handoff works separately from the optional ChatGPT plan provider in AI settings.
-                </p>
-                <label>
-                  <span>Instruction</span>
-                  <textarea
-                    value={handoffInstruction}
-                    disabled={documentMutationBusy || recoveryUnavailable}
-                    onChange={(event) => {
-                      if (!documentMutationRef.current) setHandoffInstruction(event.target.value);
-                    }}
-                    placeholder="Describe the draft, review, or rewrite you want ChatGPT to propose."
-                    maxLength={10_000}
-                  />
-                </label>
-                {citations.length > 0 && (
-                  <fieldset>
-                    <legend>Evidence excerpts to send</legend>
-                    {citations.map((citation) => (
-                      <label key={citation.id}>
-                        <input
-                          type="checkbox"
-                          checked={handoffCitationIds.includes(citation.id)}
-                          disabled={documentMutationBusy || recoveryUnavailable}
-                          onChange={(event) => {
-                            if (documentMutationRef.current) return;
-                            setHandoffCitationIds((current) =>
-                              event.target.checked
-                                ? [...current, citation.id]
-                                : current.filter((id) => id !== citation.id),
-                            );
-                          }}
-                        />
-                        <span>
-                          {citation.sourceName}, {citation.locator}: {citation.excerpt}
-                        </span>
-                      </label>
-                    ))}
-                  </fieldset>
-                )}
-                <div className="handoff-actions">
-                  <Button
-                    size="sm"
-                    disabled={!handoffInstruction.trim() || dirty || documentMutationBusy}
-                    onClick={() =>
-                      void createChatGptHandoff().catch((reason: unknown) =>
-                        setError(messageFrom(reason)),
-                      )
-                    }
-                  >
-                    <Download aria-hidden="true" />
-                    Export request
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={documentMutationBusy}
-                    onClick={() => handoffInputRef.current?.click()}
-                  >
-                    <Upload aria-hidden="true" />
-                    Import response
-                  </Button>
-                  <input
-                    ref={handoffInputRef}
-                    className="visually-hidden"
-                    type="file"
-                    hidden
-                    accept="application/json,.json"
-                    aria-label="Import ChatGPT handoff response"
-                    disabled={documentMutationBusy}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file && !documentMutationRef.current) {
-                        void importChatGptHandoff(file).catch((reason: unknown) =>
-                          setError(messageFrom(reason)),
-                        );
-                      }
-                      event.target.value = '';
-                    }}
-                  />
-                </div>
-                {dirty && <small>Save the PRD before creating a handoff.</small>}
-              </div>
-              {handoffs.map((handoff) => (
-                <article className="handoff-row" key={handoff.id}>
-                  <header>
-                    <div>
-                      <strong>
-                        {handoff.action} on {handoff.scope}
-                      </strong>
-                      <small>
-                        Revision {handoff.sourceRevision}, {handoff.status}
-                      </small>
-                    </div>
-                    <span>{new Date(handoff.createdAt).toLocaleString()}</span>
-                  </header>
-                  {handoff.response && (
-                    <>
-                      <p>{handoff.response.summary}</p>
-                      {handoff.response.patches.map((patch) => {
-                        const configured = handoffDrafts[handoff.id]?.[patch.sectionId];
-                        const enabled = configured !== null;
-                        const sectionTitle =
-                          prd.sections.find((section) => section.id === patch.sectionId)?.title ??
-                          'Unknown section';
-                        return (
-                          <label className="handoff-patch" key={patch.sectionId}>
-                            <span>
-                              <input
-                                type="checkbox"
-                                checked={enabled}
-                                disabled={
-                                  documentMutationBusy ||
-                                  recoveryUnavailable ||
-                                  handoff.status !== 'staged'
-                                }
-                                onChange={(event) => {
-                                  if (documentMutationRef.current || recoveryUnavailable) return;
-                                  setHandoffDrafts((current) => ({
-                                    ...current,
-                                    [handoff.id]: {
-                                      ...current[handoff.id],
-                                      [patch.sectionId]: event.target.checked
-                                        ? patch.afterMarkdown
-                                        : null,
-                                    },
-                                  }));
-                                }}
-                              />
-                              Apply to {sectionTitle}
-                            </span>
-                            <textarea
-                              disabled={
-                                documentMutationBusy ||
-                                recoveryUnavailable ||
-                                !enabled ||
-                                handoff.status !== 'staged'
-                              }
-                              value={configured ?? patch.afterMarkdown}
-                              onChange={(event) => {
-                                if (documentMutationRef.current || recoveryUnavailable) return;
-                                setHandoffDrafts((current) => ({
-                                  ...current,
-                                  [handoff.id]: {
-                                    ...current[handoff.id],
-                                    [patch.sectionId]: event.target.value,
-                                  },
-                                }));
-                              }}
-                            />
-                          </label>
-                        );
-                      })}
-                      {handoff.response.findings.map((finding, index) => (
-                        <div className="handoff-finding" key={`${handoff.id}-${index}`}>
-                          <strong>
-                            {finding.severity}: {finding.category.replace('-', ' ')}
-                          </strong>
-                          <p>{finding.rationale}</p>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  <footer>
-                    {handoff.status === 'staged' && (
-                      <Button
-                        size="sm"
-                        disabled={
-                          handoff.sourceRevision !== prd.revision || dirty || documentMutationBusy
-                        }
-                        onClick={() =>
-                          void applyChatGptHandoff(handoff).catch((reason: unknown) =>
-                            setError(messageFrom(reason)),
-                          )
-                        }
-                      >
-                        <Check aria-hidden="true" />
-                        Apply selected
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={documentMutationBusy}
-                      onClick={() => {
-                        if (documentMutationRef.current) return;
-                        void api
-                          .dismissChatGptHandoff(project.id, handoff.id)
-                          .then(() =>
-                            setHandoffs((current) =>
-                              current.filter((item) => item.id !== handoff.id),
-                            ),
-                          )
-                          .catch((reason: unknown) => setError(messageFrom(reason)));
-                      }}
-                    >
-                      {handoff.status === 'applied' ? 'Retire handoff' : 'Delete handoff'}
-                    </Button>
-                  </footer>
-                </article>
-              ))}
-            </section>
-            <section className="history-section" aria-labelledby="revision-history-heading">
-              <h3 id="revision-history-heading">Revisions</h3>
-              {revisions.map((revision) => (
-                <article className="history-row" key={revision.id}>
-                  <div>
-                    <strong>Revision {revision.revision}</strong>
-                    <span>{revision.reason}</span>
-                    <small>{new Date(revision.createdAt).toLocaleString()}</small>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={revision.revision === prd.revision || dirty || documentMutationBusy}
-                    onClick={() => {
-                      if (
-                        !window.confirm(`Restore revision ${revision.revision} as a new revision?`)
-                      )
-                        return;
-                      void runDocumentMutation(async () => {
-                        const restored = await api.restoreRevision(
-                          project.id,
-                          revision.revision,
-                          prd.revision,
-                        );
-                        setPrd(restored);
-                        setSavedPrd(restored);
-                        setUndoRevision(null);
-                        setRevisions((await api.revisions(project.id)).revisions);
-                      }).catch((reason: unknown) => setError(messageFrom(reason)));
-                    }}
-                  >
-                    <RotateCcw aria-hidden="true" />
-                    Restore
-                  </Button>
-                </article>
-              ))}
-            </section>
-            <section className="history-section" aria-labelledby="ai-history-heading">
-              <h3 id="ai-history-heading">AI runs</h3>
-              {aiRuns.length === 0 ? (
-                <div className="panel-empty">
-                  <History aria-hidden="true" />
-                  <p>No AI actions yet.</p>
-                </div>
-              ) : (
-                aiRuns.map((run) => (
-                  <article className="history-row" key={run.id}>
-                    <div>
-                      <strong>
-                        {run.action} on {run.scope}
-                      </strong>
-                      <span>
-                        {run.provider} / {run.model}
-                      </span>
-                      <small>
-                        Revision {run.sourceRevision}, {run.status},{' '}
-                        {new Date(run.startedAt).toLocaleString()}
-                      </small>
-                      {run.grounding?.status === 'review_required' && (
-                        <small>Grounding review required</small>
-                      )}
-                    </div>
-                    {run.outputText && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          if (documentMutationRef.current) return;
-                          if (busy) return;
-                          setInterrupted(run.status !== 'completed');
-                          setScope(run.scope);
-                          setOutput(
-                            proposalDraft?.runId === run.id
-                              ? proposalDraft.text
-                              : (run.outputText ?? ''),
-                          );
-                          setCitations(run.citations);
-                          setActiveReviewGrounding(
-                            run.action === 'review' && run.grounding
-                              ? {
-                                  runId: run.id,
-                                  sourceRevision: run.sourceRevision,
-                                  grounding: run.grounding,
-                                }
-                              : null,
-                          );
-                          setHandoffCitationIds([]);
-                          setProposalContext(contextForRun(run, prd.revision));
-                          setActiveTurnId(turns.find((turn) => turn.runId === run.id)?.id ?? null);
-                          setSubmittedPrompt('');
-                          setDocumentOpen(false);
-                          setTab('assist');
+              <span className="t-secondary inspector-meta">
+                Version {currentPrd.revision} · {emptySections.length}{' '}
+                {emptySections.length === 1 ? 'section' : 'sections'} empty
+              </span>
+              <ul className="inspector-outline" aria-label="Outline">
+                {currentPrd.sections.map((section, index) => {
+                  const empty = !section.body.trim();
+                  const pending = Boolean(
+                    proposalContext &&
+                    !proposalStale &&
+                    output &&
+                    proposalContext.targetSectionId === section.id,
+                  );
+                  return (
+                    <li key={section.id}>
+                      <a
+                        href={`#section-${section.id}`}
+                        data-pending={pending}
+                        title={section.title}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setSelectedSectionId(section.id);
+                          setDestination('document');
                         }}
-                        disabled={documentMutationBusy || busy}
                       >
-                        Inspect
-                      </Button>
-                    )}
-                  </article>
-                ))
+                        <span className="num">{sectionNumber(index)}</span>
+                        <span className="name truncate">{section.title}</span>
+                        {pending ? (
+                          <span className="tag accent">Change pending</span>
+                        ) : empty && section.required ? (
+                          <span className="tag warning">Required</span>
+                        ) : empty ? (
+                          <span className="tag">Empty</span>
+                        ) : null}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+              {citations.length > 0 && (
+                <div className="inspector-cited">
+                  <span className="t-label">Sources cited in this reply</span>
+                  {citations.map((citation, index) => (
+                    <button
+                      key={citation.id}
+                      type="button"
+                      onClick={() => void openCitation(citation)}
+                    >
+                      <b>{index + 1}</b> {citation.sourceName} · {citation.locator}
+                    </button>
+                  ))}
+                </div>
               )}
-            </section>
-          </div>
-        )}
-      </main>
+            </aside>
+          )}
+          {showInspector && destination === 'document' && (
+            <aside
+              className={`inspector ${inspectorOverlay ? 'overlay' : ''}`}
+              aria-label="Assistant"
+            >
+              <div className="inspector-head">
+                <strong>Assistant</strong>
+                <button
+                  type="button"
+                  className="btn-link"
+                  onClick={() => setDestination('conversation')}
+                >
+                  Open conversation <kbd style={{ font: 'inherit' }}>⌘1</kbd>
+                </button>
+              </div>
+              <div className="inspector-body">
+                <span className="t-label">Latest</span>
+                {acceptedInfo &&
+                undoRevision !== null &&
+                currentPrd.revision === undoRevision + 1 ? (
+                  <div className="inspector-latest">
+                    <CircleCheck aria-hidden="true" style={{ color: 'var(--success)' }} />
+                    <div>
+                      <span>Accepted change to {acceptedInfo.section}</span>
+                      <span className="t-secondary">Version {acceptedInfo.revision}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      disabled={dirty || documentMutationBusy}
+                      onClick={() =>
+                        void undoAccepted().catch((reason: unknown) =>
+                          setError(messageFrom(reason)),
+                        )
+                      }
+                    >
+                      Undo
+                    </button>
+                  </div>
+                ) : proposalContext && output ? (
+                  <div className="inspector-latest">
+                    <div>
+                      <span>Proposed change to {proposalSectionTitle}</span>
+                      <span className="t-secondary">Waiting for your review in Conversation</span>
+                    </div>
+                  </div>
+                ) : turns.length > 0 ? (
+                  <div className="inspector-latest">
+                    <div>
+                      <span className="truncate">
+                        {truncateText(turns[turns.length - 1]!.request, 80)}
+                      </span>
+                      <span className="t-secondary">
+                        {truncateText(turns[turns.length - 1]!.response, 120) || 'No reply saved'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <span className="t-secondary">No replies yet.</span>
+                )}
+              </div>
+              <div className="inspector-composer">
+                <Composer
+                  {...composerProps}
+                  compact
+                  placeholder={selection.trim() ? 'Ask about the selection' : placeholder}
+                />
+              </div>
+            </aside>
+          )}
+        </div>
+      </div>
+
       <input
         ref={fileInputRef}
         className="visually-hidden"
@@ -2786,232 +3635,537 @@ function Workbench({
           event.target.value = '';
         }}
       />
+      <input
+        ref={archiveInputRef}
+        className="visually-hidden"
+        type="file"
+        hidden
+        accept=".prdgenie.zip,.prdgenie,.md,.markdown,.txt,.docx"
+        aria-label="Import PRD or restore project archive"
+        disabled={documentMutationBusy}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file && !documentMutationRef.current) {
+            void leaveWorkspace(() => onProjectImport(file), 'Saved before opening another PRD');
+          }
+          event.target.value = '';
+        }}
+      />
 
-      <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
-        <DialogContent className="workspace-sheet">
-          <DialogTitle>Sources</DialogTitle>
-          <DialogDescription>
-            Local files used as evidence. Importing a file does not make it a document template.
-          </DialogDescription>
-          <section className="source-rail" aria-labelledby="sources-heading">
-            <div className="rail-label">
-              <span id="sources-heading">Sources</span>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Add source"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <FilePlus2 aria-hidden="true" />
-              </Button>
-            </div>
-            {uploading && <p role="status">Importing sources…</p>}
-            {sources.length === 0 ? (
-              <button
-                disabled={uploading}
-                className="empty-source"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                Add evidence
-                <small>PDF, Word, slides, sheets, JPEG, or text</small>
-              </button>
-            ) : (
-              sources.map((source) => (
-                <div className="source-item" key={source.id}>
-                  <div>
-                    <strong>{source.name}</strong>
-                    <small>
-                      {source.status === 'processing' ? 'Extracting and indexing…' : source.status}
-                    </small>
-                    {source.error && <small>{source.error}</small>}
-                  </div>
-                  {(source.status === 'partial' || source.status === 'failed') && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        void api
-                          .retrySourceIndex(project.id, source.id)
-                          .then((updated) =>
-                            setSources((current) =>
-                              current.map((item) => (item.id === updated.id ? updated : item)),
-                            ),
-                          )
-                          .catch((reason: unknown) => setError(messageFrom(reason)));
-                      }}
-                    >
-                      Retry index
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Delete ${source.name}`}
-                    disabled={busy || documentMutationBusy}
-                    onClick={() => {
-                      if (!window.confirm(`Delete ${source.name} and its index?`)) return;
-                      void removeSource(source);
-                    }}
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </Button>
-                </div>
-              ))
-            )}
-          </section>
-          <p className="sheet-note">
-            PDF, Word, slides, spreadsheets, JPEG and text · Up to 25 MB per file. Check extraction
-            warnings before relying on a source.
-          </p>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={structureOpen} onOpenChange={setStructureOpen}>
-        <DialogContent className="workspace-sheet">
-          <DialogTitle>Document structure</DialogTitle>
-          <DialogDescription>
-            Choose headings and purpose for this project. Existing content is preserved or a
-            conflict is reported before changes are applied.
-          </DialogDescription>
-          <StructurePanel
-            project={project}
-            document={prd}
-            onApply={async (structureId) => {
-              if (recoveryUnavailable)
-                throw new Error('Reload when recovery is available before changing structure.');
-              if (recoveryConflict)
-                throw new Error('Review recovered edits before changing structure.');
-              const current = dirty ? await save('Saved before structure change') : prd;
-              if (!current)
-                throw new Error('Save the current document before changing its structure.');
-              const result = await api.selectStructure(project.id, structureId, current.revision);
-              setPrd(result.prd);
-              setSavedPrd(result.prd);
-              setSelectedSectionId(result.prd.sections[0]?.id ?? '');
-              onProjectChange(result.project);
-              setRevisions((await api.revisions(project.id)).revisions);
-            }}
-          />
-        </DialogContent>
-      </Dialog>
       <Dialog open={exportOpen} onOpenChange={setExportOpen}>
-        <DialogContent className="workspace-sheet export-sheet">
-          <DialogTitle>Export document</DialogTitle>
-          <DialogDescription>
-            The latest edits are saved before export. Export works without AI or an internet
-            connection.
-          </DialogDescription>
-          <div className="export-row">
-            <span>Export</span>
-            {(['pdf', 'docx', 'markdown', 'archive'] as const).map((format) => (
-              <button
-                type="button"
-                key={
-                  format === 'docx'
-                    ? 'Word (.docx)'
-                    : format === 'pdf'
-                      ? 'PDF'
-                      : format === 'archive'
-                        ? 'Project archive'
-                        : 'Markdown'
-                }
-                disabled={documentMutationBusy || saveBusy}
-                onClick={() => void exportCurrent(format)}
-              >
-                <Download aria-hidden="true" />
-                {format === 'docx'
-                  ? 'Word (.docx)'
-                  : format === 'pdf'
-                    ? 'PDF'
-                    : format === 'archive'
-                      ? 'Project archive'
-                      : 'Markdown'}
-              </button>
+        <DialogContent
+          className="sheet"
+          showCloseButton={false}
+          aria-label="Export"
+          onCloseAutoFocus={(event) => {
+            // WebKit drops focus to the body when a dialog closes; return it to the toolbar button.
+            event.preventDefault();
+            exportButtonRef.current?.focus();
+          }}
+        >
+          <div className="sheet-title">
+            <DialogTitle asChild>
+              <h2>Export</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                From the latest edits · Version {currentPrd.revision}
+                {dirty
+                  ? ', unsaved edits are saved first'
+                  : revisions.length
+                    ? `, saved at ${formatTime([...revisions].sort((a, b) => b.revision - a.revision)[0]!.createdAt)}`
+                    : ''}
+              </p>
+            </DialogDescription>
+          </div>
+          <div className="radio-list" role="radiogroup" aria-label="Format">
+            {(
+              [
+                [
+                  'markdown',
+                  'Markdown (.md)',
+                  'Headings and lists as plain text, for repositories and wikis',
+                ],
+                ['docx', 'Word (.docx)', 'Editable in Word and Pages'],
+                ['pdf', 'PDF', 'Fixed layout for reading and review'],
+                [
+                  'archive',
+                  'Project archive (.prdgenie)',
+                  'PRD, sources, structure and history. Restore it with Import.',
+                ],
+              ] as const
+            ).map(([value, title, description]) => (
+              <label key={value} className="radio-option check">
+                <input
+                  type="radio"
+                  name="export-format"
+                  value={value}
+                  checked={exportFormat === value}
+                  onChange={() => setExportFormat(value)}
+                />
+                <div>
+                  <span className="title">{title}</span>
+                  <span className="t-secondary">{description}</span>
+                </div>
+              </label>
             ))}
           </div>
-          <p role="status">{exportStatus}</p>
+          {exportStatus && (
+            <p className="t-secondary" role="status">
+              {exportStatus}
+            </p>
+          )}
+          <div className="sheet-foot">
+            <span className="t-secondary">Works offline. You choose where to save next.</span>
+            <button type="button" className="btn" onClick={() => setExportOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={documentMutationBusy || saveBusy}
+              onClick={() => void exportCurrent(exportFormat)}
+            >
+              Export…
+            </button>
+          </div>
         </DialogContent>
       </Dialog>
+
+      <HandoffSheet
+        open={handoffOpen}
+        onOpenChange={setHandoffOpen}
+        prd={currentPrd}
+        instruction={handoffInstruction}
+        onInstructionChange={(value) => {
+          if (!documentMutationRef.current) setHandoffInstruction(value);
+        }}
+        citations={citations}
+        selectedCitationIds={handoffCitationIds}
+        onToggleCitation={(id, checked) => {
+          if (documentMutationRef.current) return;
+          setHandoffCitationIds((current) =>
+            checked ? [...current, id] : current.filter((item) => item !== id),
+          );
+        }}
+        disabled={documentMutationBusy || recoveryUnavailable}
+        dirty={dirty}
+        onPrepare={prepareHandoff}
+        onImportResponse={importHandoffResponse}
+      />
+
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="workspace-sheet">
-          <DialogTitle>New project</DialogTitle>
-          <DialogDescription>
-            Keep a PRD, its instructions and sources together on this Mac.
-          </DialogDescription>
+        <DialogContent className="sheet" showCloseButton={false} aria-label="New project">
           <form
-            className="new-project-form"
+            className="sheet-step"
+            style={{ gap: 16 }}
             onSubmit={(event) => {
               event.preventDefault();
-              void createAnotherProject();
+              if (!newProjectName.trim()) return;
+              void leaveWorkspace(
+                () => onProjectCreate(newProjectName.trim()),
+                'Saved before creating project',
+              ).then(() => setCreateOpen(false));
             }}
           >
-            <label htmlFor="new-project-name">Project name</label>
-            <input
-              id="new-project-name"
-              value={newProjectName}
-              onChange={(event) => setNewProjectName(event.target.value)}
-              maxLength={120}
-              autoFocus
-            />
-            <Button type="submit" disabled={!newProjectName.trim() || busy || documentMutationBusy}>
-              Create project
-            </Button>
+            <div className="sheet-title">
+              <DialogTitle asChild>
+                <h2>New project</h2>
+              </DialogTitle>
+              <DialogDescription asChild>
+                <p>A PRD with the default 13-section structure. Everything stays on this Mac.</p>
+              </DialogDescription>
+            </div>
+            <div className="form-group">
+              <label htmlFor="new-project-name">Project name</label>
+              <input
+                id="new-project-name"
+                className="field"
+                value={newProjectName}
+                onChange={(event) => setNewProjectName(event.target.value)}
+                maxLength={120}
+                autoFocus
+              />
+            </div>
+            <div className="sheet-foot end">
+              <button type="button" className="btn" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!newProjectName.trim() || busy || documentMutationBusy}
+              >
+                Create project
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="sheet" showCloseButton={false} aria-label="Rename project">
+          <form
+            className="sheet-step"
+            style={{ gap: 16 }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!renameValue.trim()) return;
+              void api
+                .updateProject(project.id, { name: renameValue.trim() })
+                .then((updated) => {
+                  onProjectChange(updated);
+                  setRenameOpen(false);
+                })
+                .catch((reason: unknown) => setError(messageFrom(reason)));
+            }}
+          >
+            <div className="sheet-title">
+              <DialogTitle asChild>
+                <h2>Rename project</h2>
+              </DialogTitle>
+            </div>
+            <div className="form-group">
+              <label htmlFor="rename-project">Name</label>
+              <input
+                id="rename-project"
+                className="field"
+                value={renameValue}
+                maxLength={120}
+                autoFocus
+                onChange={(event) => setRenameValue(event.target.value)}
+              />
+            </div>
+            <div className="sheet-foot end">
+              <button type="button" className="btn" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={!renameValue.trim()}>
+                Rename
+              </button>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
 
       <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen}>
-        <DialogContent className="workspace-sheet">
-          <DialogTitle>Recovered edits</DialogTitle>
-          <DialogDescription>
-            These edits are from version {recoveryConflict?.baseRevision}. The saved document is
-            version {prd.revision}. Replacing the editor does not change saved history until you
-            save.
-          </DialogDescription>
+        <DialogContent className="sheet wide" showCloseButton={false} aria-label="Recovered edits">
+          <div className="sheet-title">
+            <DialogTitle asChild>
+              <h2>Recovered edits</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                These edits were made on Version {recoveryConflict?.baseRevision}. The saved
+                document is Version {currentPrd.revision}. Nothing changes until you choose.
+              </p>
+            </DialogDescription>
+          </div>
           <div className="recovery-document">
             {recoveryConflict?.sections.map((section) => (
               <section key={section.id}>
                 <h3>{section.title}</h3>
-                <pre>{section.body}</pre>
+                <pre>{section.body || '(empty)'}</pre>
               </section>
             ))}
           </div>
-          <Button
-            disabled={busy || documentMutationBusy}
-            onClick={() => {
-              if (!recoveryConflict) return;
-              setPrd({ ...prd, sections: recoveryConflict.sections });
-              setRecoveryConflict(null);
-              setRecoveryOpen(false);
-              setDocumentOpen(true);
-            }}
-          >
-            Use recovered edits in editor
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              if (window.confirm('Discard this recovery copy and keep the saved document?')) {
+          <div className="sheet-foot end">
+            <button type="button" className="btn" onClick={() => setRecoveryOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setAlert({ kind: 'discard-recovery' })}
+            >
+              Keep Version {currentPrd.revision}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || documentMutationBusy}
+              onClick={() => {
+                if (!recoveryConflict) return;
+                setPrd({ ...currentPrd, sections: recoveryConflict.sections });
                 setRecoveryConflict(null);
                 setRecoveryOpen(false);
-              }
-            }}
-          >
-            Keep saved document and discard recovery
-          </Button>
+                setDestination('document');
+              }}
+            >
+              Save edits as Version {currentPrd.revision + 1}
+            </button>
+          </div>
         </DialogContent>
       </Dialog>
-      {providerOpen && (
-        <ProviderDialog
-          key={project.id}
-          open
-          project={project}
-          onOpenChange={setProviderOpen}
-          onProjectChange={onProjectChange}
-        />
-      )}
+
+      <Dialog open={alert !== null} onOpenChange={(open) => !open && setAlert(null)}>
+        <DialogContent className="alert" role="alertdialog" showCloseButton={false}>
+          {alert && <AlertBody alert={alert} />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+
+  function AlertBody({ alert }: { alert: AlertKind }) {
+    const close = () => setAlert(null);
+    switch (alert.kind) {
+      case 'delete-project':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Delete “{project.name}”?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                The PRD, its sources and history are removed from this Mac. Export an archive first
+                if you might need it.
+                {dirty ? ' This also discards unsaved changes.' : ''}
+              </p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={documentMutationBusy}
+                onClick={() => {
+                  close();
+                  void runDocumentMutation(() => onProjectDelete(project.id)).catch(
+                    (reason: unknown) => setError(messageFrom(reason)),
+                  );
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </>
+        );
+      case 'remove-source':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Remove “{alert.source.name}” from this project?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                Its text leaves the assistant’s evidence. Replies that cited it keep their excerpts
+                in History.
+              </p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  close();
+                  void removeSource(alert.source);
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </>
+        );
+      case 'remove-section': {
+        const section = currentPrd.sections.find((item) => item.id === alert.sectionId);
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Remove “{section?.title ?? 'section'}”?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                The section and its text leave the document. Earlier versions in History keep it.
+              </p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  close();
+                  if (documentMutationRef.current || recoveryUnavailable || recoveryConflict)
+                    return;
+                  setPrd({
+                    ...currentPrd,
+                    sections: currentPrd.sections
+                      .filter((item) => item.id !== alert.sectionId)
+                      .map((item, position) => ({ ...item, position })),
+                  });
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </>
+        );
+      }
+      case 'restore':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Restore Version {alert.revision.revision}?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>This creates Version {currentPrd.revision + 1}. No revision is deleted.</p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  close();
+                  void runDocumentMutation(async () => {
+                    const restored = await api.restoreRevision(
+                      project.id,
+                      alert.revision.revision,
+                      currentPrd.revision,
+                    );
+                    setPrd(restored);
+                    setSavedPrd(restored);
+                    setUndoRevision(null);
+                    setAcceptedInfo(null);
+                    setRevisions((await api.revisions(project.id)).revisions);
+                    setSelectedRevision(restored.revision);
+                  }).catch((reason: unknown) => setError(messageFrom(reason)));
+                }}
+              >
+                Restore
+              </button>
+            </div>
+          </>
+        );
+      case 'use-structure':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Use “{alert.entry.name}” for this project?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>
+                Section headings change to match. Text in sections with the same title is kept; the
+                change is saved as a new version.
+              </p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  close();
+                  applyStructure(alert.entry);
+                }}
+              >
+                Use
+              </button>
+            </div>
+          </>
+        );
+      case 'delete-structure':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Delete “{alert.structure.name}”?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>Documents already using it keep their sections.</p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  close();
+                  void api
+                    .deleteStructure(project.id, alert.structure.id)
+                    .then(() => {
+                      setStructures((current) =>
+                        current.filter((item) => item.id !== alert.structure.id),
+                      );
+                      setStructureSelection(BUILT_IN_STRUCTURE_ID);
+                    })
+                    .catch((reason: unknown) => setError(messageFrom(reason)));
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </>
+        );
+      case 'discard-recovery':
+        return (
+          <>
+            <DialogTitle asChild>
+              <h2>Keep Version {currentPrd.revision}?</h2>
+            </DialogTitle>
+            <DialogDescription asChild>
+              <p>The recovered edits are discarded. Every saved revision stays in History.</p>
+            </DialogDescription>
+            <div className="alert-actions">
+              <button type="button" className="btn" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  close();
+                  setRecoveryConflict(null);
+                  setRecoveryOpen(false);
+                }}
+              >
+                Keep Version {currentPrd.revision}
+              </button>
+            </div>
+          </>
+        );
+    }
+  }
+
+  function inspectRun(run: AiRunProposal) {
+    if (documentMutationRef.current || busy) return;
+    setInterrupted(run.status !== 'completed');
+    setFailure('');
+    setStoppedAt('');
+    if (run.scope !== 'selection') setScope(run.scope, run.targetSectionId);
+    setOutput(
+      proposalDraft?.runId === run.id && proposalDraft.text
+        ? proposalDraft.text
+        : (run.outputText ?? ''),
+    );
+    // Reopening a rejected proposal clears the recorded rejection.
+    setProposalDraft((draft) => (draft?.runId === run.id && !draft.text ? undefined : draft));
+    setCitations(run.citations);
+    setActiveReviewGrounding(
+      run.action === 'review' && run.grounding
+        ? { runId: run.id, sourceRevision: run.sourceRevision, grounding: run.grounding }
+        : null,
+    );
+    setHandoffCitationIds([]);
+    setProposalContext(contextForRun(run, currentPrd.revision, turns));
+    setActiveTurnId(turns.find((turn) => turn.runId === run.id)?.id ?? null);
+    setSubmittedPrompt('');
+    setAcceptedInfo(null);
+    setRejectedSection(null);
+    setDestination('conversation');
+  }
 }
 
 function reorder(prd: PrdDocument, from: number, to: number): PrdDocument {
@@ -3020,32 +4174,14 @@ function reorder(prd: PrdDocument, from: number, to: number): PrdDocument {
   const [moved] = sections.splice(from, 1);
   if (!moved) return prd;
   sections.splice(to, 0, moved);
-  return {
-    ...prd,
-    sections: sections.map((section, position) => ({ ...section, position })),
-  };
+  return { ...prd, sections: sections.map((section, position) => ({ ...section, position })) };
 }
 
-function truncateText(value: string, limit = 160): string {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, limit - 3)}...`;
-}
-
-function messageFrom(error: unknown): string {
-  return error instanceof Error ? error.message : 'The operation could not be completed.';
-}
-
-function actionForInstruction(instruction: string, document: PrdDocument): AiAction {
-  const text = instruction.trim().toLowerCase();
-  if (/^(what|why|how|which|where|when|can you explain|explain)\b/.test(text)) return 'ask';
-  if (/^(draft|create|write|start|generate)\b/.test(text)) return 'draft';
-  if (/\b(review|critique|audit|assess|find gaps|check for)\b/.test(text)) return 'review';
-  if (/\b(rewrite|revise|update|change|improve|replace|add|remove|make)\b/.test(text))
-    return 'rewrite';
-  return document.sections.some((section) => section.body.trim()) ? 'ask' : 'draft';
-}
-
-function contextForRun(run: AiRunProposal, revision: number): ProposalContext | null {
+function contextForRun(
+  run: AiRunProposal,
+  revision: number,
+  turns: WorkspaceTurn[],
+): ProposalContext | null {
   if (run.action !== 'draft' && run.action !== 'rewrite') return null;
   return {
     sourceRunId: run.id,
@@ -3064,54 +4200,7 @@ function contextForRun(run: AiRunProposal, revision: number): ProposalContext | 
     appliedRevision: run.appliedRevision,
     targetSectionId: run.targetSectionId,
     selectionText: run.selectionText,
+    instruction: turns.find((turn) => turn.runId === run.id)?.request ?? null,
     grounding: run.grounding ?? null,
   };
-}
-
-function GroundingNotice({
-  assessment,
-  citations,
-  onOpenCitation,
-  children,
-}: {
-  assessment: GroundingAssessment;
-  citations: Citation[];
-  onOpenCitation: (citation: Citation) => Promise<void>;
-  children?: ReactNode;
-}) {
-  return (
-    <section className="grounding-review" aria-label="Grounding review">
-      <p role="status">
-        <strong>Grounding review required</strong>
-      </p>
-      <p>
-        Check that the wording preserves the sources' meaning, quantities, people, timing and
-        qualifications. Completion is not confirmation that these claims are supported.
-      </p>
-      <ul>
-        {assessment.reasons.map((reason, index) => (
-          <li key={index}>{reason}</li>
-        ))}
-      </ul>
-      {citations.length > 0 ? (
-        <details>
-          <summary>Compare source excerpts ({citations.length})</summary>
-          {citations.map((citation) => (
-            <div key={citation.id}>
-              <Button variant="link" size="sm" onClick={() => void onOpenCitation(citation)}>
-                {citation.sourceName} · {citation.locator}
-              </Button>
-              <blockquote>{citation.excerpt}</blockquote>
-            </div>
-          ))}
-        </details>
-      ) : (
-        <p>
-          No source excerpts were supplied. Compare the claims with your instructions and current
-          document.
-        </p>
-      )}
-      {children}
-    </section>
-  );
 }

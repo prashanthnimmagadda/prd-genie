@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var modalOpen = false
     private var discardConfirmed = false
     private var accessibilityObserver: NSObjectProtocol?
-    private let commands: Set<String> = ["toggle-sidebar", "conversation", "document", "sources", "history", "export", "settings", "save", "new-project"]
+    private let commands: Set<String> = ["toggle-sidebar", "toggle-inspector", "conversation", "document", "sources", "history", "structures", "export", "settings", "save", "new-project", "import", "focus-composer"]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let resource = Bundle.main.resourceURL else { fail("The application resources are missing."); return }
@@ -47,14 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         do { try process.run() } catch { fail("The local PRD Genie server could not start: \(error.localizedDescription)"); return }
         self.server = process
 
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "PRD Genie"
         window.delegate = self
         window.appearance = NSAppearance(named: .aqua)
         window.subtitle = "Opening your local workspace"
         if !window.setFrameUsingName("PRDGenieWorkspace") { window.center() }
         window.setFrameAutosaveName("PRDGenieWorkspace")
-        window.minSize = NSSize(width: 900, height: 650)
+        window.minSize = NSSize(width: 640, height: 520)
         window.toolbarStyle = .unified
         let toolbar = NSToolbar(identifier: "PRDGenieWorkspace")
         toolbar.delegate = self
@@ -157,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     private func commandEnabled(_ command: String) -> Bool {
         guard contentReady, !modalOpen else { return false }
-        if command == "settings" || command == "new-project" { return true }
+        if command == "settings" || command == "new-project" || command == "import" { return true }
         if command == "save" { return hasProject && dirty }
         return hasProject
     }
@@ -242,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         application.addItem(withTitle: "Quit PRD Genie", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let file = menu("File")
         command(file, "New Project…", "new-project", "n")
+        command(file, "Import…", "import", "o")
         command(file, "Save", "save", "s")
         command(file, "Export…", "export", "e", modifiers: [.command, .shift])
         file.addItem(.separator())
@@ -256,6 +257,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         command(view, "Document", "document", "2")
         command(view, "Sources", "sources", "3")
         command(view, "History", "history", "4")
+        command(view, "Structures", "structures", ",", modifiers: [.command, .shift])
+        command(view, "Toggle Inspector", "toggle-inspector", "0", modifiers: [.command, .option])
+        command(view, "Focus Composer", "focus-composer", "l")
         view.addItem(.separator())
         let fullscreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullscreen.keyEquivalentModifierMask = [.control, .command]
