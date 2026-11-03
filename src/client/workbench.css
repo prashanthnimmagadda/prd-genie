@@ -2253,8 +2253,9 @@ textarea.field {
   gap: 2px;
 }
 .structure-row .row-actions button {
-  width: 20px;
-  height: 20px;
+  /* WCAG 2.2 target size: at least 24 by 24 CSS pixels. */
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
