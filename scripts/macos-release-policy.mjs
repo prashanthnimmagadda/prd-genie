@@ -34,15 +34,18 @@ const hash = (file) => createHash('sha256').update(fs.readFileSync(file)).digest
 export function inspectMacosArchive(archive, components, inspect) {
   // List before extracting: permit only this app and ditto's AppleDouble metadata.
   // Reject links and special files, including entries that could escape the temp directory.
+  // bsdtar (libarchive) decodes UTF-8 entry names; macOS zipinfo prints them lossily,
+  // which made bundles with non-ASCII dependency paths impossible to verify.
   const list = (verbose) =>
-    execFileSync('/usr/bin/zipinfo', [verbose ? '-l' : '-1', archive], {
+    execFileSync('/usr/bin/bsdtar', [verbose ? '-tvf' : '-tf', archive], {
       encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, LC_ALL: 'en_US.UTF-8' },
     })
       .trimEnd()
       .split('\n');
   const names = list(false);
-  const modes = list(true).slice(2, -1);
+  const modes = list(true);
   if (
     new Set(names).size !== names.length ||
     names.some(
@@ -335,7 +338,8 @@ export function validateMacosReleaseEvidence(root, gitSha, archiveOverride) {
           path.join(extractedApp, item.path.slice(macosBundlePath.length + 1)),
         ),
       ]) {
-        execFileSync('/usr/bin/codesign', ['--verify', '--strict', '-R', requirement, target], {
+        // '=' marks an inline requirement; without it codesign reads a requirement file.
+        execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=${requirement}`, target], {
           stdio: 'pipe',
         });
         // codesign writes its display output to stderr.

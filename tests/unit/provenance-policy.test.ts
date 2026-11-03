@@ -314,15 +314,10 @@ describe('release provenance policy', () => {
     vi.mocked(execFileSync).mockImplementation(((command: string, args: string[]) => {
       if (command === 'git') return '112';
       if (command === '/usr/bin/plutil') return plist[args[1]!]!;
-      if (command === '/usr/bin/zipinfo')
-        return args[0] === '-1'
+      if (command === '/usr/bin/bsdtar')
+        return args[0] === '-tf'
           ? names.join('\n')
-          : [
-              'Archive: fixture',
-              'Zip file size: fixture',
-              ...names.map((name) => `-rw-r--r-- fixture ${name}`),
-              'Totals',
-            ].join('\n');
+          : names.map((name) => `-rw-r--r--  0 501 20 1 Nov  3 12:00 ${name}`).join('\n');
       if (command === '/usr/bin/ditto') {
         fs.cpSync(bundle, path.join(args[3]!, 'PRD Genie.app'), { recursive: true });
         return '';
@@ -411,13 +406,11 @@ describe('release provenance policy', () => {
   it('rejects ZIP aliases before extraction', () => {
     const name = 'PRD Genie.app/Contents/a';
     vi.mocked(execFileSync).mockImplementation(((command: string, args: string[]) => {
-      if (command !== '/usr/bin/zipinfo') throw new Error('Extraction must not occur');
+      if (command !== '/usr/bin/bsdtar') throw new Error('Extraction must not occur');
       const names = [name, 'PRD Genie.app/Contents//a'];
-      return args[0] === '-1'
+      return args[0] === '-tf'
         ? names.join('\n')
-        : ['Archive', 'Size', ...names.map((item) => `-rw-r--r-- fixture ${item}`), 'Totals'].join(
-            '\n',
-          );
+        : names.map((item) => `-rw-r--r--  0 501 20 1 Nov  3 12:00 ${item}`).join('\n');
     }) as typeof execFileSync);
     expect(() =>
       inspectMacosArchive(
