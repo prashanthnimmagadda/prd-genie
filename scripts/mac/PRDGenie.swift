@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         environment["PRD_GENIE_PORT"] = String(port)
         environment["NODE_ENV"] = "production"
         environment["PRD_GENIE_OCR_HELPER"] = resource.appendingPathComponent("jpeg-ocr").path
+        // The server stops itself if this app process disappears without a normal quit.
+        environment["PRD_GENIE_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         process.environment = environment
         let log = Pipe()
         // Drain local server output without retaining request URLs or document data.

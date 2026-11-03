@@ -14,3 +14,20 @@ const shutdown = async (signal: string) => {
 
 process.once('SIGINT', () => void shutdown('SIGINT'));
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
+
+// When the macOS app is force-quit it cannot stop this server. The app passes its
+// process ID; once that process is gone, shut down instead of lingering.
+const parentPid = Number(process.env.PRD_GENIE_PARENT_PID);
+if (Number.isInteger(parentPid) && parentPid > 1) {
+  const watcher = setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        clearInterval(watcher);
+        void shutdown('parent-exit');
+      }
+    }
+  }, 2000);
+  watcher.unref();
+}

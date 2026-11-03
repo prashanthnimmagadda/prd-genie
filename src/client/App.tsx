@@ -1106,8 +1106,9 @@ function Workbench({
       );
       return false;
     }
-    const requestedAction = override?.action ?? actionForInstruction(instruction, prd);
     const requestedScope = override?.scope ?? scope;
+    const requestedAction =
+      override?.action ?? actionForInstruction(instruction, prd, requestedScope);
     const requestedTargetSectionId =
       requestedScope === 'document'
         ? null
@@ -1529,7 +1530,7 @@ function Workbench({
 
   async function prepareHandoff(handoffScope: ActionScope, sectionId: string | null) {
     if (!prd || !handoffInstruction.trim() || dirty || documentMutationRef.current) return null;
-    const inferred = actionForInstruction(handoffInstruction, prd);
+    const inferred = actionForInstruction(handoffInstruction, prd, handoffScope);
     const handoffAction = inferred === 'ask' ? 'rewrite' : inferred;
     const resolvedScope: 'document' | 'section' =
       handoffScope === 'document' ? 'document' : 'section';

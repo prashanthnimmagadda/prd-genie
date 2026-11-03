@@ -1,4 +1,4 @@
-import type { AiAction, PrdDocument, SourceSummary } from '@shared/types';
+import type { ActionScope, AiAction, PrdDocument, SourceSummary } from '@shared/types';
 
 export function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'The operation could not be completed.';
@@ -66,13 +66,25 @@ export function truncateText(value: string, limit = 160): string {
   return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 }
 
-export function actionForInstruction(instruction: string, document: PrdDocument): AiAction {
+export function actionForInstruction(
+  instruction: string,
+  document: PrdDocument,
+  scope: ActionScope = 'document',
+): AiAction {
   const text = instruction.trim().toLowerCase();
-  if (/^(what|why|how|which|where|when|can you explain|explain|list)\b/.test(text)) return 'ask';
+  if (/^(what|why|how|which|where|when|who|is|are|does|can you explain|explain|list)\b/.test(text))
+    return 'ask';
   if (/^(draft|create|write|start|generate)\b/.test(text)) return 'draft';
   if (/\b(review|critique|audit|assess|find gaps|check for)\b/.test(text)) return 'review';
-  if (/\b(rewrite|revise|update|change|improve|replace|add|remove|make|tighten)\b/.test(text))
+  if (
+    /\b(rewrite|revise|update|change|improve|replace|add|remove|make|tighten|summari[sz]e|condense|shorten|expand|clarify|rephrase|restate|simplify|state|describe|turn|convert|split|merge|reorder|fix)\b/.test(
+      text,
+    )
+  )
     return 'rewrite';
+  // An instruction aimed at a section or selection is a change request; only a
+  // whole-document instruction that names no change is treated as a question.
+  if (scope !== 'document') return 'rewrite';
   return document.sections.some((section) => section.body.trim()) ? 'ask' : 'draft';
 }
 
