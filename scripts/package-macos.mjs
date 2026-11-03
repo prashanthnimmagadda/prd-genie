@@ -160,6 +160,7 @@ writeFileSync(
 <key>PRDGenieReleaseVersion</key><string>${packageJson.version}</string>
 <key>PRDGenieGitCommit</key><string>${gitCommit}</string>
 <key>CFBundleExecutable</key><string>PRD Genie</string>
+<key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
