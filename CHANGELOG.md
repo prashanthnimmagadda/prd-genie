@@ -6,6 +6,11 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ## Unreleased
 
+### Changed
+
+- Redesigned the macOS workspace from the Claude Design specification: one sidebar for Conversation, Document, Sources and History, a single composer with explicit scope and model menus, review-required proposal cards and an Export sheet.
+- Signed the macOS app with a Developer ID, notarised it with Apple and stapled the ticket.
+
 ### Added
 
 - A macOS app with native navigation, keyboard commands and save panels around a central conversation workspace and focused document editor.
@@ -17,6 +22,8 @@ The project follows Semantic Versioning and uses Conventional Commits with autom
 
 ### Fixed
 
+- Showed inline source citations as numbered chips in proposals, the document and answers, kept stored citation markers exact after manual edits, and numbered citations with a Sources list in Markdown, Word and PDF exports.
+- Marked the packaged bundle as an application so Gatekeeper assesses it.
 - Preserved in-progress work across navigation, interrupted generation and provider failures, with explicit recovery and cancellation states.
 - Avoided recovery writes when merely opening a project, preventing conflicts between unchanged viewers.
 - Exported the latest document edits to PDF and Word, preserving headings, lists, tables and references; corrected PDF wrapping and heading spacing.

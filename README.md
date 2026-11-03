@@ -19,9 +19,9 @@ This repository is an independent implementation.
 
 ## Status
 
-The latest packaged release is [v0.1.0-rc.3](https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.3), an early candidate. The `main` branch includes subsequent onboarding, dependency, and browser fixes listed under [Unreleased](CHANGELOG.md#unreleased). The Quick start below installs `main`; RC.3 downloads do not contain those later fixes. See [Quality and model evaluation](docs/QUALITY.md) for evidence rules and limitations.
+The latest packaged release is [v0.1.0-rc.4](https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.4), a labelled pre-release: a Developer ID signed and Apple-notarised macOS app for Apple silicon (macOS 13 or later). Two release gates are open and disclosed in [`release/prerelease-gate-exception.json`](release/prerelease-gate-exception.json): the recorded model evaluation and the container smoke test. See [Quality and model evaluation](docs/QUALITY.md) for evidence rules and limitations.
 
-No adoption, universal accuracy, signed desktop distribution, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
+No adoption, universal accuracy, or unattended document-quality claim is made. Every model output remains a reviewable proposal.
 
 ![PRD Genie macOS conversation workspace with a fictional example project](docs/screenshots/workbench.png)
 
