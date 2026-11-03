@@ -170,9 +170,19 @@ export const requiredArtifactFiles = [
 ];
 export const requiredArtifactDirectories = ['dist/client', 'dist/server', 'drizzle'];
 
+const openGateReports = {
+  'model-evaluation': 'reports/model-evaluation.json',
+  'container-smoke': 'reports/container-smoke.json',
+};
+
 export function collectArtifactPaths(root) {
-  const collected = [...requiredArtifactFiles];
-  for (const relative of requiredArtifactFiles) requireRegularFile(root, relative);
+  // A recorded pre-release exception leaves those gates open, so their reports
+  // are not part of the inventory (validateEvidenceReports skips them too).
+  const { openGates } = readPrereleaseGateException(root);
+  const omitted = new Set(openGates.map((gate) => openGateReports[gate]));
+  const required = requiredArtifactFiles.filter((relative) => !omitted.has(relative));
+  const collected = [...required];
+  for (const relative of required) requireRegularFile(root, relative);
   collected.push(...collectMacosArtifactPaths(root));
   for (const relative of requiredArtifactDirectories) {
     const absolute = path.join(root, relative);

@@ -491,6 +491,15 @@ describe('release provenance policy', () => {
     expect(validateEvidenceReports(root, gitSha)).toEqual({
       openGates: ['model-evaluation', 'container-smoke'],
     });
+    const inventory = collectArtifactPaths(root);
+    expect(inventory).not.toContain('reports/model-evaluation.json');
+    expect(inventory).not.toContain('reports/container-smoke.json');
+    expect(inventory).toContain('reports/browser-e2e.json');
+    fs.rmSync(path.join(root, 'reports/browser-e2e.json'));
+    expect(() => collectArtifactPaths(root)).toThrow('reports/browser-e2e.json');
+    writeEvidence(root);
+    fs.rmSync(path.join(root, 'reports/model-evaluation.json'));
+    fs.rmSync(path.join(root, 'reports/container-smoke.json'));
 
     writeJson(root, 'release/prerelease-gate-exception.json', {
       ...exception,
