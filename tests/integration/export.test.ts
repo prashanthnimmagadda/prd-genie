@@ -103,6 +103,31 @@ describe('ExportService', () => {
     expect(text).not.toContain('| --- |');
   });
 
+  it('numbers citation markers in exports without changing the stored document', async () => {
+    const a = 'b9c407a7-a0a8-4356-9e08-c4d3e2debdab';
+    const b = '38f52da1-821d-469c-85b7-29d9402eb005';
+    const prd = repository.getPrd(projectId);
+    repository.savePrd(
+      projectId,
+      prd.revision,
+      prd.sections.map((section, index) => ({
+        ...section,
+        body:
+          index === 0
+            ? `Eight lost work. [${a}] Cost 23 minutes. \\[${b}\\] Again [${a}, ${b}].`
+            : section.body,
+      })),
+      'Cited content',
+    );
+    const markdown = (await exporter.create(projectId, 'markdown')).body.toString();
+    expect(markdown).toContain('Eight lost work. [1] Cost 23 minutes. [2] Again [1, 2].');
+    expect(markdown).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(markdown).toMatch(/## Sources[\s\S]*1\. Source no longer available/);
+    const archive = await exporter.create(projectId, 'archive');
+    expect(archive.body.length).toBeGreaterThan(0);
+    expect(repository.getPrd(projectId).sections[0]!.body).toContain(`[${a}]`);
+  });
+
   it('rejects spreadsheet and unknown export requests', async () => {
     await expect(exporter.create(projectId, 'xlsx')).rejects.toMatchObject({
       code: 'unsupported_export',

@@ -22,6 +22,12 @@ import type { Repository } from '../db/repository.js';
 import { ArchiveService } from '../archive/archive-service.js';
 
 const require = createRequire(import.meta.url);
+const citationUuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+// Stored markers, plus the escaped form older editor saves produced.
+const citationMarkerPattern = new RegExp(
+  `\\\\?\\[(${citationUuid}(?:\\s*[,;]\\s*${citationUuid})*)\\\\?\\]`,
+  'gi',
+);
 const pdfFontPaths = {
   regular: require.resolve('pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf'),
   bold: require.resolve('pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf'),
@@ -43,9 +49,57 @@ export class ExportService {
     this.archives = new ArchiveService(repository, database);
   }
 
+  /** Replaces "[chunk-id]" markers with "[n]" and lists the cited sources at the end. */
+  private withNumberedCitations(projectId: string, prd: PrdDocument): PrdDocument {
+    const numbers = new Map<string, number>();
+    const lookup = this.database.sqlite.prepare(
+      `SELECT citations.source_name AS sourceName, citations.locator AS locator
+         FROM citations
+         INNER JOIN ai_runs ON ai_runs.id = citations.ai_run_id
+        WHERE citations.chunk_id = ? AND ai_runs.project_id = ?
+        ORDER BY citations.created_at DESC
+        LIMIT 1`,
+    );
+    const sections = prd.sections.map((section) => ({
+      ...section,
+      body: section.body.replace(citationMarkerPattern, (_marker, ids: string) => {
+        const labels = ids.split(/[,;]/).map((id) => {
+          const key = id.trim().toLowerCase();
+          if (!numbers.has(key)) numbers.set(key, numbers.size + 1);
+          return numbers.get(key)!;
+        });
+        return `[${[...new Set(labels)].join(', ')}]`;
+      }),
+    }));
+    if (numbers.size === 0) return prd;
+    const references = [...numbers.entries()].map(([chunkId, number]) => {
+      const row = lookup.get(chunkId, projectId) as
+        { sourceName: string; locator: string } | undefined;
+      return `${number}. ${row ? `${row.sourceName} · ${row.locator}` : 'Source no longer available'}`;
+    });
+    const last = sections.at(-1);
+    return {
+      ...prd,
+      sections: [
+        ...sections,
+        {
+          ...(last ?? prd.sections[0]!),
+          id: 'sources',
+          title: 'Sources',
+          body: references.join('\n'),
+          position: (last?.position ?? 0) + 1,
+          purpose: '',
+          required: false,
+        },
+      ],
+    };
+  }
+
   async create(projectId: string, format: string): Promise<ExportResult> {
     const project = this.repository.getProject(projectId);
-    const prd = this.repository.getPrd(projectId);
+    const stored = this.repository.getPrd(projectId);
+    // Archives keep exact citation markers so a restore can revalidate them.
+    const prd = format === 'archive' ? stored : this.withNumberedCitations(projectId, stored);
     const slug = filenameSlug(project.name);
     switch (format) {
       case 'markdown':

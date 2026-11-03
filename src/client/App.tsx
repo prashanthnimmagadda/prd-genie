@@ -84,6 +84,7 @@ import {
   ReviewBlock,
   StaleRow,
 } from '@/components/workbench/cards';
+import { citationNumbers, numberCitationMarkers } from '@/lib/citations';
 import {
   SourcesView,
   type EvidenceDetail,
@@ -704,6 +705,7 @@ function Workbench({
     groundingAcknowledgement?.context === proposalContext &&
     groundingAcknowledgement?.text === output;
   const [citations, setCitations] = useState<Citation[]>([]);
+  const proposalCitationNumbers = useMemo(() => citationNumbers(citations), [citations]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -2109,7 +2111,8 @@ function Workbench({
           );
         if (match) bySection.set(match[1]!, (match[2] ?? '').trim());
       }
-      if (bySection.size === 0) return <DiffView lines={lineDiff('', output)} />;
+      if (bySection.size === 0)
+        return <DiffView lines={lineDiff('', output)} citations={proposalCitationNumbers} />;
       return (
         <div className="patch-list">
           {currentPrd.sections.map((section, index) => {
@@ -2120,7 +2123,10 @@ function Workbench({
                 <strong style={{ fontSize: 13 }}>
                   {sectionNumber(index)} {section.title}
                 </strong>
-                <DiffView lines={lineDiff(section.body, after)} />
+                <DiffView
+                  lines={lineDiff(section.body, after)}
+                  citations={proposalCitationNumbers}
+                />
               </div>
             );
           })}
@@ -2131,7 +2137,7 @@ function Workbench({
       proposalContext.scope === 'selection'
         ? (proposalContext.selectionText ?? '')
         : (proposalTargetSection?.body ?? '');
-    return <DiffView lines={lineDiff(before, output)} />;
+    return <DiffView lines={lineDiff(before, output)} citations={proposalCitationNumbers} />;
   }
 
   function renderProposalCard(): ReactNode {
@@ -2366,6 +2372,7 @@ function Workbench({
               finding.proposedPatch.beforeMarkdown,
               finding.proposedPatch.afterMarkdown,
             )}
+            citations={citationNumbers(finding.citations)}
           />
         )}
         {finding.citations.length > 0 && (
@@ -3109,7 +3116,10 @@ function Workbench({
                                 <span className="turn-meta">{renderTurnMeta(turn, run)}</span>
                                 <div className="turn-text">
                                   <MessageResponse>
-                                    {turn.response ||
+                                    {numberCitationMarkers(
+                                      turn.response ?? '',
+                                      citationNumbers(run?.citations ?? []),
+                                    ) ||
                                       (turn.status === 'complete'
                                         ? run?.action === 'review'
                                           ? 'Review complete.'
@@ -3184,7 +3194,9 @@ function Workbench({
                           </span>
                           {(output || busy) && !(proposalContext && output && !busy) && (
                             <div className="turn-text" aria-live="polite">
-                              <MessageResponse>{output}</MessageResponse>
+                              <MessageResponse>
+                                {numberCitationMarkers(output, proposalCitationNumbers)}
+                              </MessageResponse>
                               {busy && <span className="caret" aria-hidden="true" />}
                             </div>
                           )}

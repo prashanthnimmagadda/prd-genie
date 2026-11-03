@@ -444,6 +444,11 @@ textarea.field {
   padding: 1px 5px;
   vertical-align: baseline;
 }
+.cite-marker {
+  font-size: 0;
+  letter-spacing: 0;
+  user-select: none;
+}
 .dot {
   display: inline-block;
   width: 6px;

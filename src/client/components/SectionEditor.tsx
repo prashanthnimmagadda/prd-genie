@@ -3,6 +3,8 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from '@tiptap/markdown';
+import { CitationChips } from './citation-chips';
+import { unescapeCitationMarkers } from '@/lib/citations';
 
 interface SectionEditorProps {
   sectionId: string;
@@ -30,6 +32,7 @@ export function SectionEditor({
       StarterKit.configure({ heading: false }),
       Markdown,
       Placeholder.configure({ placeholder }),
+      CitationChips,
     ],
     content: value,
     contentType: 'markdown',
@@ -44,7 +47,7 @@ export function SectionEditor({
       },
     },
     onFocus,
-    onUpdate: ({ editor: current }) => onChange(current.getMarkdown()),
+    onUpdate: ({ editor: current }) => onChange(unescapeCitationMarkers(current.getMarkdown())),
     onSelectionUpdate: ({ editor: current }) => {
       const { from, to } = current.state.selection;
       onSelectionChange(from === to ? '' : current.state.doc.textBetween(from, to, ' '));
@@ -56,7 +59,7 @@ export function SectionEditor({
   });
 
   useEffect(() => {
-    if (editor && editor.getMarkdown() !== value) {
+    if (editor && unescapeCitationMarkers(editor.getMarkdown()) !== value) {
       editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
     }
   }, [editor, value]);

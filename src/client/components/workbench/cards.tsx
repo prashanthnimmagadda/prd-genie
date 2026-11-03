@@ -2,8 +2,38 @@ import { useState, type ReactNode } from 'react';
 import { CircleCheck, CircleX, ClockAlert, FileDiff, TriangleAlert } from 'lucide-react';
 import type { Citation, GroundingAssessment } from '@shared/types';
 import type { DiffLine } from '@/lib/format';
+import { splitCitations, type CitationNumbers } from '@/lib/citations';
 
-export function DiffView({ lines, context = 2 }: { lines: DiffLine[]; context?: number }) {
+export function CitedText({ text, citations }: { text: string; citations?: CitationNumbers }) {
+  return (
+    <>
+      {splitCitations(text, citations).map((part, index) =>
+        typeof part === 'string' ? (
+          part
+        ) : (
+          <span
+            key={index}
+            className="chip-cite"
+            title={`Source ${part.numbers.join(', ')}`}
+            aria-label={`Source ${part.numbers.join(', ')}`}
+          >
+            {part.numbers.join(', ')}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+export function DiffView({
+  lines,
+  context = 2,
+  citations,
+}: {
+  lines: DiffLine[];
+  context?: number;
+  citations?: CitationNumbers;
+}) {
   const [expanded, setExpanded] = useState(false);
   const changed = lines.some((line) => line.type !== 'same');
   // Collapse long unchanged runs so the change stays visible.
@@ -55,7 +85,7 @@ export function DiffView({ lines, context = 2 }: { lines: DiffLine[]; context?: 
             <span className="visually-hidden">
               {line.type === 'add' ? 'Added: ' : line.type === 'del' ? 'Removed: ' : ''}
             </span>
-            <span>{line.text || ' '}</span>
+            <span>{line.text ? <CitedText text={line.text} citations={citations} /> : ' '}</span>
           </div>
         ),
       )}
