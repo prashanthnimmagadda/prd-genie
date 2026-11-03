@@ -1,345 +1,1503 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="canonical" href="https://prdgenie.stillform.app/" />
+    <title>PRD Genie: traceable, review-ready PRDs on your Mac</title>
     <meta
       name="description"
-      content="PRD Genie is a local-first macOS workbench for writing, reviewing and exporting product requirements."
+      content="PRD Genie is an open-source macOS app that turns instructions, rough thinking and source material into traceable, review-ready PRDs. Local-first. AI optional. Signed pre-release for Apple silicon."
     />
-    <title>PRD Genie - Requirements, with a record of why</title>
+    <meta property="og:title" content="PRD Genie" />
+    <meta
+      property="og:description"
+      content="PRD Genie is an open-source macOS app that turns instructions, rough thinking and source material into traceable, review-ready PRDs. Local-first. AI optional. Signed pre-release for Apple silicon."
+    />
+    <meta property="og:url" content="https://prdgenie.stillform.app/" />
     <style>
-      :root {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        color: #1b282d;
-        background: #fafbf9;
-        font-synthesis: none;
-      }
-      * {
-        box-sizing: border-box;
+      html {
+        color-scheme: light;
+        -webkit-text-size-adjust: 100%;
       }
       body {
         margin: 0;
+        background: oklch(0.985 0.003 255);
+        color: oklch(0.19 0.018 255);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      h1,
+      h2,
+      h3,
+      h4,
+      p,
+      ul,
+      ol,
+      dl,
+      dd,
+      blockquote,
+      figure {
+        margin: 0;
+      }
+      ul,
+      ol {
+        padding: 0;
+        list-style: none;
       }
       a {
-        color: inherit;
+        color: oklch(0.48 0.13 197);
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
       }
-      header,
-      main,
-      footer {
-        max-width: 1080px;
-        margin: auto;
-        padding: 0 32px;
+      a:hover {
+        color: oklch(0.4 0.11 197);
       }
-      header {
-        height: 86px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        border-bottom: 1px solid #dde4e1;
+      :focus-visible {
+        outline: 3px solid oklch(0.55 0.13 197);
+        outline-offset: 2px;
+        border-radius: 6px;
       }
-      .brand {
-        font-weight: 700;
-        letter-spacing: -0.04em;
-        font-size: 19px;
-        text-decoration: none;
-      }
-      .nav {
-        display: flex;
-        gap: 24px;
-        align-items: center;
-        font-size: 14px;
-      }
-      .nav a {
-        text-decoration: none;
-      }
-      .nav a:hover,
-      .text-link:hover {
-        text-decoration: underline;
-      }
-      .eyebrow {
-        font-size: 12px;
-        font-weight: 650;
-        text-transform: uppercase;
-        letter-spacing: 0.14em;
-        color: #276e67;
-      }
-      .hero {
-        padding: 104px 0 88px;
-        display: grid;
-        grid-template-columns: 1.05fr 0.95fr;
-        gap: 76px;
-        align-items: center;
-      }
-      h1 {
-        font-size: clamp(48px, 6vw, 79px);
-        line-height: 1.02;
-        letter-spacing: -0.065em;
-        font-weight: 650;
-        margin: 20px 0 26px;
-      }
-      .lead {
-        font-size: 20px;
-        line-height: 1.55;
-        color: #51615f;
-        max-width: 510px;
-        margin: 0 0 32px;
-      }
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-      .button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 13px 20px;
-        border-radius: 8px;
-        text-decoration: none;
-        font-size: 15px;
-        font-weight: 650;
-      }
-      .primary {
-        background: #17665e;
-        color: #fff;
-      }
-      .primary:hover {
-        background: #104d47;
-      }
-      .secondary {
-        border: 1px solid #b8c9c5;
-      }
-      .secondary:hover {
-        background: #eef4f1;
-      }
-      .fine {
-        font-size: 13px;
-        line-height: 1.6;
-        color: #677773;
-        margin-top: 20px;
-      }
-      .preview {
-        border: 1px solid #d5dfdb;
-        box-shadow: 0 26px 80px #224d3b15;
-        background: #fff;
-        border-radius: 12px;
-        padding: 28px 28px 30px;
-        transform: rotate(1deg);
-      }
-      .preview-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        border-bottom: 1px solid #e4e9e7;
-        padding-bottom: 17px;
-        margin-bottom: 24px;
-        color: #70807a;
-        font-size: 12px;
-      }
-      .preview h2 {
-        font-size: 23px;
-        letter-spacing: -0.04em;
-        margin: 0 0 21px;
-      }
-      .preview h3 {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: #276e67;
-        margin: 25px 0 9px;
-      }
-      .preview p,
-      .preview li {
-        font-size: 14px;
-        line-height: 1.55;
-        color: #384c49;
-      }
-      .preview ul {
-        padding-left: 20px;
-      }
-      .tag {
-        padding: 5px 9px;
-        border-radius: 99px;
-        background: #e8f3ef;
-        color: #236b5f;
-        font-size: 11px;
-        font-weight: 600;
-      }
-      .features {
-        border-top: 1px solid #dde4e1;
-        padding: 58px 0 76px;
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 42px;
-      }
-      .features h2 {
-        font-size: 18px;
-        letter-spacing: -0.03em;
-      }
-      .features p {
-        font-size: 15px;
-        line-height: 1.6;
-        color: #61716c;
-      }
-      .closing {
-        border-top: 1px solid #dde4e1;
-        padding: 55px 0 70px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 28px;
-      }
-      .closing h2 {
-        font-size: 32px;
-        line-height: 1.14;
-        letter-spacing: -0.045em;
-        max-width: 490px;
-      }
-      footer {
-        border-top: 1px solid #dde4e1;
-        padding-top: 25px;
-        padding-bottom: 40px;
-        color: #74817e;
-        font-size: 13px;
-        display: flex;
-        gap: 22px;
-      }
-      footer a {
-        color: #51615f;
-      }
-      @media (max-width: 800px) {
-        header,
-        main,
-        footer {
-          padding-left: 22px;
-          padding-right: 22px;
-        }
-        .hero {
-          grid-template-columns: 1fr;
-          gap: 45px;
-          padding-top: 70px;
-        }
-        .preview {
-          transform: none;
-        }
-        .features {
-          grid-template-columns: 1fr;
-          gap: 8px;
-        }
-        .closing {
-          display: block;
-        }
-        .nav {
-          gap: 12px;
-        }
-        h1 {
-          font-size: 52px;
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition: none !important;
+          animation: none !important;
+          scroll-behavior: auto !important;
         }
       }
-      @media (max-width: 420px) {
-        .nav a:first-child {
-          display: none;
-        }
-        h1 {
-          font-size: 46px;
-        }
+      .focus-1:focus {
+        left: 16px !important;
+      }
+      .hover-2:hover {
+        background: oklch(0.955 0.008 255) !important;
+      }
+      .hover-3:hover {
+        background: oklch(0.42 0.12 197) !important;
+        color: oklch(0.99 0.004 197) !important;
+      }
+      .hover-4:hover {
+        background: oklch(0.955 0.008 255) !important;
+        color: oklch(0.19 0.018 255) !important;
       }
     </style>
   </head>
   <body>
-    <header>
-      <a class="brand" href="#top">PRD Genie</a>
-      <nav class="nav" aria-label="Main">
-        <a href="#how-it-works">How it works</a
-        ><a href="https://github.com/prashanthnimmagadda/prd-genie">GitHub</a>
-      </nav>
-    </header>
-    <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
-        <div>
-          <p class="eyebrow">Local-first · macOS</p>
-          <h1 id="hero-title">Write requirements with sources and history.</h1>
-          <p class="lead">
-            Turn rough ideas and source material into a PRD your team can use. Keep the evidence,
-            revisions and final decisions together as the document changes.
-          </p>
-          <div class="actions">
-            <a
-              class="button primary"
-              href="https://github.com/prashanthnimmagadda/prd-genie#quick-start"
-              >Get started on GitHub</a
-            ><a class="button secondary" href="https://github.com/prashanthnimmagadda/prd-genie"
-              >View the source</a
-            >
-          </div>
-          <p class="fine">
-            No PRD Genie account. Write and export offline. Connect AI only if you choose.
-          </p>
-        </div>
-        <div class="preview" aria-label="Illustrative PRD preview">
-          <div class="preview-top">
-            <span>Meeting scheduler / Requirements</span><span class="tag">Revision 3</span>
-          </div>
-          <h2>Make room conflicts visible before confirmation</h2>
-          <h3>Problem</h3>
-          <p>
-            Coordinators compare calendars and rooms by hand. A conflicting room can invalidate a
-            proposed meeting late in the process.
-          </p>
-          <h3>Requirement</h3>
-          <ul>
-            <li>Recheck room availability before confirming the proposal.</li>
-            <li>When a conflict appears, block confirmation and explain the next step.</li>
-          </ul>
-          <h3>Evidence and decision</h3>
-          <p>
-            <span class="tag">Source note</span> &nbsp; The accepted revision stays in the project
-            history.
-          </p>
-        </div>
-      </section>
-      <section class="features" id="how-it-works">
-        <div>
-          <p class="eyebrow">01 / Bring material</p>
-          <h2>Add notes, files, or a saved PRD.</h2>
-          <p>
-            Write a request, reopen a PRD, or add local files. Extraction warnings tell you what
-            could not be read.
-          </p>
-        </div>
-        <div>
-          <p class="eyebrow">02 / Work through it</p>
-          <h2>Review changes before applying them.</h2>
-          <p>
-            Draft and review against your chosen structure. AI changes are proposals until you
-            accept them.
-          </p>
-        </div>
-        <div>
-          <p class="eyebrow">03 / Share the result</p>
-          <h2>Export PDF or Word.</h2>
-          <p>
-            Keep versions and sources in your local project. Export the latest edits when ready.
-          </p>
-        </div>
-      </section>
-      <section class="closing">
-        <h2>Begin with a blank project or explore a finished example.</h2>
-        <a
-          class="button secondary"
-          href="https://github.com/prashanthnimmagadda/prd-genie#quick-start"
-          >Installation and first steps</a
-        >
-      </section>
-    </main>
-    <footer>
-      <span>PRD Genie · Open source</span
-      ><a href="https://github.com/prashanthnimmagadda/prd-genie">GitHub repository</a
-      ><a href="https://github.com/prashanthnimmagadda/prd-genie/blob/main/docs/PRIVACY.md"
-        >Privacy</a
+    <div style="background: oklch(0.985 0.003 255)">
+      <a
+        href="#main"
+        style="
+          position: absolute;
+          left: -9999px;
+          top: 12px;
+          z-index: 10;
+          padding: 10px 16px;
+          background: oklch(1 0 0);
+          color: oklch(0.19 0.018 255);
+          border: 1px solid oklch(0.89 0.012 255);
+          border-radius: 8px;
+          font-size: 15px;
+          font-weight: 600;
+          text-decoration: none;
+        "
+        class="focus-1"
+        >Skip to content</a
       >
-    </footer>
+
+      <header
+        style="border-bottom: 1px solid oklch(0.89 0.012 255); background: oklch(0.985 0.003 255)"
+      >
+        <div
+          style="
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 clamp(20px, 5vw, 40px);
+            height: 64px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+          "
+        >
+          <a
+            href="#top"
+            style="
+              font-size: 17px;
+              font-weight: 700;
+              letter-spacing: -0.01em;
+              color: oklch(0.19 0.018 255);
+              text-decoration: none;
+            "
+            >PRD Genie</a
+          >
+          <span
+            style="
+              font-size: 12px;
+              font-weight: 600;
+              line-height: 20px;
+              padding: 0 8px;
+              border-radius: 999px;
+              background: oklch(0.96 0.035 85);
+              color: oklch(0.27 0.05 78);
+              border: 1px solid oklch(0.86 0.07 85);
+            "
+            >Pre-release</span
+          >
+          <a
+            href="https://github.com/prashanthnimmagadda/prd-genie"
+            style="
+              margin-left: auto;
+              display: inline-flex;
+              align-items: center;
+              height: 36px;
+              padding: 0 14px;
+              border-radius: 8px;
+              border: 1px solid oklch(0.89 0.012 255);
+              background: oklch(1 0 0);
+              color: oklch(0.19 0.018 255);
+              font-size: 14px;
+              font-weight: 600;
+              text-decoration: none;
+              transition: background 120ms;
+            "
+            class="hover-2"
+            >GitHub</a
+          >
+        </div>
+      </header>
+
+      <main id="main">
+        <section
+          id="top"
+          aria-labelledby="hero-title"
+          style="
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: clamp(56px, 8vw, 112px) clamp(20px, 5vw, 40px) clamp(56px, 7vw, 96px);
+          "
+        >
+          <div style="max-width: 820px; display: flex; flex-direction: column; gap: 24px">
+            <p style="font-size: 15px; font-weight: 600; color: oklch(0.48 0.13 197)">
+              Open-source macOS app for writing requirements
+            </p>
+            <h1
+              id="hero-title"
+              style="
+                font-size: clamp(38px, 5.4vw, 68px);
+                line-height: 1.04;
+                font-weight: 700;
+                letter-spacing: -0.03em;
+                text-wrap: balance;
+              "
+            >
+              Turn rough thinking into a PRD your team can review.
+            </h1>
+            <p
+              style="
+                font-size: clamp(18px, 1.6vw, 21px);
+                line-height: 1.5;
+                color: oklch(0.36 0.022 255);
+                max-width: 680px;
+                text-wrap: pretty;
+              "
+            >
+              For product managers, founders and anyone writing requirements for internal teams or
+              clients. PRD Genie turns instructions, notes and source material into traceable,
+              review-ready PRDs. It runs on your Mac, with AI only if you want it.
+            </p>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; padding-top: 8px">
+              <a
+                href="https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.4"
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  height: 48px;
+                  padding: 0 22px;
+                  border-radius: 9px;
+                  background: oklch(0.48 0.13 197);
+                  color: oklch(0.99 0.004 197);
+                  font-size: 16px;
+                  font-weight: 600;
+                  text-decoration: none;
+                  transition: background 120ms;
+                "
+                class="hover-3"
+                >Download pre-release</a
+              >
+              <a
+                href="https://github.com/prashanthnimmagadda/prd-genie"
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  height: 48px;
+                  padding: 0 22px;
+                  border-radius: 9px;
+                  border: 1px solid oklch(0.89 0.012 255);
+                  background: oklch(1 0 0);
+                  color: oklch(0.19 0.018 255);
+                  font-size: 16px;
+                  font-weight: 600;
+                  text-decoration: none;
+                  transition: background 120ms;
+                "
+                class="hover-4"
+                >View source on GitHub</a
+              >
+            </div>
+            <p style="font-size: 14px; line-height: 1.5; color: oklch(0.49 0.027 255)">
+              v0.1.0-rc.4 pre-release, signed and notarised by Apple. Requires macOS 13 or later on
+              Apple silicon. <a href="#get-it">What pre-release means</a>
+            </p>
+          </div>
+          <figure style="margin-top: clamp(40px, 6vw, 72px)">
+            <div
+              role="img"
+              aria-label="PRD Genie main window showing a PRD with its section outline and review panel"
+              style="
+                aspect-ratio: 16/10;
+                width: 100%;
+                border-radius: 12px;
+                border: 1px solid oklch(0.85 0.012 255);
+                box-shadow:
+                  0 1px 2px oklch(0.19 0.018 255 / 0.06),
+                  0 24px 60px -24px oklch(0.19 0.018 255 / 0.22);
+                background: repeating-linear-gradient(
+                  135deg,
+                  oklch(0.965 0.005 255) 0 10px,
+                  oklch(0.945 0.007 255) 10px 20px
+                );
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                  font-size: 13px;
+                  line-height: 1.6;
+                  color: oklch(0.42 0.025 255);
+                  background: oklch(0.985 0.003 255);
+                  padding: 8px 12px;
+                  border-radius: 6px;
+                "
+                >IMG-HERO · real capture of approved app main window · 2240×1400 (16:10, @2x)</span
+              >
+            </div>
+          </figure>
+        </section>
+
+        <section
+          id="example"
+          aria-labelledby="example-title"
+          style="border-top: 1px solid oklch(0.89 0.012 255); background: oklch(0.97 0.005 255)"
+        >
+          <div
+            style="
+              max-width: 1200px;
+              margin: 0 auto;
+              padding: clamp(64px, 8vw, 112px) clamp(20px, 5vw, 40px);
+              display: flex;
+              flex-direction: column;
+              gap: clamp(32px, 4vw, 48px);
+            "
+          >
+            <div style="max-width: 720px; display: flex; flex-direction: column; gap: 16px">
+              <p style="font-size: 15px; font-weight: 600; color: oklch(0.48 0.13 197)">
+                What you get
+              </p>
+              <h2
+                id="example-title"
+                style="
+                  font-size: clamp(30px, 3.4vw, 44px);
+                  line-height: 1.1;
+                  font-weight: 700;
+                  letter-spacing: -0.022em;
+                  text-wrap: balance;
+                "
+              >
+                A PRD that shows where every statement came from.
+              </h2>
+              <p
+                style="
+                  font-size: 18px;
+                  line-height: 1.55;
+                  color: oklch(0.36 0.022 255);
+                  text-wrap: pretty;
+                "
+              >
+                Statements link back to the source they came from. When a statement can’t be backed
+                up, it’s flagged for you to check instead of being quietly trusted.
+              </p>
+            </div>
+            <figure style="display: flex; flex-direction: column; gap: 14px">
+              <div
+                style="
+                  background: oklch(1 0 0);
+                  border: 1px solid oklch(0.89 0.012 255);
+                  border-radius: 12px;
+                  box-shadow: 0 1px 2px oklch(0.19 0.018 255 / 0.05);
+                  overflow: hidden;
+                  display: flex;
+                  flex-wrap: wrap;
+                "
+              >
+                <nav
+                  aria-label="Example PRD sections"
+                  style="
+                    flex: 1 1 220px;
+                    padding: 20px 12px;
+                    border-right: 1px solid oklch(0.89 0.012 255);
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                    margin: 0 -1px -1px 0;
+                    background: oklch(0.97 0.005 255);
+                  "
+                >
+                  <p
+                    style="
+                      font-size: 12px;
+                      font-weight: 600;
+                      color: oklch(0.49 0.027 255);
+                      padding: 0 10px 10px;
+                    "
+                  >
+                    Sections
+                  </p>
+                  <ol
+                    style="
+                      display: flex;
+                      flex-direction: column;
+                      gap: 1px;
+                      font-size: 14px;
+                      line-height: 20px;
+                    "
+                  >
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        border-radius: 6px;
+                        background: oklch(0.94 0.035 197);
+                        color: oklch(0.31 0.075 197);
+                        font-weight: 600;
+                      "
+                    >
+                      <span style="width: 18px; font-variant-numeric: tabular-nums">1</span>Problem
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >2</span
+                      >Context
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >3</span
+                      >Target users
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >4</span
+                      >Goals
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >5</span
+                      >Non-goals
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >6</span
+                      >Scope
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >7</span
+                      >User journeys
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >8</span
+                      >Requirements and acceptance criteria
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >9</span
+                      >Success measures
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >10</span
+                      >Dependencies
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >11</span
+                      >Risks
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >12</span
+                      >Open questions
+                    </li>
+                    <li
+                      style="
+                        display: flex;
+                        gap: 10px;
+                        padding: 5px 10px;
+                        color: oklch(0.29 0.025 255);
+                      "
+                    >
+                      <span
+                        style="
+                          width: 18px;
+                          color: oklch(0.49 0.027 255);
+                          font-variant-numeric: tabular-nums;
+                        "
+                        >13</span
+                      >Rollout
+                    </li>
+                  </ol>
+                </nav>
+                <article
+                  style="
+                    flex: 999 1 440px;
+                    min-width: 0;
+                    padding: clamp(24px, 4vw, 48px) clamp(20px, 4.5vw, 56px);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 28px;
+                  "
+                >
+                  <div
+                    style="
+                      display: flex;
+                      flex-direction: column;
+                      gap: 8px;
+                      padding-bottom: 24px;
+                      border-bottom: 1px solid oklch(0.89 0.012 255);
+                    "
+                  >
+                    <h3
+                      style="
+                        font-size: clamp(24px, 2.4vw, 30px);
+                        line-height: 1.2;
+                        font-weight: 700;
+                        letter-spacing: -0.015em;
+                      "
+                    >
+                      Explore: meeting scheduler
+                    </h3>
+                    <p style="font-size: 14px; color: oklch(0.49 0.027 255)">
+                      Draft · Default structure · 3 sources
+                    </p>
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 14px; max-width: 640px">
+                    <h4 style="font-size: 19px; line-height: 1.3; font-weight: 650">1 Problem</h4>
+                    <p style="font-size: 16px; line-height: 1.65; color: oklch(0.25 0.02 255)">
+                      Account leads at a small design studio arrange client meetings by hand over
+                      email.
+                      <mark
+                        style="
+                          background: oklch(0.95 0.05 85);
+                          color: inherit;
+                          padding: 1px 2px;
+                          border-radius: 3px;
+                          box-shadow: inset 0 -2px 0 oklch(0.72 0.14 78);
+                        "
+                        >Each lead loses about two hours a week to this.</mark
+                      >
+                      Clients often decline invites that arrive without proposed times.
+                      <a
+                        href="#example"
+                        style="
+                          display: inline-flex;
+                          align-items: center;
+                          height: 22px;
+                          padding: 0 7px;
+                          border-radius: 5px;
+                          background: oklch(0.93 0.035 197);
+                          color: oklch(0.31 0.075 197);
+                          font-size: 12px;
+                          font-weight: 600;
+                          text-decoration: none;
+                          vertical-align: 1px;
+                          white-space: nowrap;
+                        "
+                        aria-label="Source: kickoff-brief.pdf, page 2"
+                        >kickoff-brief.pdf · p. 2</a
+                      >
+                    </p>
+                    <aside
+                      aria-label="Needs source review"
+                      style="
+                        border: 1px solid oklch(0.86 0.07 85);
+                        background: oklch(0.975 0.025 85);
+                        border-radius: 10px;
+                        padding: 16px 18px;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 10px;
+                      "
+                    >
+                      <p
+                        style="
+                          display: flex;
+                          align-items: center;
+                          gap: 8px;
+                          font-size: 13px;
+                          font-weight: 700;
+                          color: oklch(0.27 0.05 78);
+                        "
+                      >
+                        <span
+                          aria-hidden="true"
+                          style="
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 50%;
+                            background: oklch(0.72 0.14 78);
+                            flex: none;
+                          "
+                        ></span
+                        >Needs source review
+                      </p>
+                      <p style="font-size: 14px; line-height: 1.5; color: oklch(0.27 0.05 78)">
+                        “Two hours a week” rests on a single interview. Check before sharing.
+                      </p>
+                      <blockquote
+                        style="
+                          font-size: 14px;
+                          line-height: 1.55;
+                          color: oklch(0.25 0.02 255);
+                          border-left: 2px solid oklch(0.8 0.09 85);
+                          padding-left: 12px;
+                        "
+                      >
+                        “Honestly it’s an hour or two of my week, mostly chasing replies.”<span
+                          style="
+                            display: block;
+                            margin-top: 4px;
+                            font-size: 12px;
+                            color: oklch(0.4 0.03 255);
+                            font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                          "
+                          >interview-notes.md · line 14</span
+                        >
+                      </blockquote>
+                    </aside>
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+                    <h4 style="font-size: 19px; line-height: 1.3; font-weight: 650">2 Context</h4>
+                    <p style="font-size: 16px; line-height: 1.65; color: oklch(0.25 0.02 255)">
+                      The studio runs about twelve active client projects at a time. Most clients
+                      book through a single point of contact.
+                      <a
+                        href="#example"
+                        style="
+                          display: inline-flex;
+                          align-items: center;
+                          height: 22px;
+                          padding: 0 7px;
+                          border-radius: 5px;
+                          background: oklch(0.93 0.035 197);
+                          color: oklch(0.31 0.075 197);
+                          font-size: 12px;
+                          font-weight: 600;
+                          text-decoration: none;
+                          vertical-align: 1px;
+                          white-space: nowrap;
+                        "
+                        aria-label="Source: studio-overview.pptx, slide 4"
+                        >studio-overview.pptx · slide 4</a
+                      >
+                    </p>
+                  </div>
+                </article>
+              </div>
+              <figcaption style="font-size: 14px; line-height: 1.5; color: oklch(0.49 0.027 255)">
+                Illustrative example. The studio, people and figures are fictional; the layout is
+                simplified from the app.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section
+          id="workflow"
+          aria-labelledby="workflow-title"
+          style="border-top: 1px solid oklch(0.89 0.012 255)"
+        >
+          <div
+            style="
+              max-width: 1200px;
+              margin: 0 auto;
+              padding: clamp(64px, 8vw, 112px) clamp(20px, 5vw, 40px);
+              display: flex;
+              flex-direction: column;
+              gap: clamp(32px, 4vw, 48px);
+            "
+          >
+            <div style="max-width: 720px; display: flex; flex-direction: column; gap: 16px">
+              <p style="font-size: 15px; font-weight: 600; color: oklch(0.48 0.13 197)">
+                How it works
+              </p>
+              <h2
+                id="workflow-title"
+                style="
+                  font-size: clamp(30px, 3.4vw, 44px);
+                  line-height: 1.1;
+                  font-weight: 700;
+                  letter-spacing: -0.022em;
+                  text-wrap: balance;
+                "
+              >
+                Create, review, revise. You decide what changes.
+              </h2>
+            </div>
+            <ol
+              style="
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+                gap: 20px;
+              "
+            >
+              <li
+                style="
+                  background: oklch(1 0 0);
+                  border: 1px solid oklch(0.89 0.012 255);
+                  border-radius: 12px;
+                  padding: 28px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 14px;
+                "
+              >
+                <span
+                  style="
+                    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: oklch(0.48 0.13 197);
+                  "
+                  >01</span
+                >
+                <h3
+                  style="
+                    font-size: 22px;
+                    line-height: 1.25;
+                    font-weight: 650;
+                    letter-spacing: -0.01em;
+                  "
+                >
+                  Create
+                </h3>
+                <p
+                  style="
+                    font-size: 16px;
+                    line-height: 1.6;
+                    color: oklch(0.36 0.022 255);
+                    text-wrap: pretty;
+                  "
+                >
+                  Start from an instruction, your rough thinking and source material: PDF, Word,
+                  slides, spreadsheets, JPEG, Markdown or plain text. Use the default 13-section
+                  structure or one of your own reusable structures.
+                </p>
+                <div
+                  aria-hidden="true"
+                  style="
+                    margin-top: auto;
+                    padding-top: 10px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                  "
+                >
+                  <div
+                    style="
+                      border: 1px solid oklch(0.89 0.012 255);
+                      border-radius: 9px;
+                      padding: 12px 14px;
+                      font-size: 14px;
+                      line-height: 1.45;
+                      color: oklch(0.25 0.02 255);
+                      background: oklch(0.985 0.003 255);
+                    "
+                  >
+                    Draft a PRD for a meeting scheduler from these notes.
+                  </div>
+                  <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                    <span
+                      style="
+                        font-size: 12px;
+                        line-height: 24px;
+                        padding: 0 8px;
+                        border-radius: 5px;
+                        background: oklch(0.955 0.008 255);
+                        color: oklch(0.29 0.025 255);
+                      "
+                      >kickoff-brief.pdf</span
+                    >
+                    <span
+                      style="
+                        font-size: 12px;
+                        line-height: 24px;
+                        padding: 0 8px;
+                        border-radius: 5px;
+                        background: oklch(0.955 0.008 255);
+                        color: oklch(0.29 0.025 255);
+                      "
+                      >interview-notes.md</span
+                    >
+                    <span
+                      style="
+                        font-size: 12px;
+                        line-height: 24px;
+                        padding: 0 8px;
+                        border-radius: 5px;
+                        background: oklch(0.955 0.008 255);
+                        color: oklch(0.29 0.025 255);
+                      "
+                      >studio-overview.pptx</span
+                    >
+                  </div>
+                </div>
+              </li>
+              <li
+                style="
+                  background: oklch(1 0 0);
+                  border: 1px solid oklch(0.89 0.012 255);
+                  border-radius: 12px;
+                  padding: 28px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 14px;
+                "
+              >
+                <span
+                  style="
+                    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: oklch(0.48 0.13 197);
+                  "
+                  >02</span
+                >
+                <h3
+                  style="
+                    font-size: 22px;
+                    line-height: 1.25;
+                    font-weight: 650;
+                    letter-spacing: -0.01em;
+                  "
+                >
+                  Review
+                </h3>
+                <p
+                  style="
+                    font-size: 16px;
+                    line-height: 1.6;
+                    color: oklch(0.36 0.022 255);
+                    text-wrap: pretty;
+                  "
+                >
+                  Open a PRD you already have and check it against its sources. Uncertain statements
+                  are flagged “needs source review”, with the source excerpt alongside.
+                </p>
+                <div aria-hidden="true" style="margin-top: auto; padding-top: 10px">
+                  <div
+                    style="
+                      border: 1px solid oklch(0.86 0.07 85);
+                      background: oklch(0.975 0.025 85);
+                      border-radius: 9px;
+                      padding: 12px 14px;
+                      display: flex;
+                      flex-direction: column;
+                      gap: 6px;
+                    "
+                  >
+                    <span
+                      style="
+                        display: flex;
+                        align-items: center;
+                        gap: 7px;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: oklch(0.27 0.05 78);
+                      "
+                      ><span
+                        style="
+                          width: 7px;
+                          height: 7px;
+                          border-radius: 50%;
+                          background: oklch(0.72 0.14 78);
+                        "
+                      ></span
+                      >Needs source review</span
+                    >
+                    <span style="font-size: 14px; line-height: 1.45; color: oklch(0.25 0.02 255)"
+                      >Each lead loses about two hours a week to this.</span
+                    >
+                  </div>
+                </div>
+              </li>
+              <li
+                style="
+                  background: oklch(1 0 0);
+                  border: 1px solid oklch(0.89 0.012 255);
+                  border-radius: 12px;
+                  padding: 28px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 14px;
+                "
+              >
+                <span
+                  style="
+                    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: oklch(0.48 0.13 197);
+                  "
+                  >03</span
+                >
+                <h3
+                  style="
+                    font-size: 22px;
+                    line-height: 1.25;
+                    font-weight: 650;
+                    letter-spacing: -0.01em;
+                  "
+                >
+                  Revise
+                </h3>
+                <p
+                  style="
+                    font-size: 16px;
+                    line-height: 1.6;
+                    color: oklch(0.36 0.022 255);
+                    text-wrap: pretty;
+                  "
+                >
+                  Ask for changes in conversation. Every AI change arrives as a proposal you accept
+                  or reject, with undo and full history.
+                </p>
+                <div aria-hidden="true" style="margin-top: auto; padding-top: 10px">
+                  <div
+                    style="
+                      border: 1px solid oklch(0.89 0.012 255);
+                      border-radius: 9px;
+                      overflow: hidden;
+                      font-size: 14px;
+                      line-height: 1.45;
+                    "
+                  >
+                    <div
+                      style="
+                        padding: 10px 14px;
+                        background: oklch(0.97 0.02 27);
+                        color: oklch(0.36 0.06 27);
+                        text-decoration: line-through;
+                        text-decoration-color: oklch(0.55 0.2 27 / 0.5);
+                      "
+                    >
+                      Each lead loses about two hours a week.
+                    </div>
+                    <div
+                      style="
+                        padding: 10px 14px;
+                        background: oklch(0.96 0.03 153);
+                        color: oklch(0.28 0.06 153);
+                      "
+                    >
+                      One lead estimated one to two hours a week.
+                    </div>
+                    <div
+                      style="
+                        display: flex;
+                        gap: 8px;
+                        padding: 10px 14px;
+                        border-top: 1px solid oklch(0.89 0.012 255);
+                        background: oklch(1 0 0);
+                      "
+                    >
+                      <span
+                        style="
+                          font-size: 13px;
+                          font-weight: 600;
+                          line-height: 28px;
+                          padding: 0 12px;
+                          border-radius: 6px;
+                          background: oklch(0.48 0.13 197);
+                          color: oklch(0.99 0.004 197);
+                        "
+                        >Accept</span
+                      >
+                      <span
+                        style="
+                          font-size: 13px;
+                          font-weight: 600;
+                          line-height: 26px;
+                          padding: 0 12px;
+                          border-radius: 6px;
+                          border: 1px solid oklch(0.89 0.012 255);
+                          color: oklch(0.19 0.018 255);
+                        "
+                        >Reject</span
+                      >
+                    </div>
+                  </div>
+                </div>
+              </li>
+            </ol>
+            <dl
+              style="
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+                gap: 20px 40px;
+                padding-top: 8px;
+              "
+            >
+              <div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                  border-top: 1px solid oklch(0.89 0.012 255);
+                  padding-top: 20px;
+                "
+              >
+                <dt style="font-size: 16px; font-weight: 650">
+                  Honest about what it couldn’t read
+                </dt>
+                <dd style="font-size: 15px; line-height: 1.55; color: oklch(0.36 0.022 255)">
+                  If an image or table in a source wasn’t read, PRD Genie tells you, so you know
+                  what the draft is missing.
+                </dd>
+              </div>
+              <div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                  border-top: 1px solid oklch(0.89 0.012 255);
+                  padding-top: 20px;
+                "
+              >
+                <dt style="font-size: 16px; font-weight: 650">Export when it’s ready</dt>
+                <dd style="font-size: 15px; line-height: 1.55; color: oklch(0.36 0.022 255)">
+                  Markdown, Word or PDF for sharing, plus a portable project archive for keeping
+                  everything together.
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+
+        <section
+          id="privacy"
+          aria-labelledby="privacy-title"
+          style="border-top: 1px solid oklch(0.89 0.012 255); background: oklch(1 0 0)"
+        >
+          <div
+            style="
+              max-width: 1200px;
+              margin: 0 auto;
+              padding: clamp(64px, 8vw, 112px) clamp(20px, 5vw, 40px);
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+              gap: clamp(40px, 6vw, 80px);
+              align-items: start;
+            "
+          >
+            <div style="display: flex; flex-direction: column; gap: 16px">
+              <p style="font-size: 15px; font-weight: 600; color: oklch(0.48 0.13 197)">
+                Local-first and private
+              </p>
+              <h2
+                id="privacy-title"
+                style="
+                  font-size: clamp(30px, 3.4vw, 44px);
+                  line-height: 1.1;
+                  font-weight: 700;
+                  letter-spacing: -0.022em;
+                  text-wrap: balance;
+                "
+              >
+                Your work stays on your Mac. AI is optional.
+              </h2>
+              <p
+                style="
+                  font-size: 18px;
+                  line-height: 1.55;
+                  color: oklch(0.36 0.022 255);
+                  text-wrap: pretty;
+                "
+              >
+                PRD Genie is a single-user app with no account and no signup. Editing, saving,
+                history and export all work offline, without AI.
+              </p>
+              <div
+                style="
+                  margin-top: 12px;
+                  border-radius: 12px;
+                  background: oklch(0.93 0.035 197);
+                  padding: 20px 22px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                "
+              >
+                <p style="font-size: 16px; font-weight: 700; color: oklch(0.27 0.07 197)">
+                  Nothing is sent until you say so.
+                </p>
+                <p style="font-size: 15px; line-height: 1.55; color: oklch(0.27 0.07 197)">
+                  Nothing leaves your Mac until you choose a provider and send an instruction.
+                  Before it does, the app shows exactly what will be sent and where.
+                </p>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 14px">
+              <h3 style="font-size: 15px; font-weight: 600; color: oklch(0.49 0.027 255)">
+                Choose how AI is used, if at all
+              </h3>
+              <ul
+                style="
+                  border: 1px solid oklch(0.89 0.012 255);
+                  border-radius: 12px;
+                  background: oklch(0.985 0.003 255);
+                "
+              >
+                <li
+                  style="
+                    padding: 18px 20px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <span style="font-size: 16px; font-weight: 650">Local model</span
+                  ><span style="font-size: 15px; line-height: 1.5; color: oklch(0.36 0.022 255)"
+                    >Run a model on your own Mac through Ollama.</span
+                  >
+                </li>
+                <li
+                  style="
+                    padding: 18px 20px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <span style="font-size: 16px; font-weight: 650">API provider</span
+                  ><span style="font-size: 15px; line-height: 1.5; color: oklch(0.36 0.022 255)"
+                    >OpenAI, Anthropic, Google Gemini or any OpenAI-compatible service.</span
+                  >
+                </li>
+                <li
+                  style="
+                    padding: 18px 20px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <span style="font-size: 16px; font-weight: 650">Sign in with ChatGPT</span
+                  ><span style="font-size: 15px; line-height: 1.5; color: oklch(0.36 0.022 255)"
+                    >Optional. Uses your own ChatGPT plan.</span
+                  >
+                </li>
+                <li
+                  style="
+                    padding: 18px 20px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <span style="font-size: 16px; font-weight: 650">Manual handoff</span
+                  ><span style="font-size: 15px; line-height: 1.5; color: oklch(0.36 0.022 255)"
+                    >Take the request to any chat tool yourself.</span
+                  >
+                </li>
+                <li style="padding: 18px 20px; display: flex; flex-direction: column; gap: 4px">
+                  <span style="font-size: 16px; font-weight: 650">No AI</span
+                  ><span style="font-size: 15px; line-height: 1.5; color: oklch(0.36 0.022 255)"
+                    >Write, edit, save and export entirely by hand.</span
+                  >
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section
+          id="get-it"
+          aria-labelledby="get-title"
+          style="border-top: 1px solid oklch(0.89 0.012 255)"
+        >
+          <div
+            style="
+              max-width: 1200px;
+              margin: 0 auto;
+              padding: clamp(64px, 8vw, 112px) clamp(20px, 5vw, 40px);
+            "
+          >
+            <div
+              style="
+                border: 1px solid oklch(0.89 0.012 255);
+                border-radius: 16px;
+                background: oklch(1 0 0);
+                padding: clamp(28px, 5vw, 64px);
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
+                gap: clamp(32px, 5vw, 64px);
+                align-items: end;
+              "
+            >
+              <div style="display: flex; flex-direction: column; gap: 16px">
+                <span
+                  style="
+                    align-self: flex-start;
+                    font-size: 13px;
+                    font-weight: 600;
+                    line-height: 24px;
+                    padding: 0 10px;
+                    border-radius: 999px;
+                    background: oklch(0.96 0.035 85);
+                    color: oklch(0.27 0.05 78);
+                    border: 1px solid oklch(0.86 0.07 85);
+                  "
+                  >Pre-release</span
+                >
+                <h2
+                  id="get-title"
+                  style="
+                    font-size: clamp(30px, 3.4vw, 44px);
+                    line-height: 1.1;
+                    font-weight: 700;
+                    letter-spacing: -0.022em;
+                    text-wrap: balance;
+                  "
+                >
+                  Get PRD Genie
+                </h2>
+                <p
+                  style="
+                    font-size: 18px;
+                    line-height: 1.55;
+                    color: oklch(0.36 0.022 255);
+                    text-wrap: pretty;
+                  "
+                >
+                  Version 0.1.0-rc.4 is a signed, Apple-notarised pre-release. AI output quality has
+                  not yet passed the full evaluation corpus, so review every AI proposal before you
+                  accept it.
+                </p>
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; padding-top: 8px">
+                  <a
+                    href="https://github.com/prashanthnimmagadda/prd-genie/releases/tag/v0.1.0-rc.4"
+                    style="
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      height: 48px;
+                      padding: 0 22px;
+                      border-radius: 9px;
+                      background: oklch(0.48 0.13 197);
+                      color: oklch(0.99 0.004 197);
+                      font-size: 16px;
+                      font-weight: 600;
+                      text-decoration: none;
+                      transition: background 120ms;
+                    "
+                    class="hover-3"
+                    >Download v0.1.0-rc.4</a
+                  >
+                  <a
+                    href="https://github.com/prashanthnimmagadda/prd-genie"
+                    style="
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      height: 48px;
+                      padding: 0 22px;
+                      border-radius: 9px;
+                      border: 1px solid oklch(0.89 0.012 255);
+                      background: oklch(1 0 0);
+                      color: oklch(0.19 0.018 255);
+                      font-size: 16px;
+                      font-weight: 600;
+                      text-decoration: none;
+                      transition: background 120ms;
+                    "
+                    class="hover-4"
+                    >View source on GitHub</a
+                  >
+                </div>
+                <p style="font-size: 14px; line-height: 1.5; color: oklch(0.49 0.027 255)">
+                  One ZIP from GitHub Releases:
+                  <span
+                    style="
+                      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                      font-size: 13px;
+                      color: oklch(0.29 0.025 255);
+                      overflow-wrap: anywhere;
+                    "
+                    >prd-genie-v0.1.0-rc.4-macos-arm64.zip</span
+                  >
+                </p>
+              </div>
+              <dl
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  border-top: 1px solid oklch(0.89 0.012 255);
+                "
+              >
+                <div
+                  style="
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: space-between;
+                    gap: 4px 16px;
+                    padding: 14px 0;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <dt style="font-size: 15px; color: oklch(0.49 0.027 255)">Version</dt>
+                  <dd style="font-size: 15px; font-weight: 600">v0.1.0-rc.4, pre-release</dd>
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: space-between;
+                    gap: 4px 16px;
+                    padding: 14px 0;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <dt style="font-size: 15px; color: oklch(0.49 0.027 255)">Requires</dt>
+                  <dd style="font-size: 15px; font-weight: 600">macOS 13 or later</dd>
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: space-between;
+                    gap: 4px 16px;
+                    padding: 14px 0;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <dt style="font-size: 15px; color: oklch(0.49 0.027 255)">Mac</dt>
+                  <dd style="font-size: 15px; font-weight: 600">Apple silicon</dd>
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: space-between;
+                    gap: 4px 16px;
+                    padding: 14px 0;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <dt style="font-size: 15px; color: oklch(0.49 0.027 255)">Signing</dt>
+                  <dd style="font-size: 15px; font-weight: 600">Signed and notarised by Apple</dd>
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: space-between;
+                    gap: 4px 16px;
+                    padding: 14px 0;
+                    border-bottom: 1px solid oklch(0.89 0.012 255);
+                  "
+                >
+                  <dt style="font-size: 15px; color: oklch(0.49 0.027 255)">Licence</dt>
+                  <dd style="font-size: 15px; font-weight: 600">MIT, open source</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer style="border-top: 1px solid oklch(0.89 0.012 255)">
+        <div
+          style="
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px clamp(20px, 5vw, 40px) 40px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 32px;
+            justify-content: space-between;
+            font-size: 14px;
+            line-height: 1.5;
+            color: oklch(0.49 0.027 255);
+          "
+        >
+          <p>
+            PRD Genie is open source under the
+            <a href="https://github.com/prashanthnimmagadda/prd-genie/blob/main/LICENSE"
+              >MIT licence</a
+            >. <a href="https://github.com/prashanthnimmagadda/prd-genie">Source on GitHub</a>.
+          </p>
+          <p>This page has no analytics, cookies, forms or third-party scripts.</p>
+        </div>
+      </footer>
+    </div>
   </body>
 </html>
