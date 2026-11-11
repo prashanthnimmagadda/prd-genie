@@ -88,6 +88,26 @@
         background: oklch(0.955 0.008 255) !important;
         color: oklch(0.19 0.018 255) !important;
       }
+      @media (max-width: 380px) {
+        header > div {
+          gap: 8px !important;
+        }
+        .brand {
+          font-size: 15px !important;
+        }
+        .brand img {
+          width: 28px;
+          height: 28px;
+        }
+        header span {
+          font-size: 10px !important;
+          padding: 0 6px !important;
+        }
+        header .hover-2 {
+          font-size: 12px !important;
+          padding: 0 10px !important;
+        }
+      }
     </style>
   </head>
   <body>
@@ -128,14 +148,19 @@
         >
           <a
             href="#top"
+            class="brand"
             style="
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              flex-shrink: 0;
               font-size: 17px;
               font-weight: 700;
               letter-spacing: -0.01em;
               color: oklch(0.19 0.018 255);
               text-decoration: none;
             "
-            >PRD Genie</a
+            ><img src="prd-genie-logo.svg" width="36" height="36" alt="" />PRD Genie</a
           >
           <span
             style="
@@ -185,7 +210,7 @@
         >
           <div style="max-width: 820px; display: flex; flex-direction: column; gap: 24px">
             <p style="font-size: 15px; font-weight: 600; color: oklch(0.48 0.13 197)">
-              Open-source macOS app for writing requirements
+              An open-source tool for writing better requirements
             </p>
             <h1
               id="hero-title"
@@ -308,7 +333,7 @@
                   text-wrap: balance;
                 "
               >
-                A PRD that shows where every statement came from.
+                See the evidence behind your PRD.
               </h2>
               <p
                 style="
@@ -318,8 +343,8 @@
                   text-wrap: pretty;
                 "
               >
-                Statements link back to the source they came from. When a statement can’t be backed
-                up, it’s flagged for you to check instead of being quietly trusted.
+                Citations connect source-backed claims to evidence. Review flagged statements
+                alongside source excerpts, and keep your own decisions and assumptions explicit.
               </p>
             </div>
             <figure style="display: flex; flex-direction: column; gap: 14px">
@@ -1476,7 +1501,7 @@
               >MIT licence</a
             >. <a href="https://github.com/prashanthnimmagadda/prd-genie">Source on GitHub</a>.
           </p>
-          <p>This page has no analytics, cookies, forms or third-party scripts.</p>
+          <p>This page has no analytics, forms or tracking of its own.</p>
         </div>
       </footer>
     </div>

@@ -1,0 +1,30 @@
+<svg id="app-icon" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+        <defs>
+          <linearGradient id="pg-body" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#2A80EA"></stop>
+            <stop offset="1" stop-color="#0757BA"></stop>
+          </linearGradient>
+          <linearGradient id="pg-page" x1="0" y1="262" x2="0" y2="822" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#FFFFFF"></stop>
+            <stop offset="1" stop-color="#EEF2F7"></stop>
+          </linearGradient>
+          <filter id="pg-shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+            <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"></feDropShadow>
+          </filter>
+          <filter id="pg-pageshadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+            <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#032A5C" flood-opacity="0.35"></feDropShadow>
+          </filter>
+        </defs>
+        <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#pg-body)" filter="url(#pg-shadow)"></rect>
+        <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" ry="184.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="1"></rect>
+        <g filter="url(#pg-pageshadow)">
+          <path d="M312 262 H598 L712 376 V822 H312 Z" fill="url(#pg-page)" stroke="#FFFFFF" stroke-width="28" stroke-linejoin="round"></path>
+        </g>
+        <path d="M598 262 V346 Q598 376 628 376 H712 Z" fill="#C9D8EC" stroke="#C9D8EC" stroke-width="12" stroke-linejoin="round"></path>
+        <rect x="372" y="452" width="280" height="34" rx="17" fill="#C3CEDC"></rect>
+        <rect x="372" y="536" width="176" height="34" rx="17" fill="#C3CEDC"></rect>
+        <rect x="572" y="530" width="80" height="46" rx="12" fill="#0866D6"></rect>
+        <rect x="372" y="620" width="280" height="34" rx="17" fill="#C3CEDC"></rect>
+        <rect x="372" y="704" width="200" height="34" rx="17" fill="#C3CEDC"></rect>
+        <path d="M790 172 C796 214 810 228 852 234 C810 240 796 254 790 296 C784 254 770 240 728 234 C770 228 784 214 790 172 Z" fill="#FFFFFF"></path>
+      </svg>
