@@ -17,7 +17,7 @@ const fixed = Object.freeze({
   python:
     '/Users/prashi/.local/share/bonsai2-service/releases/cpython-3.11.15-supervisor-v1/python/bin/python3.11',
   slotHelper: '/Volumes/Crucial X10/prime-workspace/kairos/runtime/kairos_process_lock.py',
-  slotHelperSha256: '9eb45185962a79c33751f8c499e6a66847c2575add61fc028bfd5f855929379c',
+  slotHelperSha256: '3c94c98a4cfa8fb57b31f40d35010c9d0f69b8d629d1d175e53b601450b52bd0',
   slot: '/Volumes/Crucial X10/prime-workspace/kairos/outputs/.kairos-heavy-browser-slot.flock',
   publicWrapper: '/Users/prashi/.local/bin/hermes',
 });
@@ -163,7 +163,12 @@ function dispatch(
         '--profile',
         'default',
       ],
-      { stdio: ['pipe', 'pipe', 'ignore'], detached: true },
+      {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        detached: true,
+        // Preserve immediate contention refusal within the existing receipt deadline.
+        env: { ...process.env, KAIROS_LOCK_WAIT_SECONDS: '0' },
+      },
     );
     let settled = false;
     let total = 0;
